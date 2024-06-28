@@ -1,0 +1,413 @@
+---
+title: "MD2 SpeedTest"
+author: "Phil Shea"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Speed Tests
+
+```julia
+struct MDRecord{T<: Real}
+    N::Int
+    tau::T # Time step
+    shell::T # Radius of involved particles.
+    stepFun::Function # The force function
+    skip::Int # Number of steps to skip between updating involved particles.
+    bsize::T # Box size of the x axis {-bsize to bsize}
+    boxratio::T # size of the y axis: boxratio*{-bsize to bsize}, area=4*boxratio*bsize^2
+    p::Matrix{T}
+    v::Matrix{T}
+    function MDRecord{s}(N::Int, tau::s, shell::s,  stepFun::Function, skip::Int, bsize::s, 
+        boxratio::s, p::Matrix{s}, v::Matrix{s}) where s <: Real
+        if !( size( p) === size( v) === (N, 2))
+            error("invalid matrix sizes")
+        end
+        new(N, tau, shell, stepFun, skip, bsize, boxratio, p, v)
+    end
+end
+
+struct CorrVec
+    Mmax::Int
+    m::Vector{Int} # Hold the number of defined items for each particle
+    corr::Matrix{Int} # corr[i,:] hold a list of interacting particles for particle i
+    function CorrVec( Mmax::Int, m::Vector{s}, corr::Matrix{s}) where s <: Real
+        if !( size( corr) === (length(m), Mmax)) 
+                error("corr must be size ( $(length(m)), $Mmax)") end
+        new( Mmax, m , corr)
+    end
+end
+
+function CorrShell!( corr::CorrVec, ss::MDRecord{T}, pn::Matrix{T}) where T<:Real
+    # Find all particles within shell
+    # corr should be declared in the calling program, be size (ss.N-1),
+    # where M is large enough to hold the biggest list of interacting particles possible.
+    # The m vector will be reset, and if the corr vectors have left over values, 
+    # they will be ignored.
+    if (length( corr.m) < ss.N) 
+        error( "corr is too small: corr.m is length $(length(corr.m)), system is $(ss.N)") 
+    end
+    shell = ss.shell 
+    for i = 1:(ss.N - 1) # The last particle will be done by default
+        mt = 0 # Init temp m
+        for j in (i + 1):ss.N
+            ds = hypot((pn[i,:] - pn[ j, :])...)
+            if ds < shell 
+                mt += 1
+                if mt > corr.Mmax error( "m > Mmax ($(corr.Mmax))") end
+                corr.corr[ i, mt] = j
+            end
+            corr.m[ i] = mt # this will be zero if no particles were added.
+        end
+    end
+end
+
+```
+
+The Julia modules will change as I go through this process, but the testes source will be pasted here.  
+
+Created a random initialization code too:
+
+```julia
+function InitMDRecord!( ss::MDRecord{<:Real})
+    # box is centered at zero, and size 2 bsize x 2 boxratio bsize
+    ss.p .= broadcast( *,  [2.0 * ss.bsize  2.0 * ss.bsize * ss.boxratio],
+                          (rand( eltype(ss.p), size(ss.p)) .- 0.5))
+    ss.v .= (0.1 * ss.bsize) .* randn( eltype( ss.v), ss.N, 2)
+    return ss
+end
+```
+
+Here is the first test code;
+
+```julia
+module SpeedTest
+
+include( "C:\\Users\\phils\\Documents\\DSP\\MD\\dev\\MD2\\src\\MD2.jl")
+import .MD2
+using Plots
+using Random
+
+
+function SpeedTest1( N::Int, density::T; tau::T = 0.01, boxratio::T = 1.0, shellM::Int=10, 
+    stepFun::Function = r -> r ^ -5, skip::Int = 10 ) where T<:Real
+    bsize = sqrt( N / (density * boxratio))
+    shell = sqrt( shellM / (pi * density))
+    println( "shell: ", shell, " bsize: ", bsize)
+
+    ss = MD2.MDRecord( Float64, N, tau, shell, stepFun, skip, bsize, boxratio)
+    Random.seed!(31394)
+    MD2.InitMDRecord!( ss)
+    scatter( ss.p[:,1], ss.p[ :,2], show = true)
+
+
+    corr = MD2.CorrVec( N, 5 * shellM)
+
+    @time MD2.CorrShell!( corr, ss, ss.p)
+end
+
+end
+```
+The first run:
+
+```
+julia> SpeedTest.SpeedTest1( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+ 12.122030 seconds (349.96 M allocations: 14.155 GiB, 5.62% gc time)
+```
+
+### Adding `@fastmath`
+
+Added `@fastmath` to outer loop in `CorrShell!`.  There was some variance to runtime (and I have TradingView running).
+
+```
+julia> SpeedTest.SpeedTest1( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+ 11.470277 seconds (299.97 M allocations: 13.410 GiB, 7.24% gc time)
+
+julia> SpeedTest.SpeedTest1( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+ 11.016311 seconds (299.97 M allocations: 13.410 GiB, 7.47% gc time)
+```
+### Adding `@inbounds`
+
+```
+julia> SpeedTest.SpeedTest1( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+ 11.161801 seconds (299.97 M allocations: 13.410 GiB, 7.95% gc time)
+
+julia> SpeedTest.SpeedTest1( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+ 11.213945 seconds (299.97 M allocations: 13.410 GiB, 8.20% gc time)
+```
+
+### Adding Threads and `@simd`
+
+Restarted Julia with `-t auto`, and it resulted in 8 allowed threads.  However, there did not seem to be a significant speedup.
+
+```
+julia> SpeedTest.SpeedTest1( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+  9.706157 seconds (299.97 M allocations: 13.410 GiB, 4.44% gc time)
+
+julia> SpeedTest.SpeedTest1( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+  9.915942 seconds (299.97 M allocations: 13.410 GiB, 5.61% gc time)
+
+```
+
+## Rearranging the Matrices
+
+The documentation indicates that most calculations should be done on rows. not columns, so this iteration placed the particle index on the columns.
+
+Here is `CorrShell2!` (there are corresponding changes in `MDRecord2`, `CorrVec2`, `InitMDRecord2!`, and `SpeedTest2`).
+
+```julia
+function CorrShell2!( corr::CorrVec2, ss::MDRecord2{T}, pn::Matrix{T}) 
+   where T<:Real
+    # Find all particles within shell
+    # corr should be declared in the calling program, be size (ss.N-1),
+    # where M is large enough to hold the biggest list of interacting particles possible.
+    # The m vector will be reset, and if the corr vectors have left over values, 
+    # they will be ignored.
+    if (length( corr.m) < ss.N) 
+    error( "corr is too small: corr.m is length $(length(corr.m)), system is $(ss.N)") 
+    end
+    shell = ss.shell 
+    @fastmath @inbounds @simd for i = 1:(ss.N - 1) 
+    # The last particle will be done by default
+        mt = 0 # Init temp m
+        for j in (i + 1):ss.N
+            ds = hypot((pn[:, i] - pn[ :, j])...)
+            if ds < shell 
+                mt += 1
+                if mt > corr.Mmax 
+                    error( "m > Mmax ($(corr.Mmax)) @ $i : $(corr.corr[ :, i])") end
+                corr.corr[ mt, i] = j
+            end
+            corr.m[ i] = mt # this will be zero if no particles were added.
+        end
+    end
+end
+
+```
+
+This may have been a little faster, but not by much.
+
+```
+julia> SpeedTest.SpeedTest2( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+  9.575851 seconds (299.97 M allocations: 13.410 GiB, 5.57% gc time)
+
+julia> SpeedTest.SpeedTest2( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+  9.712085 seconds (299.97 M allocations: 13.410 GiB, 5.56% gc time)
+```
+
+## Using `LinearAlgebra`
+
+Using `norm`.  Instead of `hypot( (pn[:, i] - pn[ :, j])` we replaced `hypot` with `LinearAlgebra.norm(..., 2)`. This really showed an improvement.
+
+```
+julia> SpeedTest.SpeedTest2( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+  6.308109 seconds (149.99 M allocations: 11.175 GiB, 4.57% gc time)
+8
+
+julia> SpeedTest.SpeedTest2( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+  6.147794 seconds (149.99 M allocations: 11.175 GiB, 4.48% gc time)
+8
+```
+
+## Using `dot`
+
+`norm` still performed a square root, so switched to `dot` and compared to the square of `shell`.   The main code looks like this now:
+
+```julia
+    shell = ss.shell^2
+    rs = zeros( eltype(pn), 2) # preallocate rs.
+    @fastmath @inbounds @simd for i = 1:(ss.N - 1) 
+        # The last particle will be done by default
+        mt = 0 # Init temp m
+        for j in (i + 1):ss.N
+            rs = (pn[:, i] - pn[ :, j])
+            ds = LinearAlgebra.dot( rs, rs) 
+            if ds < shell 
+                mt += 1
+                if mt > corr.Mmax 
+                    error( "m > Mmax ($(corr.Mmax)) @ $i : $(corr.corr[ :, i])") end
+                corr.corr[ mt, i] = j
+            end
+            corr.m[ i] = mt # mt will be zero if no particles were added.
+        end
+```
+
+That looks a bit faster still.
+
+```
+julia> SpeedTest.SpeedTest2( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+  5.859858 seconds (149.99 M allocations: 11.175 GiB, 7.51% gc time)
+8
+
+julia> SpeedTest.SpeedTest2( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+  5.856723 seconds (149.99 M allocations: 11.175 GiB, 5.43% gc time)
+8
+```
+
+Pre-allocated `ds` and that seemed to make a small change, although only in the `gc` times. Here is the code changed:
+
+```julia
+    ds = zero( eltype(pn)) # pre allocate ds
+    @fastmath @inbounds @simd for i = 1:(ss.N - 1) 
+```
+Here are the times:
+
+```
+julia> SpeedTest.SpeedTest2( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+  5.641638 seconds (149.99 M allocations: 11.175 GiB, 5.98% gc time)
+8
+
+julia> SpeedTest.SpeedTest2( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+  5.635716 seconds (149.99 M allocations: 11.175 GiB, 5.94% gc time)
+8
+```
+
+There really isn't any reason to store the value of `ds`; it can be computed as a part of the comparison:
+
+```julia
+ for j in (i + 1):ss.N
+            rs = (pn[:, i] - pn[ :, j])
+            if LinearAlgebra.dot( rs, rs)  < shell 
+```
+
+Oddly, this seems a bit slower.
+
+```
+julia> SpeedTest.SpeedTest2( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+  5.816155 seconds (149.99 M allocations: 11.175 GiB, 5.88% gc time)
+8
+
+julia> SpeedTest.SpeedTest2( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+  5.741712 seconds (149.99 M allocations: 11.175 GiB, 5.90% gc time)
+8
+```
+
+Using `LinaerAlgebra.BLAS.dot` didn't seem to be an advantage here.
+
+```
+julia> SpeedTest.SpeedTest2( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+  5.859780 seconds (149.99 M allocations: 11.175 GiB, 7.81% gc time)
+8
+
+julia> SpeedTest.SpeedTest2( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+  5.696664 seconds (149.99 M allocations: 11.175 GiB, 6.10% gc time)
+8
+
+julia> LinearAlgebra.BLAS.get_num_threads()
+4
+```
+
+Just for completeness, dropped backed to declareing `ds`, still using `BLAS`.  No significant change.
+
+```
+julia> SpeedTest.SpeedTest2( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+  5.696876 seconds (149.99 M allocations: 11.175 GiB, 6.21% gc time)
+8
+
+julia> SpeedTest.SpeedTest2( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+  5.839197 seconds (149.99 M allocations: 11.175 GiB, 5.92% gc time)
+8
+```
+
+# Using `StaticArrays
+
+This was difficult, as static arrays are different beasts.I find it difficult to know when Julia is doing things with address vs. values.  With regular arrays, it does not seem to matter much, Julia takes care of the details, but not so in Static Arrays.  Is it worth the trouble?  Look:
+
+```
+julia> SpeedTest.SpeedTest2( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+shell = 159.1549430918953
+  0.059455 seconds (13 allocations: 824 bytes)
+9
+
+julia> SpeedTest.SpeedTest2( 10000, 2/100)
+shell: 12.615662610100799 bsize: 707.1067811865476
+shell = 159.1549430918953
+  0.055088 seconds (13 allocations: 824 bytes)
+9
+```
+
+That is 100 times faster than the fastest previous result. It does appear that the answers were different, as the max number of interacting particles is 9, where previously it had been eight.  However, the particle locations are initialized randomly, and though the same seed is used, the random number generation is in a different order.
+
+Here are the main changes. In `MDRecord2`, the arrays `p` & `v` are now type `Vector{ SVector{2, T}}`. The main part of `CorrShea2!` is only slighlty different:
+
+```
+ shell = ss.shell^2
+    @show shell
+    rs = zeros( eltype(pn), 2) # preallocate rs.
+    ds = zero( eltype(pn[1])) # pre allocate ds
+    @fastmath @inbounds @simd for i = 1:(ss.N - 1) 
+        # The last particle will be done by default
+        mt = 0 # Init temp m
+        for j in (i + 1):ss.N
+            rs = (pn[i] - pn[j])
+            ds = LinearAlgebra.dot( rs, rs) 
+            #@show i j rs dss
+            if ds < shell 
+                mt += 1
+                if mt > corr.Mmax 
+                    error( "m > Mmax ($(corr.Mmax)) @ $i : $(corr.corr[ :, i])") end
+                corr.corr[ mt, i] = j
+            end
+            corr.m[ i] = mt # mt will be zero if no particles were added.
+        end
+    end
+```
+
+Since the element of `ss.p` are now vectors, we don't need the `:` index.  `ss.p[i]` is a vector, and `StaticArrays` provides for vector subtraction.
+
+# Timing the Working Program
+
+As of 6/24/24, the main program is working, although potential energy is growing slightly and a reverse test has not been done.  Nevertheless, a 1,000 step run take about 8.8 s.
+
+```
+ 8.863273 seconds (88.37 M allocations: 3.195 GiB, 4.04% gc time)
+```
+
+My recollection from 1979 was that a 1,000 step run took about an hour, although it did a bit more (the Nelson-Halperin order parameter and pressure, for instance).  Conversely, this run used a skip of 20, while we used a skip of 50 in '79, and this run was double-precicion floating point (`Float64` in *Julia*).  Regardless, this ten-year-old computer is about 400 time faster than the HP-3000.
+
+I tried some minor changes, but there is still a lot of allocation going on, and I don't really know where, but it dropped about 0.3 s.
+
+```
+ 8.493358 seconds (88.37 M allocations: 3.195 GiB, 4.17% gc time)
+```
+
+Moved the steps into a subroutine (ExecuteSteps), and added a @time macros to its call, so there are two time returns:
+```
+ 8.540484 seconds (88.42 M allocations: 3.190 GiB, 4.02% gc time)
+  8.548844 seconds (88.53 M allocations: 3.197 GiB, 4.02% gc time)
+```
+
+The prep and tear-down only take 0.009s.
+
+Clearly too many allocations going on, so trying to reduce them.  The first try, by modifying `gfij` from returning `[pe, [fx, fy]]` to simply `[pe, fx, fy]` yeilded a factor of two:
+
+```
+  4.023509 seconds (40.80 M allocations: 1.476 GiB, 4.24% gc time)
+  4.033928 seconds (40.91 M allocations: 1.482 GiB, 4.23% gc time)
+```
