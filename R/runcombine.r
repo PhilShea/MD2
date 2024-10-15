@@ -1,4 +1,8 @@
+source("C:/Users/phils/Documents/DSP/R/Common/Common/common.R")
+
 #' combineruns Combines files matching pattern into a single data frame.
+#'
+#' combineruns
 #'
 #' @param directory Passed to `list.files` as a directory.
 #' @param pattern Passed to `list.files` as `"pattern.(.*).scalars.csv"`
@@ -19,7 +23,11 @@ combineruns <- function( directory, pattern, verbose=FALSE){
    files <- list.files( directory, pattern = patt)
    # Sys.glob( file.path( directory,
    # paste( pattern, "(.*).scalars.csv", sep=".")))
-   files <- sort( files)
+
+   ###########
+   # This only works for 0 - 9 files!
+   #
+   files <- files[ order( file.mtime( files))]
    if (verbose) cat( "Files found: ", files, "\n")
    stepoffset <- 0
    sdf <- data.frame() # init to empty dataframe
@@ -29,13 +37,14 @@ combineruns <- function( directory, pattern, verbose=FALSE){
       # cat( steps, "\n")
       data[ "step"] <- data[ "step"] + stepoffset
       stepoffset <- stepoffset + steps
-   sdf <- rbind( sdf, data)
-   }
-   sdf$psiabs <- sqrt( sdf$Rpsi^2 + sdf$Impsi^2)
+      sdf <- rbind( sdf, data)
+   } # end for (j ...
    invisible( sdf)
 }
 
-#' plotMD2 Plots a run of data step-by-step
+#' plotMD2 Plots a run of data step-by-step.
+#'
+#' Plots all columns from 4 up.
 #'
 #' @param data A data frame, usually from `combineruns`.
 #'
@@ -45,81 +54,230 @@ combineruns <- function( directory, pattern, verbose=FALSE){
 #' @examples
 #' x = combineruns(  ".", "S1\\.0014\\.", verbose=TRUE)
 #' plotMD2( x)
-plotMD2 <- function( data) {
-   op <- par( mfrow = c(3, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
-        mgp = c(1.7, 0.4, 0) )
-   steps = data[,"step"]
+plotMD2 <- function( data, dt = 1) {
+   xlab = if (dt == 1) "Steps" else "Time"
+   steps = dt * data[,"step"]
+   data$psi <- Mod( complex( real=data$Rpsi, imaginary=data$Impsi))
    nc = ncol(data)
+   rows <- ceiling( (nc - 3)/2)
+   op <- par( mfrow = c(rows, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+              mgp = c(1.7, 0.4, 0) )
    #if (nc > 8) paste( "plotMD2 will only plot the columns 4 through 8")
    pl = names( data[ 4:nc])
-   for (v in pl[ c( 1, 4, 2, 3, 5, 8)]) {
-      plot( steps, data[, v], type="l", ylab=v)
-      grid()
+#   for (v in pl[ c( 1, 4, 2, 3, 5, 6)]) {
+   for (v in pl) {
+      plot( steps, data[, v], type="l", xlab=xlab, ylab=v, panel.first=grid())
    }
    par( op)
-   return( NULL)
+   invisible( NULL)
 }
 
+#' redplot Reads an MD2 csv file and plots all data (columns 4 up).
+#'
+#' @param filename Name of an MD2 produces csv file.
+#'
+#' @return The data read is returned invisibly.
+#' @export
+#'
+#' @examples
+#' setwd("H:/Data/DSP/MD/Data/1980")
+#' files = Sys.glob( file.path( "S2.*.scalars.csv"))
+#' i <- 40
+#' files[i]
+#' readplot( files[i])
+#'
 readplot <- function( filename) {
    data = read.csv( filename)
    plotMD2( data)
    invisible( data)
 }
 
-colStats <- function( x, f, tag) {
-  t <- unlist( lapply( x, f))
+#' colStats Applies a function across all columns adds the function to the name.
+#'
+#' Executes `lapply( x, f, ...)` to apply `f` to each column of `x`.
+#'
+#' @param x Typically, `x` is a data frame, but may be anything that `lapply`
+#' can process.
+#' @param FUN A function that will return one value when handed a vector or list.
+#' @param tag A string that will by appended to each column name.
+#' @param ... optional arguments for `FUN`.
+#'
+#' @return A named with each element named.
+#' @export
+#'
+#' @examples
+#' colStats(mtcars, mean, 'mean')
+#' # mpg.mean   cyl.mean  disp.mean    hp.mean  drat.mean    wt.mean ...
+#' # 20.090625   6.187500 230.721875 146.687500   3.596563   3.217250...
+#'
+colStats <- function( x, FUN, tag, ...) {
+  t <- unlist( lapply( x, FUN, ...))
   names(t) <- paste( names( t), tag, sep=".")
   t
 }
 
-#' lmMD2 Computes the regression of the ke vs step/
+#' Create block avereages and resample.
 #'
-#' @param df a data frame
+#' @param x A vector to resample.
+#' @param n An integer number of samples in the block averages.
 #'
-#' @return
+#' @return A vector of the resampled data.
+#' @export
+#'
+#' @examples
+#' rsmpavg( rnorm(1000), 10) # results in a length 100 vector.
+#'
+rsmpavg <- function(x, n){
+   # re-sample x by n point averages, returning one sample per average.
+   # truncates if length of x is not multiple of n
+   outlen <- floor( length(x) / n)
+   x <- x[1:(n * outlen)]
+   dim(x) <- c( n, outlen)
+   apply( x, 2, mean) # essentially, column means
+}
+
+#' lmMD2 Computes the regression of the ke vs step
+#'
+#'
+#'
+#' @param df a data frame with columns "ke" & "step".
+#'
+#' @return a named vector with the model's linear coefficients.  Retains the
+#' names in `summary.lm`, thus, is of the form
+#' `c( Estimate=e, "Std. Error"=s, r.squared=r`.  Note the space in
+#' `"Std. Error"`
 #' @export
 #'
 #' @examples
 lmMD2 <- function( df) {
    mod <- summary( lm( ke ~ step, df))
-   c( coeff <- mod$coefficients["step", 1:2], r.squared = mod$r.squared)
+   coeff <- unname(mod$coefficients["step", c('Estimate', 'Std. Error')])
+   t <- mod$fstatistic
+   Fpvalue <-  pf( t['value'], t['numdf'], t['dendf'], lower.tail=FALSE)
+   t <- mod$fstatistic
+   c( nr = nrow( df), Estimate = coeff[1], Std.Error = coeff[2],
+      r.squared = mod$r.squared, Fval =  unname( t['value']),
+      Fpvalue = unname( Fpvalue), df = t['dendf'])
+}
+
+findlmlen <- function( df, minp = 0.50) {
+   kefit <- lmMD2( df)
+   lendf <- nrow( df)
+   if (kefit[ 'Fpvalue'] < minp) { # The data appears to be correlated
+      third <- floor( lendf / 3) # Errs on the side of a longer 2/3s.
+      ttdf <- tail( df, -third) # two thirds df
+      kefit2 <- lmMD2( ttdf)
+      if (kefit2[ 'Fpvalue'] >= minp) { # The 2nd 2/3s passed
+       # Try to expand fit
+         ftdf <- head( df, third) #first third df
+         approach <- lmMD2( ftdf) # fit the approach to equilibrium
+         rftdfke <- rev( ftdf$ke)
+         if (sign( approach[ 'Estimate']) > 0) { # ke was growing
+            # we are looking for first point (rftdfke is in reverse)
+            # that is below the min.
+            adder <- which.max( rftdfke < min( ttdf$ke))
+         } else {
+            # looking for the first point above the max
+            adder <- which.max( rftdfke > max( ttdf$ke))
+         } # if (sign( approach...))
+         newlen <- lendf - third + adder - 1 # exclude the point exceeding limit
+         kefit3 <- lmMD2( tail( df, newlen))
+         if (kefit3[ 'Fpvalue'] >= minp) return( kefit3) else
+            return( kefit2)
+         # the above `if` should return either way - no way to get here.
+      } # if (kefit2....)
+      # if we get here, then neither whole nor 2/3's passed.
+   } # if kefit...
+   # if we get here, then either the original fit passed the F-test,
+   # or neither passed, so the original fit is returned.
+   # The F p-value will show that this record is suspect.
+   return( kefit)
+}
+
+meansdba <- function( x, rsblk = 250) {
+   # utility function to create block averages and compute mean and sd.
+   z <- rsmpavg( x, rsblk)
+   c( mean=mean( z), sd=sd(z))
 }
 
 #' procMD2DF Processes the scalar files from Julia MD2 program runs
 #'
 #' Summarizes the runs by calculating the mean, standard deviation, min, max,
+#' of each column in the data frame,
 #' and the relative variance of the kinetic energy
 #' (i.e., `rtv = ke.sd / ke.mean`), and the estimate of the slope of `ke`, the
 #' standard error of that estimate, and R^2 for the fit (`Estimate`,
-#' `Std.Error`, and `r.squared` respectively).
-#'
+#' `Std.Error`, and `r.squared` respectively). Also computes the pressure from
+#' the average potential and kinetic energies.
+#' The complex order parameter
+#' magnitude is calculated two ways: step by step (and then averaged), and the
+#' magnitude of the means of the real and imaginary components (named
+#' `psiabs.mean` and `psiavg`, respectively).
 #' @param df A data frame representing the entire series of runs.  Usually the
 #' result of `combineruns`
 #' @param skip The number of steps to skip in the averages.  `1,000` is an
-#' historic default, but `1` is used as whn running form the command line, one
+#' historic default, but `1` is used when running from the command line, as one
 #' usually wishes to see the initial effects.
+#' @param fftblock Passed to `sdf`, this is the size of the fourier transform
+#' block.  The algorithm will be fastest if this is a highly composite number,
+#' best if a power of four ($4^N$).
+#' @param rsblk The integer block size for ke re-sampling.  If greater than one,
+#' the ke data will be averaged in blocks of size `rsblk` and those block
+#' averages used to detect correlations.  The block should be long enough to
+#' span correlations in the original data, resulting in essentially uncorrelated
+#' data samples.
+#' @param minp The minimum F-test p-value which will be be accepted as no
+#' correlation. The default of 0.5 indicates that half of truly random data
+#' will be falsely rejected.
 #'
 #' @return A record suitable for a data frame which includes the total steps,
-#' the steps used in the averages (i.e. `total.steps - skip`),
+#' the steps used in the averages (i.e. `total.steps - skip`).
 #' @export
 #'
 #' @examples
 #' d <- procMD2DF(x, skip=1000)
 #'
-procMD2DF <- function( df, skip=1) {
-   steps <- nrow(df) # total number of steps in record.
-   kefit <- lmMD2( df[skip:steps,]) # must do this first as lm is against step
-   TE.init = NA
+procMD2DF <- function( df, skip = 0, fftblock = 4096, rsblk = 250,
+                       minp = 0.50) {
+   steps <- nrow( df) # total number of steps in original record.
+   ke <- if (skip == 0) df$ke else tail(df$ke, -skip)
+
+   # Spectral Processing
+   spec <- sdf( detrend( ke), window="hanning", blocksize=fftblock, overlap=0.5,
+                normalize=TRUE, prints=TRUE)
+   lensdf <- length( spec)
+   len2 <- (lensdf %/% 2)
+   indicies <- c( (len2 + 1):lensdf, 1:len2)
+   tp <- sum( spec) # total power
+   sdfsum <- cumsum( spec[ indicies]) / tp
+   width <- which.max( sdfsum > 0.995) - which.max( sdfsum > 0.005)
+   width <- 2 * width / fftblock # % of spectrum occupied.
+
+   TE.init = NA # If the entire record includes the first step, then it has
+   # the initialization energy.
    if (df[1, "step"] == 1) TE.init = df[1, "TE"]
+
+   # First Regression
+   Rke <- rsmpavg( ke, rsblk)
+   Rkedf <- data.frame( step = seq_along(Rke), ke = Rke)
+   kefit <- findlmlen( Rkedf, minp)
+
    # skip initial rows & drop step number
-   df <- subset( df, step > skip, xMomentum:Pressure)
-   means <- colStats( df, mean, "mean")# vector
-   sds <- colStats( df, sd, "sd")
-   mins <- colStats( df, min, "min")
-   maxs <- colStats( df, max, "max")
-   cv <- unname( (sds["ke.sd"] / means[ "ke.mean"])^2)
-   c( total.steps = steps, steps.avg = (steps - skip + 1), TE.init = TE.init,
-      means, sds, mins, maxs, kefit, rtv = cv)
+   df <- subset( df, (step > skip) & (step < (skip + rsblk * kefit[ 'nr'] + 1)),
+                      select = -1)
+   # Must drop steps column, as `colstats will be run on all remaining columns.
+   df$psiabs <- Mod( complex( real = df$Rpsi, imaginary = df$Impsi))
+   meansd <- colStats( df, meansdba, "rs", rsblk)
+   #sds   <- colStats( df, function( x) sd( rsmpavg( x, rsblk)), "rs.sd")
+   minmax <- colStats( df, function(x) setNames( range(x), c('min', 'max')),
+                       "raw")
+   #maxs  <- colStats( df, max, "max")
+   cv <- unname( (meansd[ "ke.sd.rs"] / meansd[ "ke.mean.rs"])^2)
+   c( total.steps = steps, steps.avg = nrow( df), TE.init = TE.init,
+      meansd, minmax, kefit, rtv = cv,
+      psiavg = Mod( complex( real = meansd[ "Rpsi.mean.rs"],
+                             imaginary = meansd[ "Impsi.mean.rs"])),
+      specwidth = width)
 }
 
 #' createdf Creates the observation data frame for a series of files.
@@ -133,7 +291,7 @@ procMD2DF <- function( df, skip=1) {
 #' @param directory A string with a directory, passed unaltered to `list.files`
 #' @param filenames A vector of strings with filenames to be added.
 #' @param skip Integer with the number of steps to skip before computing
-#' statistics.
+#' statistics.  Passed to `procMD2DF`.
 #' @param df Existing data frame to which these new observations are being
 #' added.
 #' @param clusters The number of clusters to use. This can be a bit time
@@ -148,7 +306,8 @@ procMD2DF <- function( df, skip=1) {
 #' MD2DF <- createdf(  ".", files, clusters=num_cores)
 #'
 createdf <- function( directory, filenames, skip = 1000, df=data.frame(),
-                      clusters=0) {
+                      clusters=0, fftblock = 4096, rsblk = 250,
+                      minp = 0.50) {
    filenames = sort( filenames)
    count <- length( filenames)
    runfiles <- strsplit( filenames,split="[.]") # runfiles[[i]] is array of fields
@@ -169,36 +328,86 @@ createdf <- function( directory, filenames, skip = 1000, df=data.frame(),
       series[ i] <- serener[1]
       energy[ i] <- serener[2]
    }
-   func <- function( row) {
+
+   func <- function( row) { # function to execute for each row
       x <- combineruns( directory, row)
-      procMD2DF( x, skip)
+      procMD2DF( x, skip, fftblock = fftblock, rsblk = rsblk, minp = minp)
    } # function( row)...
+
    if (clusters == 0) {
       parlist <- lapply( dfrows, func)
    }
    else {
       require( parallel) # only load if needed
       cl <- parallel::makeCluster( clusters)
-      # registerDoParallel( cl)
-      parallel::clusterExport( cl, c( "procMD2DF", "lmMD2", "colStats",
-                               "combineruns"))
+      parallel::clusterExport( cl,
+                               c( "procMD2DF", "lmMD2", "colStats", "detrend",
+                                  "Vpower","rsmpavg",'meansdba', "findlmlen",
+                                  "sdf", "taper", "combineruns"))
       parlist = parallel::parLapply( cl=cl, dfrows, func)
       parallel::stopCluster( cl)
-   }
+   } # end if (clusters...)
    newdf <- as.data.frame( t( simplify2array(( parlist))))
    newdf <- cbind( data.frame( series = series, energy = energy), newdf)
-   rbind( df, newdf)
+   newdf <- rbind( df, newdf) # Add newdf to df passed as argument
+   attr( newdf, 'call') <- list(directory = directory, filenames = filenames,
+                                skip = skip, fftblock = fftblock, rsblk = rsblk,
+                                minp = minp)
+   return( newdf)
+}
+
+#'  Checks if the output file exists, and reads it in, otherwise creates it.
+#'
+#'  See `createdf` for the rest of the parameters.
+#'
+#' @param output The filename for the new (or existing) MD2DF file.
+#' @param directory
+#' @param pattern
+#' @param skip
+#' @param df
+#' @param clusters
+#' @param fftblock
+#' @param rsblk
+#' @param minp
+#'
+#' @return the MD2DF file created or read in.
+#' @export
+#'
+#' @examples
+MD2DFfile <- function( output, directory, pattern, skip = 1000, df=data.frame(),
+                       clusters = detectCores() - 1, fftblock = 4096,
+                       rsblk = 500, minp = 0.50) {
+   stopifnot( endsWith( output, ".RDS"))
+   if (file.exists( output)) MD2DF <- readRDS( output) else {
+      files = list.files(directory, pattern)
+      cat( length(files), " files found.\n")
+      MD2DF <- createdf( directory, files, skip = skip, df = df,
+                             clusters = num_cores, fftblock = fftblock,
+                             rsblk = rsblk, minp = minp)
+      saveRDS( MD2DF, file = output)
+   }
+   return( MD2DF)
 }
 
 #' plotconf Plots a line or points with a shaded confidence band.
 #'
-#' @param df A data frame with the variables.
-#' @param x,y,sd Strings naming the x and y data columns and the standard
-#' deviation data column.
-#' @param linethres if the number of points exceeds this, a line will be drawn
+#' plots the data with confidence bands. If `Fpvalue` is included, the plot
+#' will be colored by points exceeding `minp`.
+#' Note that if the data is not sorted
+#' by x values, line plots can be confusing.
+#'
+#' @param x,y,sd,Fpvalue vectors of x, y, the standard
+#' deviation of y points (this may be omitted, and no conf interval will be
+#' plotted), and the F-test p-value.
+#' @param linethres if the number of all points (regardless of `minp` coloring)
+#' exceeds this, a line will be drawn
 #' rather than points for the y values.
-#' @param pch The plot symbol for the y points.
-#' @param ... Passed to the initial `plot` call.
+#' @param minp minimum F-test p-value for considering the point to be valid.
+#' @param vpch the plot symbol for the y points considered valid.
+#' @param ipch the plot symbol for the y points not considered valid.
+#' @param vcol plot color for points considered valid.
+#' @param icol plot color for points not considered valid.
+#' @param ... passed to the initial `plot` call.
 #'
 #' @return
 #' @export
@@ -206,32 +415,52 @@ createdf <- function( directory, filenames, skip = 1000, df=data.frame(),
 #' @examples
 #'  plotconf( MD2DF, "TE.init", "ke.mean","ke.sd")
 #'
-plotconf <- function( x, y, sd, linethresh=100, pch=19, xlab="", ylab="",
-                      ...) {
-   plot( x, y, xlab=xlab, ylab=ylab, type='n', ...)
-   grid()
-   polygon( c( rev(x), x), c( rev( y - sd), y + sd),
-            col = 'grey', border = NA)
-   if (length( x) < 100) {
-      points( x, y, pch=pch,  ...)
+plotconf <- function( x, y, sd, Fpvalue = rep( 1, length.out = length( x)),
+                      linethresh = 100, minp = 0.5, vpch = 1, ipch = vpch + 1,
+                      vcol = 'black', icol = 'darkred',
+                      xlab="", ylab="", ...) {
+   plci <- !(missing( sd) || is.null(sd))
+   plot( x, y, xlab=xlab, ylab=ylab, type='n', ...) #set boundary on all points.
+   # polygon has to be plotted first or it will cover the points and lines.
+   if (plci) {
+      so <- sort.list( x)
+      x <- x[ so]
+      y <- y[ so]
+      sd <- sd[ so]
+      Fpvalue <- Fpvalue[ so]
+      polygon( c( rev(x), x), c( rev( y - sd), y + sd), col = 'grey',
+               border = NA)
+   }
+   vp <- (Fpvalue >= minp) # Vector of valid point indices.
+   if (length( x) < linethresh) { # Threshold set on all points.
+      points( x[ vp], y[ vp], pch=vpch, col=vcol, ...)
+      points( x[ !vp], y[ !vp], pch=ipch, col=icol, ...)
    }
    else {
-      lines( x, y, ...)
+      lines(  x[ vp], y[ vp], col=vcol, ...)
+      lines(  x[ !vp], y[ !vp], col=icol, ...)
    }
-   lines( x, y + sd, col ='blue')
-   lines( x, y - sd, col ='blue')
+   if (plci) {
+      lines( x, y + sd, col ='darkblue')
+      lines( x, y - sd, col ='darkblue')
+   }
+   grid()
 }
 
 #' plotconfMD2 Calls plotconf with names specific to an MD2 data frame.
 #'
-#' plotconfMD2 will sort the data accordding to the `x` variable before calling
+#' plotconfMD2 will sort the data according to the `x` variable before calling
 #' plotconf.
 #'
 #' @param df The data frame
 #' @param x The x variable.  If omitted, will default to the mean total energy
 #'  "TE.mean"
-#' @param y The main y variable name.  Must be one of the variables that are
-#' statistical summaries and thus have a "y.mean" and a "y.sd" column in `df`.
+#' @param y The main y variable name as a string.  Must be one of the variables
+#' that are statistical summaries and thus have a "y.mean" and a "y.sd"
+#' column in `df`.
+#' @param minp minimum F-test p-value for considering the point to be valid.
+#' @param plci If `TRUE`, plot the confidence interval.
+#' @param xlab,ylab passed to `plotconf`.
 #' @param ... Passed to `plotconf`.
 #'
 #' @return nothing
@@ -241,24 +470,54 @@ plotconf <- function( x, y, sd, linethresh=100, pch=19, xlab="", ylab="",
 #' plotconfMD2( MD2DF, "TE.mean", "ke")
 #' plotconfMD2( MD2DF, y="ke")
 #'
-plotconfMD2 <- function( df, x = "TE.mean", y, ...) {
+plotconfMD2 <- function( df, x = "TE.mean.rs", y, minp = 0.5, plci = TRUE,
+                         linethresh = 100, xlab = x, ylab = y, ...) {
    ord = order( df[, x])
    xdata = df[ ord, x]
-   ydata = df[ ord, paste( y, "mean", sep=".")]
-   sddat = df[ ord, paste( y, "sd", sep=".")]
-   plotconf( x=xdata, y=ydata, sd=sddat, xlab=x, ylab=y)
+   ydata = df[ ord, paste( y, "mean.rs", sep=".")]
+   sddat = if (plci) df[ ord, paste( y, "sd.rs", sep=".")] else NULL
+   plotconf( x=xdata, y=ydata, sd=sddat, Fpvalue = df$Fpvalue,
+             linethresh = linethresh, xlab = xlab, ylab = ylab,
+             minp = minp, ...)
 }
 
-plotScalars <- function( MD2DF, ...){
-   plot( ke.sd ~ TE.mean, data = MD2DF, ...)
+#' Plot a predetermined collection of Scalars
+#'
+#' @param MD2DF A dataframe returned from `createdf`
+#' @param minp A minimum p-value from the F-test to declare a run invalid
+#' @param ... extra parameters passed to `plotconfMD2`
+#'
+#' @return Returns nothing.
+#' @export
+#'
+#' @examples
+#' MD2DF <- MD2DF[ order( MD2DF$TE.mean.rs),] # put df in increasing order
+#' op=  par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+#'           mgp = c(1.7, 0.4, 0) )
+#' plotScalars( subset( MD2DF, TE.mean.rs< 0.2))
+#' par(op)
+#'
+plotScalars <- function( MD2DF, minp = 0.5, ...){
+   valid <- MD2DF$Fpvalue > minp
+   pch <- rep_len( 1, length.out = nrow( MD2DF))
+   pch[ !valid] <- 2
+   col <- rep_len( 'black', length.out = nrow(MD2DF))
+   col[!valid] <- 'darkred' # change all non-valid points to red.
+   plot( ke.sd.rs ~ TE.mean.rs, data = MD2DF, pch = pch, col = col, ...)
    grid()
    plotconfMD2( y="ke", df = MD2DF, ...)
    plotconfMD2( y="Pressure", df = MD2DF, ...)
-   plot( rtv ~ TE.mean, data = MD2DF, ...)
+   plot( rtv ~ TE.mean.rs, data = MD2DF, pch = pch, col = col, ...)
    grid()
-   plot( r.squared ~ TE.mean, data = MD2DF, ...)
+   plot( r.squared ~ TE.mean.rs, data = MD2DF, pch = pch, col = col, ...)
    grid()
-   plotconfMD2( y="TE", x="TE.init", df = MD2DF, ...)
+   MD2DF$ke.rrange <- (MD2DF$ke.max.raw - MD2DF$ke.min.raw) / MD2DF$ke.mean.rs
+   plot( ke.rrange ~ TE.mean.rs, data = MD2DF, pch = pch, col = col, ...)
+   plot( psiavg ~ TE.mean.rs, data = MD2DF, pch = pch, col = col, ...)
+   grid()
+   plot( Std.Error ~ abs(Estimate), data = MD2DF, pch = pch, col = col, ...)
+   abline( a = 0, b = 1)
+   grid()
 }
 
 "%within%" <- function( vector, range)

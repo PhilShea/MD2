@@ -1,0 +1,56 @@
+---
+title: "TransitionRuns"
+author: "Phil Shea"
+format: pdf
+---
+
+```{r}
+#| label: init
+#| echo: false
+#| output: false
+library( parallel)
+# Calculate the number of cores
+num_cores <- detectCores() - 1
+ source("~/DSP/MD/R/runcombine.r")
+```
+
+
+# New Runs
+
+The program was modified to allow more precise setting of the initialization kinetic energy, and 13 new runs were made around the transition region.  Each run consisted of 1,000 steps following initialization, plus 50,000 steps looking for equilibrium. Below is an example.
+
+```{r}
+#| label: fig-x31
+#| output: true
+#| fig-cap: "Plots of the basic data in run S2b.0031 after skipping the first 2,000 points."
+x31 = combineruns( "H:/Data/DSP/MD/Data", "S2b\\.0031\\.")
+plotMD2( tail( x31, -2000))
+```
+
+
+
+```{r}
+getwd()
+files = list.files("H:/Data/DSP/MD/Data", "S2b.*.scalars.csv")
+length(files)
+MD2DF <- createdf( "H:/Data/DSP/MD/Data", files, clusters=num_cores, 
+                   rsblk=500)
+save( MD2DF, file="MD2DF.S2b.Rdata")
+```
+
+These results reflect the extended data..
+
+```{r}
+#| label: fig-MD2DF
+#| fig-cap: "Eight key parameters, the first six (counting top-to-bottom, left-to-right) plotted aginst the mean total energy per particle. They are 1) the standard deviation of the kinetic energy, 2) the pressure, 3) the correlation coefficient, 4) the avereage of the modulus of the Nelson-Halperin order parameter, 5) the kinetic energy, and 6) the relative variance of the kinetic energy (i.e., the standard deviation divided by the mean). Then the total energy vs. the initialization total, and last the standard error of the slope estimate vs. the absolute value of the slope (with a a line showing where they are equal).  Black circles indicate data declared valid and red triangles are data whose regression had too much signigicance (F-test p-value < 0.5)."
+#| 
+cat( "Observations: ", nrow(MD2DF), 
+     ", Valid: ", sum( MD2DF[, 'Fpvalue'] >= 0.5))
+MD2DF <- MD2DF[ order( MD2DF$TE.mean.rs),]
+op=  par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+        mgp = c(1.7, 0.4, 0) )
+plotScalars( subset( MD2DF, TE.mean.rs< 0.2))
+par(op)
+```
+
+No real surprise there, only three considered valid. The TE's cover the missing range between 0.1535 and 0.1657 (so the modification to `InitMDRecord!` where succesful), and it appears as though the transition region might be narrowed to be below $0.160 \epsilon$ total energy per particle. 

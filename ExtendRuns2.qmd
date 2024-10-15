@@ -1,0 +1,434 @@
+---
+title: "Extended Runs 1"
+author: "Philip Shea"
+date: "23 September 2024"
+#bibliography: references.bib
+link-citations: true
+format: pdf
+---
+
+```{r}
+#| echo: false
+#| output: false
+library( parallel)
+# Calculate the number of cores
+num_cores <- detectCores() - 1
+ source("C:/Users/phils/Documents/DSP/MD/MD2/R/runcombine.r")
+```
+
+# Extended Runs
+
+The following Runs (and by "run" is meant a particle system initialized at an energy and propagated from there; when temperature changes are included, each temperature change would be a new run) were extended by 15,000 steps.
+
+```         
+ [1] "0016" "0021" "0023" "0030" "0031" "0036" "0038" "0037" "0051" "0047" "0052"
+[12] "0056" "0059" "0053" "0066" "0067" "0082" "0073" "0074" "0079" "0083" "0092"
+```
+
+Here, for example, is the extended 31 series.
+
+```{r}
+#| label: fig-x31
+#| output: true
+#| fig-cap: "Plots of the basic data in run S2.0031 after skipping the first 2,000 points."
+x31 = combineruns( "H:/Data/DSP/MD/Data/1980", "S2\\.0031\\.")
+plotMD2( tail( x31, -2000))
+```
+
+The fit to the temperature works, but is suspect.
+
+```{r}
+#| label: fig-rx31ke
+#| fig-cap: "S2.0031 (@fig-x31) kinetic energy (less the first 2,000 points) with fits to the resampled data, the black line is the fit to all of the data (red and blue circles), and the last two-thirds of truncated run S2-0031 (blue circles and line). Green lines indicate the mean (solid), and min & max (dashed) of the blue points. The red line is the regression line for the red points."
+#| 
+navg <-500
+skip <- 2000
+(t <- procMD2DF( x31, skip=skip, rsblk=500))
+rx31ke <- rsmpavg( tail( x31$ke, -skip), navg)
+rx31 <- data.frame( ke=rx31ke, 
+                    step=seq( from=navg/2, by=navg, along.with=rx31ke))
+lmrx31 <- lm(ke ~ step, data = rx31) # fit across entire data set
+(slmrx31 <- summary( lmrx31))
+#lenrx31 <- nrow( rx31)
+#third <- floor(lenrx31 / 3) # we'll exclude the least number of points
+trx31 <- tail( rx31, t['nr']) # procMD2DF fit
+sstrx31 <- stat.summary( trx31$ke)
+lmtrx31 <- lm( ke ~ step, data=trx31) # fit to tail
+summary( lmtrx31)
+ftlmx31 <- lm( ke ~ step, data=head( rx31, -t['nr'])) # Fit to head of data.
+plot( tail( x31$ke, -skip), type='l', panel.first=grid()) # plot raw data
+points(ke ~ step, data=rx31, col='darkred') # Plot all resample points
+abline( coef=coef( lmrx31)) # Fit to all resample points
+points(ke ~ step, data=trx31, col='blue') # Plot tail resample points
+abline( coef=coef( lmtrx31), col='blue') # Fit to the tail resample points
+abline( h=sstrx31["mean"], col='darkgreen')
+abline( h=sstrx31["min"], col="darkgreen", lty=2)
+abline( h=sstrx31["max"], col="darkgreen", lty=2)
+abline( coef=coef( ftlmx31), col='darkred')
+```
+
+One other concern here is that `procMD2DF` did not extend the fit. It should have added 8 points to the fit, (the red points to the left of the blue points below the top green dashed line). These are just below the threshold we set for acceptance though (`Fpvalue` \< 0.5).
+
+```{r}
+lmMD2( tail( rx31, 40))
+```
+
+# Error in MD2DF
+
+In the process of understanding the above, an error was noted in `procMD2DF` procedure to extend the data sets. Briefly, the error searched from the beginning of the first third of the data instead of searching backwards from the end. The result is that some of the averages may be over shorter data than need be. The data is otherwise valid, but this error obviates the issue of how to replace only those runs which were extended. The entire data frame needs to be re-created.
+
+```{r}
+getwd()
+files = list.files("H:/Data/DSP/MD/Data/1980", "S2.*.scalars.csv")
+length(files)
+MD2DF <- createdf( "H:/Data/DSP/MD/Data/1980", files, clusters=num_cores, 
+                   rsblk=500)
+save( MD2DF, file="MD2DF.4.S2.Rdata")
+```
+
+These results reflect the extended data.
+
+```{r}
+#| label: fig-MD2DF
+#| fig-cap: "Eight key parameters, the first six (counting top-to-bottom, left-to-right) plotted aginst the mean total energy per particle. They are 1) the standard deviation of the kinetic energy, 2) the pressure, 3) the correlation coefficient, 4) the avereage of the modulus of the Nelson-Halperin order parameter, 5) the kinetic energy, and 6) the relative variance of the kinetic energy (i.e., the standard deviation divided by the mean). Then the total energy vs. the initialization total, and last the standard error of the slope estimate vs. the absolute value of the slope (with a a line showing where they are equal).  Black circles indicate data declared valid and red triangles are data whose regression had too much signigicance (F-test p-value < 0.5)."
+#| 
+cat( "Observations: ", nrow(MD2DF), 
+     ", Valid: ", sum( MD2DF[, 'Fpvalue'] >= 0.5))
+MD2DF <- MD2DF[ order( MD2DF$TE.mean.rs),]
+op=  par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+        mgp = c(1.7, 0.4, 0) )
+plotScalars( subset( MD2DF, TE.mean.rs< 0.2))
+pl <- recordPlot()
+png("Mainscalars ER1.png", width=480, height=240)
+replayPlot(pl)
+dev.off()
+par(op)
+```
+
+# State of Main Scalars
+
+Below are plots of the main scalars. The kinetic energy can be seen to stop increasing
+
+```{r}
+#| label: fig-ke
+#| fig-cap: "The per-particle kinetic energy versus total energy (energy in scaled units). Red triangles denote points not considered valid."
+plotconfMD2( df = MD2DF, y='ke', linethresh = 200, vpch=1, 
+             xlab = "Energy per Particle", ylab = "Kinetic Energy",
+             main="Kinetic Energy vs. Total Energy")
+```
+
+```{r}
+#| label: fig-kez
+#| fig-cap: "@fig-ke zoomed into the transition region."
+plotconfMD2( df = MD2DF[MD2DF$TE.mean.rs < 0.17,], y='ke', vpch=1, 
+             xlab = "Energy per Particle", ylab = "Kinetic Energy",
+             main="Kinetic Energy vs. Total Energy")
+```
+
+The break is at point 29 to 30:
+
+```{r}
+ MD2DF$TE.mean.rs[29:30]
+```
+
+Point 30 here is not considered valid.
+
+```{r}
+#| label: fig-rtv
+#| fig-cap: "The per-particle kinetic energy versus total energy (energy in scaled units). Red triangles denote points not considered valid."
+
+valid <- MD2DF$Fpvalue >= 0.5
+pch <- rep_len( 1, length.out = nrow( MD2DF))
+pch[ !valid] <- 2
+col <- rep_len( 'black', length.out = nrow(MD2DF))
+col[ !valid] <- 'darkred' # change all non-valid points to red.
+x <- MD2DF[,'TE.mean.rs']
+Fpvalue <- MD2DF[ ,'Fpvalue']
+plotconf( y = MD2DF[,'rtv'], x = x, Fpvalue = Fpvalue, linethresh = 200,
+          xlab = "Energy per Particle", 
+          ylab = "Relative Variance", main="Relative KE variance vs. Total Energy")
+```
+
+Certainly those points above $6 \times 10^{-3}$ should be examined for equilibrium, perhaps all those above $4 \times 10^{-3}$
+
+The Nelson-Halperin order parameter $\psi = \frac{1}{2(N-1)}\sum_{i \ne j} e^{i6\theta_{i j}}$, where $\theta_{i j}$ is the angle with the $x$-axis of the vector from particle $i$ to $j$ (the factor of 2 because in the above, each particle is counted twice).
+
+```{r}
+#| label: fig-nhop
+#| fig-cap: "The Nelson-Halperin order parameter versus TE (energy in scaled units). Red triangles denote points not considered valid."
+
+plotconfMD2( df= MD2DF, y = 'psiabs', linethresh = 200,  
+          main="NHop vs. TE", xlab = "TE")
+pl <- recordPlot()
+png("NHOPER1.png", width=700, height=400)
+replayPlot(pl)
+dev.off()
+par(op)
+```
+
+The system is started with the particles in minimum potential energy positions but with random kinetic energy. The kinetic energy quickly moves into average potential energy, and the plot below shows how this varies with total energy in the system. The plot is the ratio of the gain in potential energy (over the rest position) divided by the average kinetic energy. The ratio remains near one, but the peak in the transition region is perhaps as sharp as the Nelson-Halperin order parameter.
+
+```{r}
+#| label: fig-kepesplit
+#| fig-cap: "The ratio of gain in potential energy to the kinetic energy plotted vs. TE (energy in scaled units). Red triangles denote points not considered valid."
+a <- sqrt( pi / sin(pi/3))
+b <- a * sqrt(3)
+pe.init <- (6/2) * ((a^-5) + (b^-5))
+MD2DF$pe.gain <- MD2DF$pe.mean.rs - pe.init
+#plot( pe.gain/ke.mean ~ ke.mean, data=MD2DF.2)
+with( MD2DF,{
+plotconf( y =pe.gain/ke.mean.rs, x = TE.mean.rs, Fpvalue = Fpvalue, 
+          linethresh = 200, xlab = "TE", ylab = "Fractional PE Gain", 
+          main="PE Gain vs. TE")
+})
+```
+
+Combining the relative KE variance with the F-test, we can generate a list of suspect runs.
+
+```{r}
+(rerun <- with( MD2DF, {MD2DF[ ((Fpvalue < 0.5) | (rtv > 0.0006)), 
+                               c('series', 'energy', 'TE.mean.rs', 'psiavg',
+                                 'Fpvalue')]}))
+```
+
+Character list of 10 runs to add steps to.
+
+```{r}
+rerun$energy
+```
+
+Run 36 is just below $0.16\epsilon$ energy per particle, so almost fluid.
+
+```{r}
+#| label: fig-x36
+#| output: true
+#| fig-cap: "Plots of the basic data in run S2.0036 after skipping the first 2,000 points."
+x36 = combineruns( "H:/Data/DSP/MD/Data/1980", "S2\\.0036\\.")
+plotMD2( tail( x36, -2000), dt=0.01)
+```
+
+# The Transition Region
+
+We have enough data to identify the transition region. In addition to the gaps in the charts above, we can do a pair of fits on the pressure and temperature plots against the total energy. It is unclear exactly where the transition region starts, as we were unlucky with the total energies that were randomly generated.
+
+```{r}
+#| label: fig-kez2
+#| fig-cap: "@fig-ke zoomed into the transition region."
+plotconfMD2( df = MD2DF[MD2DF$TE.mean.rs %within% c(0.14,0.17),], y='ke', vpch=1, 
+             xlab = "Energy per Particle", ylab = "Kinetic Energy",
+             main="Kinetic Energy vs. Total Energy")
+```
+
+Based on the above, the runs below $0.155\epsilon$ belong to the frozen (solid phase) systems, and the valid runs above $0.165\epsilon$ belong to the fluid phase.
+
+```{r}
+#| label: fig-kelm
+#| fig-cap: "Linear fits to solid and fluid phases."
+vs <- MD2DF[,'TE.mean.rs'] < 0.155
+solidlm <- lm( ke.mean.rs ~ TE.mean.rs, data=MD2DF[ vs,])
+(solidsum <- summary( solidlm))
+vf <- with(MD2DF, TE.mean.rs > 0.165 & Fpvalue > 0.5)
+fluidlm <- lm( ke.mean.rs ~ TE.mean.rs, data=MD2DF[vf,])
+(fluidsum <- summary( fluidlm))
+plot(   ke.mean.rs ~ TE.mean.rs, data=MD2DF, pch=1, type='n')
+points( ke.mean.rs ~ TE.mean.rs, data=MD2DF[ vs,], pch=1)
+points( ke.mean.rs ~ TE.mean.rs, data=MD2DF[ vf,], pch=1, col='blue')
+abline( coef=coef( solidlm))
+abline( coef=coef( fluidlm), col='blue')
+pl <- recordPlot()
+png("LinFitphaseER1.png", width=700, height=400)
+replayPlot(pl)
+dev.off()
+par(op)
+```
+
+Note the specific heat appears to change a bit in the two phases: the solid is about 0.51, and the fluid is a bit higher at 0.56. The zero point energy is given by:
+
+```{r}
+solidc <- coef( solidlm)
+ -unname(solidc['(Intercept)'] / solidc['TE.mean.rs'])
+```
+
+The zero point energy is compared to the exact value (to six digits) of 0.127373.
+
+The heat of fusion can be given by the horizontal distance between the two lines. If the solid line is $y = a_s + b_s x$ and the fluid is similarly $y = a_f + b_f x$, then the $x$ coordinate in the fluid phase corresponding to the an $x_0$ in the solid phase, is $\frac{a_s - a_f + b_s x_0}{b_f} - x_0$.
+
+```{r}
+#| label: fig-hf
+#| fig-cap: "Range of heat of fusion."
+(t1 <- tail( sort(MD2DF[vs,"TE.mean.rs"]), 1))
+(t2 <- head( sort( MD2DF[vf,"TE.mean.rs"]), 1))
+fluidc <- coef( fluidlm)
+af <- fluidc['(Intercept)']
+bf <- fluidc['TE.mean.rs']
+as <- solidc['(Intercept)']
+bs <- solidc['TE.mean.rs']
+f <- function( as, bs, af, bf, x0) (as - af + bs*x0)/bf - x0
+tx <- seq( from=t1, to=t2, length.out=20)
+plot( x=tx, y=f(as, bs, af, bf, tx), xlab='TE/part.', ylab='Heat of Fusion')
+```
+
+# New Runs
+
+The next series of runs needs to extend the runs elicited above, plus fill in the energies that are missing. The `InitMDRecord!` function was updated to zero in on the energies in a better way. Previously, the energy was set as a parameter to the random number generation, but the random generation could result in many different energies. The old code was as follows:
+
+```         
+    ss.v .= sqrt( Temp) .* randn( eltype( ss.v), ss.N)
+```
+
+The new code is as follows:
+
+```         
+    ss.v .= randn( eltype( ss.v), ss.N)
+    ke = 0.5 * sum( dot.(ss.v, ss.v)) / ss.N
+    ss.v .= sqrt( Temp / ke) .* ss.v
+```
+
+As can be seen, the random numbers are generated first, and then they are scaled to meet the temperature. It is still not exact, as linear and angular momentum are corrected after the kinetic energy generation, and this does change it a bit, but it ought to be a lot closer now.
+
+Runs were made with the following.
+
+``` julia
+function runn( td::AbstractString, t::Integer, sname::AbstractString, 
+               initsteps::Integer=1000, rsteps::Integer=5000, runs::Integer=3)
+    s = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    temp = t/1000
+    @show temp
+    tname = @sprintf "%.4d" t
+    basename = sname * tname
+    @show basename
+    cd( td)
+    io = open( basename * ".txt", "a")
+    println( io, "Starting Run $basename: $(now())")
+    startindx = 1
+    MD2.InitSystem( basename * '.' * s[ startindx], temp=temp, io=io)
+    println( io, "Starting Run $basename: $(now())")
+    MD2.RunSystem( basename * '.' * s[ startindx], 
+                   basename * '.' * s[ startindx += 1], initsteps, io=io)
+    for i in 1:runs
+        MD2.RunSystem( basename * '.' * s[ startindx], 
+                   basename * '.' * s[ startindx += 1], rsteps, io=io)
+        println( io, "extension finished: $(now())")
+    end
+    close( io)
+end
+
+function newruns(td::AbstractString, sname::AbstractString, 
+                tlist::Vector{<:Integer}, initsteps::Integer, rsteps::Integer, 
+                runs::Integer = 3)
+    Threads.@threads for t in tlist
+        runn( td, t, sname, initsteps, rsteps, runs)
+    end
+end
+
+tlist = [i for i=26:38]
+@time newruns( td, "S2b.", tlist, 1000, 5000, 10)
+```
+
+This last line creates a 1k initialization run, plus ten 5k runs for a totas of 51k steps. The runs were created in the `Data` directory, and will be moved to the 1980 directory when they have been sufficiently processed. I expect very long runs required to achieve equilibrium. The files are processed below.
+
+```{r}
+files = list.files("H:/Data/DSP/MD/Data", "S2b.*.scalars.csv")
+length(files)
+MD2DF.S2b <- createdf( "H:/Data/DSP/MD/Data", files, clusters=num_cores, 
+                   rsblk=500)
+save( MD2DF.S2b, file="MD2DF.S2b.Rdata")
+```
+
+Here is a summary of the main parameters:
+
+```{r}
+op= par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0) )
+plotScalars( MD2DF.S2b)
+par(op)
+```
+
+Only three runs are considered valid, and we ought to be suspicious of these.
+
+```{r}
+with( MD2DF.S2b, MD2DF.S2b[Fpvalue > 0.5, 
+            c("TE.mean.rs", "energy", "steps.avg")])
+```
+
+```{r}
+#| label: fig-xn26
+#| output: true
+#| fig-cap: "Plots of the basic data in run S2b.0026."
+xn26 = combineruns( "H:/Data/DSP/MD/Data", "S2b\\.0026\\.")
+plotMD2( xn26, dt=0.01)
+```
+
+```{r}
+#| label: fig-xn36
+#| output: true
+#| fig-cap: "Plots of the basic data in run S2b.0036."
+xn36 = combineruns( "H:/Data/DSP/MD/Data", "S2b\\.0036\\.")
+plotMD2( xn36, dt=0.01)
+```
+
+```{r}
+#| label: fig-xn37
+#| output: true
+#| fig-cap: "Plots of the basic data in run S2b.0037."
+xn37 = combineruns( "H:/Data/DSP/MD/Data", "S2b\\.0037\\.")
+plotMD2( xn37, dt=0.01)
+```
+
+Those three actually look pretty good.
+
+## Extending the rest
+
+Ran 20 more runs of the following files: \["0027", "0028", "0029", "0030", "0031", "0032", "0033", "0034", "0035", "0038"\] (used `script5.jl` after adding some of the script functions created earlier to the code base). Note that I forgot one file, so it had to be run by itself. Below is the new standard for extending runs.
+
+``` julia
+include("C:\\Users\\phils\\Documents\\DSP\\MD\\dev\\MD2\\src\\MD2.jl")
+using .MD2
+
+origin = pwd()
+
+td = "H:\\Data\\DSP\\MD\\Data"
+cd( td)
+
+list1 = ["0027", "0028", "0029", "0030", "0031", "0032", "0033", "0034", "0035"]
+
+sname = "S2b."
+start = 'B' # Single quotes make it a single char
+@time MD2.filerun_thread( td, list1, sname, start, 5000, 20 )
+
+@time MD2.extendrun(td, sname, "0038", 'B', 5000, 20)
+```
+
+Note that we are at "U" in the index, with only 31 more to go. The next set of extended runs will have to use larger step blocks.
+
+```{r}
+MD2DF.S2b <- createdf( "H:/Data/DSP/MD/Data", files, clusters=num_cores, 
+                   rsblk=500)
+save( MD2DF.S2b, file="MD2DF.S2b.Rdata")
+```
+
+Here are the states of the main scalars. Note that we've replaced the TE.mean vs TE.Init with the ke.rrange. This is the relative range of the kinetic energy, and is computed by
+
+``` r
+MD2DF$ke.rrange <- (MD2DF$ke.max.raw - MD2DF$ke.min.raw) / MD2DF$ke.mean.rs
+```
+
+So we can see the full range of the kinetic energy.
+
+```{r}
+op= par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0) )
+plotScalars( MD2DF.S2b)
+par(op)
+```
+
+We still have seven runs that are not considered in equilibrium.
+
+```{r}
+with( MD2DF.S2b, MD2DF.S2b[Fpvalue < 0.5, 
+            c("TE.mean.rs", "energy", "steps.avg")])
+```
+
+Well, tested a new feature here. It turns out that lower case letters are not unique to the file system on windows. I think I knew this but forgot. Fortunately, *Julia* made new files with `S2b.00038.a(1).csv` instead of crashing. but now I'm left with figuring out what to do with these files.
+
+I should probably just open them all with `combineruns` and sort the total open series.
