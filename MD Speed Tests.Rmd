@@ -354,7 +354,7 @@ shell = 159.1549430918953
 
 That is 100 times faster than the fastest previous result. It does appear that the answers were different, as the max number of interacting particles is 9, where previously it had been eight.  However, the particle locations are initialized randomly, and though the same seed is used, the random number generation is in a different order.
 
-Here are the main changes. In `MDRecord2`, the arrays `p` & `v` are now type `Vector{ SVector{2, T}}`. The main part of `CorrShea2!` is only slighlty different:
+Here are the main changes. In `MDRecord2`, the arrays `p` & `v` are now type `Vector{ SVector{2, T}}`. The main part of `CorrShell!` is only slightly different:
 
 ```
  shell = ss.shell^2
@@ -393,7 +393,7 @@ My recollection from 1979 was that a 1,000 step run took about an hour, although
 
 I tried some minor changes, but there is still a lot of allocation going on, and I don't really know where, but it dropped about 0.3 s.
 
-```
+```T
  8.493358 seconds (88.37 M allocations: 3.195 GiB, 4.17% gc time)
 ```
 
@@ -405,9 +405,31 @@ Moved the steps into a subroutine (ExecuteSteps), and added a @time macros to it
 
 The prep and tear-down only take 0.009s.
 
-Clearly too many allocations going on, so trying to reduce them.  The first try, by modifying `gfij` from returning `[pe, [fx, fy]]` to simply `[pe, fx, fy]` yeilded a factor of two:
+Clearly too many allocations going on, so trying to reduce them.  The first try, by modifying `gfij` from returning `[pe, [fx, fy]]` to simply `[pe, fx, fy]` yielded a factor of two:
 
 ```
   4.023509 seconds (40.80 M allocations: 1.476 GiB, 4.24% gc time)
   4.033928 seconds (40.91 M allocations: 1.482 GiB, 4.23% gc time)
 ```
+
+9 runs, 20 repetitions each for 180 5,000 step runs (forgot to start Julia with `-t Auto`:
+
+```
+402.851736 seconds (10.36 G allocations: 196.385 GiB, 6.57% gc time, 2.21% compilation time: 9% of which was recompilation)
+```
+
+That's 0.45s per 1k step run.
+
+## Longest Run
+
+```
+list1 = ["0027", "0029", "0030", "0031", "0032", "0033", "0038"]
+td = "H:\\Data\\DSP\\MD\\Data"
+sname = "S2b."
+start = 'V'
+
+@time MD2.filerun_thread( td, list1, sname, start, 20000, 10)
+
+151.941826 seconds (16.10 G allocations: 303.542 GiB, 14.68% gc time, 19 lock conflicts, 0.14% compilation time)
+```
+That's seven files, 20K steps, 10 times each, or 1,400,000 steps in 152 s. 0.109 s per 1k steps.
