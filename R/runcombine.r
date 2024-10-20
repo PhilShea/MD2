@@ -259,7 +259,7 @@ procMD2DF <- function( df, skip = 0, fftblock = 4096, rsblk = 250,
 
    # First Regression
    Rke <- rsmpavg( ke, rsblk)
-   Rkedf <- data.frame( step = seq_along(Rke), ke = Rke)
+   Rkedf <- data.frame( step = seq_along( Rke), ke = Rke)
    kefit <- findlmlen( Rkedf, minp)
 
    # skip initial rows & drop step number
@@ -307,13 +307,14 @@ procMD2DF <- function( df, skip = 0, fftblock = 4096, rsblk = 250,
 #'
 createdf <- function( directory, filenames, skip = 1000, df=data.frame(),
                       clusters=0, fftblock = 4096, rsblk = 250,
-                      minp = 0.50) {
+                      minp = 0.50, verbose=FALSE) {
    filenames = sort( filenames)
    count <- length( filenames)
    runfiles <- strsplit( filenames,split="[.]") # runfiles[[i]] is array of fields
    dfrows <- unlist( unique( lapply( runfiles,
                                      function(y) paste(y[1], y[2], sep="\\."))))
    # series and energy will define an init.
+   if (verbose) cat( dfrows)
    rowcnt <- length( dfrows)
    #
    # init df column vectors
@@ -361,8 +362,9 @@ createdf <- function( directory, filenames, skip = 1000, df=data.frame(),
 #'  See `createdf` for the rest of the parameters.
 #'
 #' @param output The filename for the new (or existing) MD2DF file.
-#' @param directory
-#' @param pattern
+#' @param directory The directory to be searched.
+#' @param pattern Globbing pattern passed through `glob2rx` before passing to
+#' `list.files`.
 #' @param skip
 #' @param df
 #' @param clusters
@@ -376,14 +378,14 @@ createdf <- function( directory, filenames, skip = 1000, df=data.frame(),
 #' @examples
 MD2DFfile <- function( output, directory, pattern, skip = 1000, df=data.frame(),
                        clusters = detectCores() - 1, fftblock = 4096,
-                       rsblk = 500, minp = 0.50) {
+                       rsblk = 500, minp = 0.50, verbose=FALSE) {
    stopifnot( endsWith( output, ".RDS"))
    if (file.exists( output)) MD2DF <- readRDS( output) else {
-      files = list.files(directory, pattern)
-      cat( length(files), " files found.\n")
+      files = list.files( directory, glob2rx( pattern))
+      cat( length( files), " files found.\n")
       MD2DF <- createdf( directory, files, skip = skip, df = df,
                              clusters = num_cores, fftblock = fftblock,
-                             rsblk = rsblk, minp = minp)
+                             rsblk = rsblk, minp = minp, verbose=verbose)
       saveRDS( MD2DF, file = output)
    }
    return( MD2DF)
@@ -473,9 +475,10 @@ plotconf <- function( x, y, sd, Fpvalue = rep( 1, length.out = length( x)),
 plotconfMD2 <- function( df, x = "TE.mean.rs", y, minp = 0.5, plci = TRUE,
                          linethresh = 100, xlab = x, ylab = y, ...) {
    ord = order( df[, x])
-   xdata = df[ ord, x]
-   ydata = df[ ord, paste( y, "mean.rs", sep=".")]
-   sddat = if (plci) df[ ord, paste( y, "sd.rs", sep=".")] else NULL
+   df <- df[ord, ]
+   xdata = df[, x]
+   ydata = df[, paste( y, "mean.rs", sep=".")]
+   sddat = if (plci) df[ , paste( y, "sd.rs", sep=".")] else NULL
    plotconf( x=xdata, y=ydata, sd=sddat, Fpvalue = df$Fpvalue,
              linethresh = linethresh, xlab = xlab, ylab = ylab,
              minp = minp, ...)
@@ -501,12 +504,12 @@ plotScalars <- function( MD2DF, minp = 0.5, ...){
    valid <- MD2DF$Fpvalue > minp
    pch <- rep_len( 1, length.out = nrow( MD2DF))
    pch[ !valid] <- 2
-   col <- rep_len( 'black', length.out = nrow(MD2DF))
-   col[!valid] <- 'darkred' # change all non-valid points to red.
+   col <- rep_len( 'black', length.out = nrow( MD2DF))
+   col[ !valid] <- 'darkred' # change all non-valid points to red.
    plot( ke.sd.rs ~ TE.mean.rs, data = MD2DF, pch = pch, col = col, ...)
    grid()
-   plotconfMD2( y="ke", df = MD2DF, ...)
-   plotconfMD2( y="Pressure", df = MD2DF, ...)
+   plotconfMD2( y="ke", df = MD2DF, minp=minp, ...)
+   plotconfMD2( y="Pressure", df = MD2DF, minp=minp, ...)
    plot( rtv ~ TE.mean.rs, data = MD2DF, pch = pch, col = col, ...)
    grid()
    plot( r.squared ~ TE.mean.rs, data = MD2DF, pch = pch, col = col, ...)
