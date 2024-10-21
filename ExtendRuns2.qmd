@@ -173,7 +173,7 @@ with( MD2DF.S2b.2, MD2DF.S2b.2[Fpvalue < 0.5,
             c("TE.mean.rs", "energy", "steps.avg")])
 ```
 
-Well, I tested a new feature here. It turns out that lower case letters are not unique to the file system on *Windows*. I think I knew this, but forgot. Fortunately, *Julia* made new files with, for example, `S2b.00038.a(1).csv` as the filename instead of crashing. but now I'm left with figuring out what to do with these files.
+Well, I tested a new feature here. It turns out that lower case letters are not unique to the file system on *Windows*. I think I knew this, but forgot. Fortunately, I had also forgotten that I anticipated such a problem, and made new files with "(n), for example, `S2b.00038.a(1).csv` as the filename instead of crashing. but now I'm left with figuring out what to do with these files.
 
 I should probably just open them all with `combineruns` and sort the total open series.  However, the step starts at 1 in each .csv file.  It was foolish to keep the entire state, but not the steps between runs. This requires a change to the MD2 program to keep track of the steps. A 64 bit integer will be enough, as even if the program were a million times faster than the current 0.1s per thousand steps, it would still take 29 years to run out of count space ( 0.1 * 2^63 / (1000000 * 1000 * 3600 * 24 * 365) = 29.5). Once this is done, future runs can be combined on step number. Until then, I will create a new version of `combineruns` that sorts by date & time using ` files <- files[ order( file.mtime( files))]`. After `MD2` is updates and a new series of runs are started, `combineruns` will need another update.
 
@@ -197,7 +197,7 @@ with( MD2DF.S2b.3, MD2DF.S2b.3[Fpvalue < 0.5,
             c("TE.mean.rs", "energy", "steps.avg")])
 ```
 
-Only "0033" reached validity. 
+Only "0033" reached validity with the additional 20k points. One thing odd: point "0038" remains "not valid" while the five cooler points 33 through 37 are considered valid.  It bears looking into.
 
 ```{r}
 #| label: fig-xn38
@@ -216,7 +216,7 @@ plotMD2( tail( xn38, - 2000), dt=0.01)
 #| fig-cap: "S2.0031 (@fig-xn38) kinetic energy (less the first 2,000 points) with fits to the resampled data, the black line is the fit to all of the data (red and blue circles), and the last two-thirds of truncated run S2-0031 (blue circles and line). Green lines indicate the mean (solid), and min & max (dashed) of the blue points. The red line is the regression line for the red points."
 #| 
 navg <-1000
-skip <- 1000
+skip <- 10000
 (t <- procMD2DF( xn38, skip=skip, rsblk=navg))
 rxn38ke <- rsmpavg( tail( xn38$ke, -skip), navg)
 rxn38 <- data.frame( ke=rxn38ke, 
@@ -239,4 +239,78 @@ abline( h=sstrxn38["mean"], col='darkgreen')
 abline( h=sstrxn38["min"], col="darkgreen", lty=2)
 abline( h=sstrxn38["max"], col="darkgreen", lty=2)
 #abline( coef=coef( ftlmxn38), col='darkred')
+```
+
+Made substantial changes to filename propagation.
+
+```julia
+td = "H:\\Data\\DSP\\MD\\Data"
+list1 = "S2B." .* ["0027", "0028", "0029", "0030", "0031", "0032", "0034", "0035"]
+ "S2B.0027"
+ "S2B.0028"
+ "S2B.0029"
+ "S2B.0030"
+ "S2B.0031"
+ "S2B.0032"
+ "S2B.0034"
+ "S2B.0035"
+  MD2.filerun_thread(td, list1, ".e(1)", 20000, 35)
+ 
+```
+This did result in one error: `nested task error: SystemError: opening file "S2B.0028.e(1).jld2": No such file or directory`.  Also, flouting the case insesitivy failed with `R`, and I had to rename the "S2B\*.csv" files using Microsoft Powertool's `PowerRename`.  There were also errors in the list: the 0028 run should not have been in the list (thus the error), and the 0038 run *should* have been in the list, and was not.
+
+```{r}
+MD2DF.S2b.4 <- MD2DFfile( "MD2DF.S2b.4.RDS", "H:/Data/DSP/MD/Data", 
+                       "S2*.scalars.csv", verbose=TRUE)
+```
+
+
+And here are the scalars:
+
+```{r}
+op= par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0) )
+plotScalars( MD2DF.S2b.4)
+par(op)
+```
+
+A list of the still "not valid" runs:
+
+```{r}
+with( MD2DF.S2b.4, MD2DF.S2b.4[Fpvalue < 0.5, 
+            c("TE.mean.rs", "energy", "steps.avg")])
+```
+
+So only the 0032 run became valid.  There are two oddities here: runs 0028 and 0038. 0028 because it became valid after "only" 151k steps (the last 100k being used) while the surrounding energies remain un-valid at over 1 million steps.  0038 because it remains on the not-valid list at 351k steps, while two lower energies were validated at only 51k steps. 
+
+```{r}
+#| label: fig-xn27
+#| output: true
+#| fig-cap: "Plots of the basic data in run S2b.0027."
+xn27 = combineruns( "H:/Data/DSP/MD/Data", "S2b\\.0027\\.", verbose=TRUE)
+plotMD2( tail( xn27, -1000), dt=0.01)
+```
+
+# All the Data
+
+Let's combine all the data.
+
+```{r}
+load("MD2DF.4.S2.Rdata")
+MD2DF.t <- rbind( MD2DF, MD2DF.S2b.4)
+```
+
+There are a lot of hot runs in there, so we'll filter for total energies below 0.19.
+
+```{r}
+op= par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+         mgp = c(1.7, 0.4, 0))
+with( MD2DF.t, plotScalars( MD2DF.t[TE.mean.rs < 0.191,]))
+par(op)
+```
+
+
+```{r}
+with( MD2DF.t, MD2DF.t[Fpvalue < 0.5, 
+            c("series", "energy", "TE.mean.rs", "steps.avg")])
 ```

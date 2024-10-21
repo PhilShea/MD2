@@ -20,7 +20,7 @@ combineruns <- function( directory, pattern, verbose=FALSE){
                    "(.*).scalars.csv", sep=".")
    if (verbose) cat( "Searching Directory: ", directory,
                      " for pattern:", patt, "\n")
-   files <- list.files( directory, pattern = patt)
+   files <- list.files( directory, pattern = patt, full.names = TRUE)
    # Sys.glob( file.path( directory,
    # paste( pattern, "(.*).scalars.csv", sep=".")))
 
@@ -32,7 +32,8 @@ combineruns <- function( directory, pattern, verbose=FALSE){
    stepoffset <- 0
    sdf <- data.frame() # init to empty dataframe
    for (j in 1:length( files)) { # walk through all files in group
-      data <- read.csv( paste( directory, files[ j], sep="\\"))
+#      data <- read.csv( paste( directory, files[ j], sep="\\"))
+      data <- read.csv( files[ j])
       steps <- nrow( data)
       # cat( steps, "\n")
       data[ "step"] <- data[ "step"] + stepoffset
@@ -478,7 +479,7 @@ plotconfMD2 <- function( df, x = "TE.mean.rs", y, minp = 0.5, plci = TRUE,
    df <- df[ord, ]
    xdata = df[, x]
    ydata = df[, paste( y, "mean.rs", sep=".")]
-   sddat = if (plci) df[ , paste( y, "sd.rs", sep=".")] else NULL
+   sddat = if (plci) df[, paste( y, "sd.rs", sep=".")] else NULL
    plotconf( x=xdata, y=ydata, sd=sddat, Fpvalue = df$Fpvalue,
              linethresh = linethresh, xlab = xlab, ylab = ylab,
              minp = minp, ...)
