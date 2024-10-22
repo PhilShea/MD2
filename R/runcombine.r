@@ -27,7 +27,9 @@ combineruns <- function( directory, pattern, verbose=FALSE){
    ###########
    # This only works for 0 - 9 files!
    #
-   files <- files[ order( file.mtime( files))]
+   filetimes <- file.mtime( files)
+   stopifnot(!anyNA( filetimes)) # if any return NA, the sort will fail.
+   files <- files[ order( filetimes)]
    if (verbose) cat( "Files found: ", files, "\n")
    stepoffset <- 0
    sdf <- data.frame() # init to empty dataframe
