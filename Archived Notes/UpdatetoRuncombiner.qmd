@@ -1,0 +1,332 @@
+---
+title: "Update to Runcombiner"
+author: "Phil Shea"
+format: pdf
+number-sections: true
+---
+
+```{r}
+#| echo: false
+#| output: false
+library( parallel)
+# Calculate the number of cores
+num_cores <- detectCores() - 1
+ source("~/DSP/MD/R/runcombine.r")
+```
+
+# Purpose
+
+The MD2 Julia code output needs to be processed to create a database of measured data. The difficulty is that the system must run for many steps, very many near the critical region, before it comes to equilibrium. Previously, we defined equilibrium as a relatively low regression coefficient (records indicated $r^2 \le 0.2$ was used correlating 1,000 step run averages). Over 50 runs of differing lengths and energies need be tracked, so some level of automation is desired. Previous work indicated that averages needed to be at least 250 steps, perhaps greater, to develop independent samples.
+
+Digital filtering was rejected in favor of doing simple averages, as these are thermodynamic processes, and averages seem a better fit than anti-alias filtering. The three major additions to the `runcombiner` files will be spectral analysis, short term averages and re-sampling, and some form of automated regression tests attempting to choose the lengths of runs to be averaged. It is this last change which is the subject off this notebook, as some experimentation is needed to decide on the automation strategy.
+
+## Structure of the Current R Program
+
+A run consists of multiple files which contain the statistics of a two-dimensional particle system. As of this writing, the system is 256 particles, but other sizes will be examined in the future. Each file contains a variety of data points (kinetic and potential energies, pressure, total momentum and other statistics measured at each time step. Multiple files are required because we do not know in advance how long a system at a particular energy needs to be run to achieve equilibrium. Current practice has been to initialize with 1,000 steps, and then run 5,000 more steps twice, but this is easily changed.
+
+The multiple files for a single run will have a common filename such as "S2.0060.n.jld2", where the `n` is a number from 0 through 9 (a limitation that can be overcome by using the alphabet following 9; in short, the filenames a simply sorted alphabetically). The database is created by calling `creatdf` with a list of files. `createdf` will figure out the root names, and then call `combineruns` with a root filename. `combineruns` creates a data frame containing all of the run's data in order. This data frame is passed to `procMD2DF` with a parameter telling it how many initial steps to skip. `procMD2DF` then computes a linear regression, and creates statistics on each off the main columns of the data frame (there is more detail, but it is unimportant here). The main work will be in `procMD2DF`.
+
+# Additions
+
+## Spectral Analysis
+
+We'll note that, while there is a very nice new R package called [gsignal](https://cran.r-project.org/web/packages/gsignal/) that replicates the [GNU Octave](https://octave.org/) signal package, I had spectral analysis tools already built (and really, who doesn't?), so I will use those.  Previous work showed the following run to be troublesome.  It looked like it might have stabilized, but it still had a high correlation coefficient even when the first 2,000 points were skipped.
+
+```{r}
+#| label: fig-x33
+#| output: true
+#| fig-cap: "Plots of the basic data in run S2.0033."
+x33 = combineruns( "H:/Data/DSP/MD/Data/1980", "S2\\.0033\\.")
+plotMD2( x33)
+```
+
+Added the following code to `procMD2DF` to perform the spectral estimate:
+
+```{r eval=FALSE}
+   ke <- if (skip == 0) df$ke else tail(df$ke, -skip)
+   spec <- sdf( detrend( ke), window="hanning", blocksize=fftblock, 
+                overlap=0.5, normalize=TRUE, prints=TRUE)
+   lensdf <- length( spec)
+   len2 <- (lensdf %/% 2)
+   indicies <- c( (len2 + 1):lensdf, 1:len2)
+   tp <- sum( spec) # total power
+   sdfsum <- cumsum( spec[ indicies]) / tp
+   width <- which.max( sdfsum > 0.995) - which.max( sdfsum > 0.005)
+   width <- 2 * width / fftblock # % of spectrum occupied.
+```
+
+Currently, all of the parameters to the `sdf` function (my custom function to take overlapping windowed FFTs and average the powers) with the exception of the FFT block size are currently hard coded. In my opinion, the only parameter that might need adjustment is the window. The default for the block size is 4,096 $(4^6)$. Note that 99% of the spectrum resides in only 120 FFT bins.
+
+Applying the above code in `procMD2DF` to `x33`, we see the following result.
+
+```{r}
+skip <- 1000
+t <- procMD2DF( x33, skip=skip)
+t["specwidth"] * 4096
+```
+
+The spectral width of 116 indicates that any averaging and resampling should be at least 60 samples long to place the main lobe of the data in the block average. Adding this to the run statistics will help alert us to anything going awry in a run.  The resemblance, perhaps a little vague, to the sum of normal variable is noted. The kinetic energy spectrum is wider and it's roll-off about (but not quite) twice as steep.
+
+```{r}
+#| label: fig-dualspectrum
+#| layout-ncol: 2
+#| fig-cap: 
+#|    - "Temperature spectrum of run S2.0033" 
+#|    - "compared to pectrum of `detrend( cumsum( rnorm( 9000)))`"
+
+#op <- par( mfrow=c(1, 2))
+qsdf( detrend( tail( x33$ke, -skip)), yrange=110)
+qsdf( detrend( cumsum( rnorm( 10000))), yrange=110)
+#par(op)
+```
+
+## Resampling
+
+The following simple function can perform the resampling:
+
+```{r eval=FALSE}
+rsmpavg <- function( x, n){
+   # re-sample x by n point averages, returning one sample per average.
+   # truncates if length of x is not multiple of n
+   outlen <- floor( length(x) / n)
+   x <- x[1:(n * outlen)]
+   dim(x) <- c( n, outlen) # make x two dimensional
+   apply( x, 2, mean) # essentially, column means
+}
+```
+
+The function does no zero padding (we only want real measurements) and so throws out any data that is not a multiple of the averaging length. Here is the application to `x33`:
+
+```{r}
+#| label: fig-rx33ke
+#| fig-cap: "S2.0033 (@fig-x33) kinetic energy (less the first 2,000 points) with 500 point sample averages plotted in the center of each 500 point block."
+navg <-500
+rx33ke <- rsmpavg( tail( x33$ke, -skip), navg)
+rx33step <- seq( from=navg/2, by=navg, along.with=rx33ke)
+rx33 <- data.frame( ke=rx33ke, step=rx33step)
+plot( tail( x33$ke, -skip), type='l', panel.first=grid())
+points(ke ~ step, data=rx33, col='red')
+```
+
+A regression on the new points show correlation.
+
+```{r}
+lmrx33 <- lm(ke ~ step, data = rx33)
+(slmrx33 <- summary( lmrx33))
+```
+## Finding Equilibrium
+
+How about the last two thirds of the resulting sequence?
+
+```{r}
+#| label: fig-trx33
+#| fig-cap: "Fits to the resampled data, the red line is the fit to all of the data (red and blue circles), and the last two-thirds of truncated run S2-0033 (blue circles and line). Green lines indicate the mean (solid), and min & max (dashed) of the blue points. The black line is the regression line for the red points."
+
+lenrx33 <- nrow( rx33)
+third <- floor(lenrx33 / 3) # we'll exclude the least number of points
+trx33 <- tail( rx33, -third)
+sstrx33 <- stat.summary( trx33$ke)
+lmtrx33 <- lm( ke ~ step, data=trx33)
+summary( lmtrx33)
+ftlmx33 <- lm( ke ~ step, data=head( rx33, third))
+plot( tail( x33$ke, -skip), type='l', panel.first=grid())
+points(ke ~ step, data=rx33, col='darkred')
+abline( coef=coef( lmrx33), col='darkred')
+points(ke ~ step, data=trx33, col='blue')
+abline( coef=coef( lmtrx33), col='blue')
+abline( h=sstrx33["mean"], col='darkgreen')
+abline( h=sstrx33["min"], col="darkgreen", lty=2)
+abline( h=sstrx33["max"], col="darkgreen", lty=2)
+abline( coef=coef( ftlmx33))
+```
+
+That is encouraging.  Note that the estimate of the `step` coefficient is about half its standard error (this is the $t$ value). The F statistic of 0.36 indicates this could be the result of a random correlation.  Looking at this data, we may have been pretty lucky.  It was really just dumb luck that the last point excluded was also the last point outside the min-max range. Nevertheless, a possible algorithm is forseen.
+
+1. Skip the first 1,000 points as a general rule.
+2. Re-sample the kinetic energy (ke) column.
+3. Regress the re-sampled column, and check if the F statistic p-value is below 50% (that is, if the data were truly random and uncorrelated, there is a 50% chance that we would reject the large the data set and and move to the next step).  If it passes the F-test, accept the data as uncorrelated, and compute the averages for the rest of the columns.
+4. Having failed the first F-test, take the last two-thirds of the data, and repeat the F-test.  If this fails, then a longer run is needed (i.e., we require that equilibrium be at least twice as long as the approach to equilibrium). At this point, simply report the full record's averages, and let the statistics indicate the record's problem. 
+5. If the second F-test passes, then compute the mean, min, and max of the two-thirds data, and also compute the regression of the first third.  This second regression will give the direction of the temperature movement.
+6. Find the last point outside the min or max of the two-thirds data.  If the second regression has a positive coefficient (i.e., the ke is rising), use the min, and use the max otherwise.
+7. Perform a third regression on the new set of points.  If the F-test fails, then resort to the original two-thirds data.   If the use the F-test passes, use the expanded data set for the averages.
+
+The above has been encapsulated in `findlmlen` below.  It is complicated by the attempt to extend the fit to the left.
+
+```{r eval=FALSE}
+findlmlen <- function( df, minp = 0.50) {
+   kefit <- lmMD2( df)
+   lendf <- nrow( df)
+   if (kefit[ 'Fpvalue'] < minp) { # The data appears to be correlated
+      third <- floor( lendf / 3) # Errs on the side of a longer 2/3s.
+      ttdf <- tail( df, -third) # two thirds df
+      kefit2 <- lmMD2( ttdf)
+      if (kefit2[ 'Fpvalue'] >= minp) { # The 2nd 2/3s passed
+       # Try to expand fit
+         ftdf <- head( df, third) #first third df
+         approach <- lmMD2( ftdf) # fit the approach to equilibrium
+         if (sign( approach[ 'Estimate']) > 0) { # ke was growing
+            adder <- which.max( ftdf$ke > min( ttdf$ke))
+         } else {
+            adder <- which.max( ftdf$ke < max( ttdf$ke))
+         } # if (sign( approach...))
+         newlen <- lendf - third + adder
+         kefit3 <- lmMD2( tail( df, newlen))
+         if (kefit3[ 'Fpvalue'] >= minp) return( kefit3) else
+            return( kefit2)
+         # the above `if` should return either way - no way to get here.
+      } # if (kefit2....)
+      # if we get here, then neither whole nor 2/3's passed.
+   } # if kefit...
+   # if we get here, then either the original fit passed the F-test,
+   # or neither passed, so the original fit is returned.
+   # The F p-value will show that this record is suspect.
+   return( kefit)
+}
+```
+
+Here is the result of running on the `rx33` data frame:
+
+```{r}
+findlmlen( rx33)
+```
+
+These are the same results we obtained by hand (i.e., the fit was not extended).
+
+The code below (which take about 10 seconds to run) will count the various results one might get with truly random (that is, truly uncorrelated) data.
+
+```{r}
+len <- 50
+(len3 <- floor(len/3))
+trials <- 10000
+q <- t( # need to transpose the result of replicate
+   replicate( trials, findlmlen( data.frame( step = 1:len, ke = rnorm( len)))))
+head( q, 10)
+```
+
+The results of that are below. 
+
+```{r}
+fails <- q[,'nr'] == len & q[,'Fpvalue'] < 0.5
+flp <-  q[,'nr'] == len & q[,'Fpvalue'] >= 0.5 # full length pass
+sp <- q[,'nr'] < len # short pass
+cat( "Fails: ", sum( fails), '\n')
+cat( "Full Length Passes: ", sum( flp), '\n')
+cat( "Shortened passes: ", sum( sp), '\n')
+cat( "Exactly Two-Thirds: ", sum( q[,"nr"] == (len - len3)), '\n')
+shorts <- q[,'Fpvalue'] >= 0.5 & q[,'nr'] < len
+cat( "Averge shorter length: ", mean(q[ shorts,"nr"]), "\n" )
+cat( "Max short pass: ", max( q[ sp,]))
+```
+
+The full correlation should fail about 50% of the time. A rather large amount of variability has been observed, but the procedure to revert to the last two-thirds adds perhaps half again as many successes.  The plot below opens an interesting discussion.
+
+```{r}
+#| label: fig-estvstderr
+#| fig-cap: "Absolute value of the estimate vs. the standard error. Black points are failures, green are full length passes, and blue are shortened passes.  The red line shows equality (estimate equals the standard error)."
+plot( abs(Estimate) ~ Std.Error, data=q[fails, ], xlim=c(0, max( q[, 'Std.Error'])),
+     ylim = c(0, max( q[, 'Estimate'])))
+grid()
+abline(a=0, b=1, col='red')
+points( abs(Estimate) ~ Std.Error, data=q[ sp, ], col='blue',
+       pch = 2)
+points( abs(Estimate) ~ Std.Error, data=q[ flp, ], col='darkgreen',
+       pch = 2)
+```
+
+
+```{r}
+plot( abs(Estimate)/Std.Error ~ Fpvalue, data=q[fails, ], 
+      xlim=c(0, max( q[, 'Fpvalue'])), ylim = c(0, 4))
+grid()
+points( abs(Estimate)/Std.Error ~ Fpvalue, data=q[ sp, ], col='blue',
+       pch = 2)
+points( abs(Estimate)/Std.Error ~ Fpvalue, data=q[ flp, ], col='darkgreen',
+       pch = 2)
+```
+
+
+
+```{r}
+plot( abs(Estimate)/Std.Error ~ Fval, data=q, 
+      xlim=c(0, max( q[, 'Fval'])), ylim = c(0, 4))
+grid()
+```
+
+# Applying to MD2 Data
+
+The max and mins will be gathered from the raw data, while means and standard deviations will come from the re-sampled block averages.
+
+```{r}
+(rec <- procMD2DF( x33, skip=1000, rsblk=500))
+rec['psiabs.max.raw']
+```
+
+```{r}
+setwd("H:/Data/DSP/MD/Data/1980")
+getwd()
+files = Sys.glob( file.path( "S2.*.scalars.csv"))
+length(files)
+MD2DF <- createdf(  ".", files, clusters=num_cores)
+save( MD2DF, file="MD2DF.3.S2.Rdata")
+```
+
+```{r}
+cat( "Observations: ", nrow(MD2DF), 
+     ", Valid: ", sum( MD2DF[, 'Fpvalue'] >= 0.5))
+MD2DF <- MD2DF[ order( MD2DF$TE.mean.rs),]
+op=  par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+        mgp = c(1.7, 0.4, 0) )
+plotScalars( subset( MD2DF, TE.mean.rs< 0.2))
+par(op)
+```
+
+```{r}
+plotconf( MD2DF[,'ke.mean.rs'], MD2DF[,'TE.mean.rs'], MD2DF[, 'ke.sd.rs'], 
+          MD2DF[, 'Fpvalue'], linethresh = 200, vpch=1, 
+          xlab="Mean Total Energy per Particle", 
+          ylab="Mean Kinetic Energy per Particle")
+```
+Re-running it with `rblk` at 500.
+
+```{r}
+#setwd("H:/Data/DSP/MD/Data/1980")
+getwd()
+files = list.files("H:/Data/DSP/MD/Data/1980", "S2.*.scalars.csv")
+length(files)
+MD2DF <- createdf( "H:/Data/DSP/MD/Data/1980", files, clusters=num_cores, 
+                   rsblk=500)
+save( MD2DF, file="MD2DF.3.S2.Rdata")
+```
+
+These results are a little better.
+
+```{r}
+cat( "Observations: ", nrow(MD2DF), 
+     ", Valid: ", sum( MD2DF[, 'Fpvalue'] >= 0.5))
+MD2DF <- MD2DF[ order( MD2DF$TE.mean.rs),]
+op=  par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+        mgp = c(1.7, 0.4, 0) )
+plotScalars( subset( MD2DF, TE.mean.rs< 0.2))
+par(op)
+```
+
+Not much different here.
+
+```{r}
+plotconf( MD2DF[,'ke.mean.rs'], MD2DF[,'TE.mean.rs'], MD2DF[, 'ke.sd.rs'], 
+          MD2DF[, 'Fpvalue'], linethresh = 200, vpch=1, 
+          xlab="Mean Total Energy per Particle", 
+          ylab="Mean Kinetic Energy per Particle")
+```
+
+
+```{r}
+(rerun <- with( MD2DF, {MD2DF[ Fpvalue < 0.5, c('series', 'energy')]}))
+```
+
+List of 22 runs to add steps to.
+
+```{r}
+rerun$energy
+```
+

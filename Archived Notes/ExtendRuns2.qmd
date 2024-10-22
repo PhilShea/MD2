@@ -99,7 +99,7 @@ with( MD2DF.S2b, MD2DF.S2b[Fpvalue > 0.5,
 ```{r}
 #| label: fig-xn26
 #| output: true
-#| fig-cap: "Plots of the basic data in run S2b.0026."
+#| fig-cap: "Plots of the basic data in run S2b.0026. Note that this plot was made after further steps were added."
 xn26 = combineruns( "H:/Data/DSP/MD/Data", "S2b\\.0026\\.")
 plotMD2( xn26, dt=0.01)
 ```
@@ -107,7 +107,7 @@ plotMD2( xn26, dt=0.01)
 ```{r}
 #| label: fig-xn36
 #| output: true
-#| fig-cap: "Plots of the basic data in run S2b.0036."
+#| fig-cap: "Plots of the basic data in run S2b.0036. Note that this plot was made after further steps were added."
 xn36 = combineruns( "H:/Data/DSP/MD/Data", "S2b\\.0036\\.")
 plotMD2( xn36, dt=0.01)
 ```
@@ -115,7 +115,7 @@ plotMD2( xn36, dt=0.01)
 ```{r}
 #| label: fig-xn37
 #| output: true
-#| fig-cap: "Plots of the basic data in run S2b.0037."
+#| fig-cap: "Plots of the basic data in run S2b.0037. Note that this plot was made after further steps were added."
 xn37 = combineruns( "H:/Data/DSP/MD/Data", "S2b\\.0037\\.")
 plotMD2( xn37, dt=0.01)
 ```
@@ -151,7 +151,7 @@ MD2DF.S2b.2 <- MD2DFfile( "MD2DF.S2b.2.RDS", "H:/Data/DSP/MD/Data",
                        "S2b.*.scalars.csv")
 ```
 
-Here are the states of the main scalars. Note that we've replaced the TE.mean vs TE.Init with the ke.rrange. This is the relative range of the kinetic energy, and is computed by
+Here are the states of the main scalars. Note that we've replaced the `TE.mean` vs `TE.Init` with the `ke.rrange`. This is the relative range of the raw kinetic energy, and is computed by
 
 ``` r
 MD2DF$ke.rrange <- (MD2DF$ke.max.raw - MD2DF$ke.min.raw) / MD2DF$ke.mean.rs
@@ -283,21 +283,38 @@ with( MD2DF.S2b.4, MD2DF.S2b.4[Fpvalue < 0.5,
 
 So only the 0032 run became valid.  There are two oddities here: runs 0028 and 0038. 0028 because it became valid after "only" 151k steps (the last 100k being used) while the surrounding energies remain un-valid at over 1 million steps.  0038 because it remains on the not-valid list at 351k steps, while two lower energies were validated at only 51k steps. 
 
+# Melting!
+
+In the process of looking at `S2b.0027`, an error in `combineruns` was discovered and fixed.  This tends to invalidate the prior equilibrium regressions, so the `MD2DF`data must be re-compiled.  Nevertheless, the following appears correct.
+
 ```{r}
 #| label: fig-xn27
 #| output: true
 #| fig-cap: "Plots of the basic data in run S2b.0027."
 xn27 = combineruns( "H:/Data/DSP/MD/Data", "S2b\\.0027\\.", verbose=TRUE)
-plotMD2( tail( xn27, -1000), dt=0.01)
 ```
+
+Just after $6,000\tau$, $\psi$ starts to move. At the same time, the potential energy starts to increase and the kinetic energy starts to decrease.  This is much like putting salt on ice: the temperature decreases as it melts.
 
 # All the Data
 
-Let's combine all the data.
+Rerunning
+
+```{r}
+MD2DF.S2b.5 <- MD2DFfile( "MD2DF.S2b.5.RDS", "H:/Data/DSP/MD/Data", 
+                       "S2*.scalars.csv", verbose=TRUE)
+```
+
+```{r}
+op= par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0) )
+plotScalars( MD2DF.S2b.5)
+par(op)
+```
 
 ```{r}
 load("MD2DF.4.S2.Rdata")
-MD2DF.t <- rbind( MD2DF, MD2DF.S2b.4)
+MD2DF.t <- rbind( MD2DF, MD2DF.S2b.5)
 ```
 
 There are a lot of hot runs in there, so we'll filter for total energies below 0.19.
@@ -309,6 +326,7 @@ with( MD2DF.t, plotScalars( MD2DF.t[TE.mean.rs < 0.191,]))
 par(op)
 ```
 
+Here are the runs that still need to be extended.  Note that 0028 should remain suspect, as it has a slightly higher energy than 0027 that literally melted before our eyes.
 
 ```{r}
 with( MD2DF.t, MD2DF.t[Fpvalue < 0.5, 
