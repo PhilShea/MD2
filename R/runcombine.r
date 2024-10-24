@@ -21,28 +21,43 @@ combineruns <- function( directory, pattern, verbose=FALSE){
    if (verbose) cat( "Searching Directory: ", directory,
                      " for pattern:", patt, "\n")
    files <- list.files( directory, pattern = patt, full.names = TRUE)
-   # Sys.glob( file.path( directory,
-   # paste( pattern, "(.*).scalars.csv", sep=".")))
-
-   ###########
-   # This only works for 0 - 9 files!
-   #
    filetimes <- file.mtime( files)
-   stopifnot(!anyNA( filetimes)) # if any return NA, the sort will fail.
+   stopifnot( !anyNA( filetimes)) # if any return NA, the sort will fail.
    files <- files[ order( filetimes)]
    if (verbose) cat( "Files found: ", files, "\n")
    stepoffset <- 0
    sdf <- data.frame() # init to empty dataframe
    for (j in 1:length( files)) { # walk through all files in group
-#      data <- read.csv( paste( directory, files[ j], sep="\\"))
       data <- read.csv( files[ j])
       steps <- nrow( data)
-      # cat( steps, "\n")
       data[ "step"] <- data[ "step"] + stepoffset
       stepoffset <- stepoffset + steps
       sdf <- rbind( sdf, data)
    } # end for (j ...
    invisible( sdf)
+}
+
+#' Call `combineruns` and save RDS file; read the file if it already exists.
+#'
+#' @param output Filename that will be combined with the directory.
+#' @param directory,pattern,verbose Same as `combineruns`.
+#'
+#' @return
+#' @export
+#'
+#' @examples
+crsave <- function( output, directory, pattern, verbose=FALSE){
+   stopifnot( endsWith( output, ".RDS"))
+   fullpath <- paste( directory, output, sep="/")
+   if (file.exists( fullpath)) {
+      cat( 'Reading from file ', fullpath)
+      sdf <- readRDS( fullpath) }
+   else {
+      cat( "Combining Files from ", directory, pattern)
+      sdf <- combineruns( directory, pattern, verbose)
+      saveRDS( sdf, file = fullpath)
+   }
+   return( sdf)
 }
 
 #' plotMD2 Plots a run of data step-by-step.
