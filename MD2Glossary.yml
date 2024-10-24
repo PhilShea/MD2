@@ -1,0 +1,14 @@
+execution: |
+  A single execution of the MD2 program for a number of steps. The execution results in modification of the run's text file (typically series.temp.txt, where series is the series like "S2b" and temp is the initialization temperature identifier like "0030", thus "S2b.0030.txt"), the createion of the scalars files for the current execution count (e.g., "S2b.0030.0010.scalars.csv"), plus creation of the next increment of the execution count for the ".jld2" state files (e.g., "S2b.0030.0011.jld2").
+run: |
+  A sequence of steps propagated from from a unique starting point. Runs may consist of multiple executions.
+series: |
+  A group of runs executed by a major version of the MD2 code, usually expressed as S1, S2, and so on.
+step: |
+  A single step involves integrating the equations of motion for one time period by calculating the forces on each particle due to all the other particles to determine a vector delta-v and then moving the particles.
+S1: |
+   Series. The first running of the code.  Series S1 did not correct for initial angular momentum.
+S2: |
+  The second running of the code. Series S2 corrected for intitial angular momentum.  Note that angular momentum is not conserved by the periodic boundary conditions, but no good can come from initializing with any substantial momentum, either linear or angular.
+S2b: |
+  Essentially the same code as in series S2, but the initialization temperature was tightly controlled. Previously, each particle was given a velocity drawn from a Gaussian distribtuion with variance equal to the initialization temperature.  However, this had a large variance of the actual variance. The S2b code set the variance to the temperature after generating the random velocities,  It is still not exact, as corrections for linear and angular momentum are applied after the temperature setting.

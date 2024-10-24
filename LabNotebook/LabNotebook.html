@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.4.552">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="PhilShea">
+
+<title>LabNotebook</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+/* CSS for citations */
+div.csl-bib-body { }
+div.csl-entry {
+  clear: both;
+  margin-bottom: 0em;
+}
+.hanging-indent div.csl-entry {
+  margin-left:2em;
+  text-indent:-2em;
+}
+div.csl-left-margin {
+  min-width:2em;
+  float:left;
+}
+div.csl-right-inline {
+  margin-left:2em;
+  padding-left:1em;
+}
+div.csl-indent {
+  margin-left: 2em;
+}</style>
+
+
+<script src="LabNotebook_files/libs/clipboard/clipboard.min.js"></script>
+<script src="LabNotebook_files/libs/quarto-html/quarto.js"></script>
+<script src="LabNotebook_files/libs/quarto-html/popper.min.js"></script>
+<script src="LabNotebook_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="LabNotebook_files/libs/quarto-html/anchor.min.js"></script>
+<link href="LabNotebook_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="LabNotebook_files/libs/quarto-html/quarto-syntax-highlighting.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="LabNotebook_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="LabNotebook_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="LabNotebook_files/libs/bootstrap/bootstrap.min.css" rel="stylesheet" id="quarto-bootstrap" data-mode="light">
+
+  <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
+
+<script type="text/javascript">
+const typesetMath = (el) => {
+  if (window.MathJax) {
+    // MathJax Typeset
+    window.MathJax.typeset([el]);
+  } else if (window.katex) {
+    // KaTeX Render
+    var mathElements = el.getElementsByClassName("math");
+    var macros = [];
+    for (var i = 0; i < mathElements.length; i++) {
+      var texText = mathElements[i].firstChild;
+      if (mathElements[i].tagName == "SPAN") {
+        window.katex.render(texText.data, mathElements[i], {
+          displayMode: mathElements[i].classList.contains('display'),
+          throwOnError: false,
+          macros: macros,
+          fleqn: false
+        });
+      }
+    }
+  }
+}
+window.Quarto = {
+  typesetMath
+};
+</script>
+
+</head>
+
+<body class="fullcontent">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">LabNotebook</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    <div>
+    <div class="quarto-title-meta-heading">Author</div>
+    <div class="quarto-title-meta-contents">
+             <p>PhilShea </p>
+          </div>
+  </div>
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<section id="lab-notebook" class="level1">
+<h1>Lab Notebook</h1>
+<p>This document contains the basic record of experiments nd runs for two dimensional molecular dynamics simulation.</p>
+<p>The code was started in <em>Mathematica</em> in early 2024, but that was abandoned when it became clear that it was too hard to debug. Investigated a few possible alternatives, and decided on <em>Julia</em> as the best language to do high performance computing.</p>
+<p>The first check-in was on 23 May 2024. The first full run with stable potential energy was a month later.</p>
+</section>
+<section id="runs-from-initialization" class="level1">
+<h1>Runs From Initialization</h1>
+<p>The first series of runs were from initialization, which was simpler than the 1980 Thesis code. The 1980 code used a technique described as “one which would be expected of an harmonic lattice (this is seen to during the process of disturbing the system)”<span class="citation" data-cites="Shea1980">(<a href="#ref-Shea1980" role="doc-biblioref">Shea 1980</a>)</span>. The current code simply starts the system in its rest position, giving each particle Gaussian velocities in each direction. The total energy is thus divided into potential energy as the system runs. No heating or cooling was implemented yet in the <em>Julia</em> code.</p>
+<section id="series-1" class="level2">
+<h2 class="anchored" data-anchor-id="series-1">Series 1</h2>
+<p>The first run of the system was on 18 July 2024. This series is documented in <a href="file://C:/Users/phils/Documents/DSP/MD/MD2/Data-OverviewS1.pdf" class="pdf">Data-OverviewS1.pdf</a>, archived on 1 August. The result was a possible location for the transition region. 300 runs were made, with initializations setting the mean temperatures of the particles from 0.001 to 0.300. Each run consisted of an initialization run of 1,000 steps, followed by two 5,000 step runs, so 11,000 steps total. There have been some changes to the <em>Julia</em> code since this was run, but the initialization was essentially like the code below.</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode julia code-with-copy"><code class="sourceCode julia"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>   ss.v <span class="op">.=</span> <span class="fu">randn</span>( <span class="fu">eltype</span>( ss.v), ss.N)</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>   <span class="co"># each dimension has energy kT / 2 = V^2 / 2, E[V^2]=T</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>   ss.v <span class="op">.=</span> <span class="fu">sqrt</span>( Temp) <span class="op">.*</span> ss.v</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>where <code>Temp</code> was the initialization temperature. Note that the total energy includes the potential energy at rest. The nearest neighbors are at a distance of <span class="math inline">\(a = \sqrt{\pi / \sin(\pi / 3)} \approx 1.90463\)</span>. The second nearest neighbors are at a distance of <span class="math inline">\(a \sqrt{3} \approx 3.2989\)</span>. So the initial potential energy is one half of the energy between each particle. <span class="math inline">\(1 / a^5 \approx .039898\)</span>, and the second nearest neighbor energy is <span class="math inline">\(1 / (a\sqrt{3})^5 \approx .0025594\)</span>. Summing these and multiplying by three (half of six) yields a per particle potential energy at rest of <span class="math inline">\(0.127373\)</span>.</p>
+<p>The complete summary is below. Each item is a summary of the 10,000 steps following the 1,000 steps after initialization. The data is in <code>MD2DF.S1.Rdata</code>.</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="S1AllSummary.PNG" class="img-fluid figure-img"></p>
+<figcaption>Summary of all S1 data.</figcaption>
+</figure>
+</div>
+<p>The <code>r.squared</code> response identified an area of interest. A zoomed in plot of kinetic energy (i.e., temperature) versus total energy is below.</p>
+<p>[<img src="S1kevsTE.PNG" class="img-fluid" alt="Kinetic Energy vs.&nbsp;mean Total Energy for series 1.">]</p>
+<p>It was also apparent that there were large gaps in the total energy, while the energies were initialized incrementally. This was suspected to be due to the random nature of the initialization, where the total energy was simply the variance of 512 (i.e., <span class="math inline">\(256 * 2\)</span>) random normal deviates. The data summary plot made of the S1 data is below.</p>
+<p>The initial data ran some very hot runs.</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="S1Summary.PNG" class="img-fluid figure-img"></p>
+<figcaption>Zoomed in summary of S1 data.</figcaption>
+</figure>
+</div>
+<p>It was also noted that this series did not zero the angular momentum at initialization. While angular momentum is not conserved by the periodic boundary conditions, no good can come of initializing a run with angular momentum.</p>
+</section>
+<section id="series-2" class="level2">
+<h2 class="anchored" data-anchor-id="series-2">Series 2</h2>
+<p>Correction for random angular momentum was added to the <em>Julia</em> code, and a new set of runs were created to span the transition region. The Nelson-Halperin order parameter<span class="citation" data-cites="halperin1978">(<a href="#ref-halperin1978" role="doc-biblioref">Halperin and Nelson 1978</a>)</span> was also computed now. The new summary includes this, plus a plot of the standard error of the slope of the temperature plotted against the absolute value of the estimate itself. It took two tries (executed on 21 and 22 August 2024), but we eventually ended up with 100 runs spanning total energy per particles of just above 0.127 to almost 0.2. The summary plot is below. The complete overview of this step in the research is in <a href="file://C:\Users\phils\Documents\DSP\MD\MD2\DataOverviewS2.pdf">DataOverviewS2.pdf</a>. The summarized data is in <code>MD2DF.S2.Rdata</code>.</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="S2%20Initial%20Result.PNG" class="img-fluid figure-img"></p>
+<figcaption>Summary plot of initial S1 run.</figcaption>
+</figure>
+</div>
+<p>Some of these should be explained. <code>ke.sd</code> is the standard deviation of the kinetic energy. <code>rtv</code> is simply <code>ke.sd</code>/<code>ke.mean</code>. For each run, we would perform a linear regression of the temperature vs.&nbsp;step number. <code>r.squared</code> is the correlation coefficient of that regression (we are looking for no correlation). The <code>Estimate</code> item is the slope of the regression, and <code>Std.Error</code> is the standard deviation of that estimated slope (the odd names are assigned by R functions). The thinking here is that if the slope is less than the error, then there is no correlation.</p>
+<p>We did observe energy loss, but it was below 0.5%. The plot below shows that.</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="S2%20Energy%20Loss.PNG" class="img-fluid figure-img"></p>
+<figcaption>Energy loss (black) and standard deviation (red) as a percent of the total energy. The energy loss exceeds the standard deviation of the energy by a significant amount.</figcaption>
+</figure>
+</div>
+<p>This can be seen in a plot of the of the combined runs. The <code>TE</code> quickly drops. Note also that the linear momentum, which should remain zero, bounces around a bit too. Note also that it remains less than <span class="math inline">\(10^{-20}\)</span>.</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="Combined%20runs%20S2%2036.PNG" class="img-fluid figure-img"></p>
+<figcaption>Combined runs of files S2.0036. The drop in total energy (<code>TE</code>) can be seen immediately after the start. Incidentally, the run S2.00036 had the worst correlation.</figcaption>
+</figure>
+</div>
+<p>The division between potential and kinetic energy was also examined. The plot below shows this.</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="PE%20vs%20KE.PNG" class="img-fluid figure-img"></p>
+<figcaption>Potential energy as a fraction of the kinetic energy, plotted against the mean kinetic energy. The transition region is quite sharp.</figcaption>
+</figure>
+</div>
+<section id="spectral-processing" class="level3">
+<h3 class="anchored" data-anchor-id="spectral-processing">Spectral Processing</h3>
+<p>The kinetic energy line appeared to have some spectral content, and this may prove interesting. Spectral estimation code was already available, and the following was executed (<code>x</code> was a data frame returned from <code>combineruns</code>, which creates a data frame of each variables as columns, and each step as rows):</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>sx36 <span class="ot">&lt;-</span> <span class="fu">detrend</span>( <span class="fu">tail</span>( x[, <span class="st">"ke"</span>], <span class="sc">-</span><span class="dv">2000</span>)) <span class="co"># remove mean and linear trend</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>x36sdf <span class="ot">&lt;-</span> <span class="fu">qsdf</span>(sx36, <span class="at">blocksize=</span><span class="dv">4096</span>, <span class="at">yrange=</span><span class="dv">110</span>, <span class="at">dt=</span><span class="fl">0.01</span>)</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>As is evident, the first 2,000 points was skipped. The <code>qsdf</code> function will break the signal into overlapping blocks of <code>blocksize</code>, with 50% overlap being the default. The default is also to apply a Hanning window. With only 9,000 points (after skipping 2k), the spectrum is only 3 blocks long. Note that the plot in <code>Data Overview S2.pdf</code> appears to be incorrect; the correct plot is below:</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="x36spec.png" class="img-fluid figure-img"></p>
+<figcaption>Full spectrum of run S2.0036 less the first 2k points.</figcaption>
+</figure>
+</div>
+<p>Zooming in we can see the following:</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="x36%20spec%20zoom.png" class="img-fluid figure-img"></p>
+<figcaption>The blue lines contain 99% of the signals power.</figcaption>
+</figure>
+</div>
+<p>The blue lines are at <span class="math inline">\(\pm 0.708/\tau\)</span> for a main lobe width of <span class="math inline">\(1.416/\tau\)</span>. Since the sample rate is <span class="math inline">\(0.01\tau\)</span>, the spectral width is the equivalent of about 70 samples. To create a block average which will encompass that, it would have to be at least twice that wide (as the null-to-null bandwidth of main lobe of the average is twice the reciprocal of the block average size).</p>
+<section id="detour-on-regression" class="level4">
+<h4 class="anchored" data-anchor-id="detour-on-regression">Detour on Regression</h4>
+<p>A surprising plot was made of the regression slope estimate divided by the standard error of that estimate, plotted against the regression coefficient. This turned out to be a parabola, which was surprising. A complete investigation revealed that this was an artifact of how the data was produced. This is all documented in <a href="file:///C:/Users/phils/Documents/DSP/MD/RegressionRatios/Regression_Ratios.pdf">Regression_Ratios.pdf</a>, a paper written in LaTeX on <a href="https://www.overleaf.com/project">Overleaf</a>. Ultimately decided on using the <span class="math inline">\(t\)</span> statistic to decide if a run had no real slope, generally using a 50% confidence interval (that is, if the confidence that the slope was zero was 50% or greater, it would be considered valid equilibrium).</p>
+</section>
+</section>
+<section id="re-sampling-and-autocorrelation" class="level3">
+<h3 class="anchored" data-anchor-id="re-sampling-and-autocorrelation">Re-sampling and Autocorrelation</h3>
+<p>Experience from 1980 and the results reported in <span class="citation" data-cites="Novaco1982">(<a href="#ref-Novaco1982" role="doc-biblioref">Novaco and Shea 1982</a>)</span> indicates that we need to use average temperatures and pressures to decide if we have reached equilibrium.. In 1980, we we used 1k samples as it was the basic simulation block, but today I would like a more rational answer. The autocorrelation of four runs was examined to see what should be done.</p>
+<div id="tbl-AutoCorr4tb" class="quarto-float anchored">
+<figure class="quarto-float quarto-float-tbl figure">
+<figcaption class="quarto-float-caption-top quarto-float-caption quarto-float-tbl" id="tbl-AutoCorr4tb-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Table&nbsp;1: Summary of autocorrelation runs.
+</figcaption>
+<div aria-describedby="tbl-AutoCorr4tb-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<table class="table">
+<thead>
+<tr class="header">
+<th style="text-align: right;">Symbol Name</th>
+<th style="text-align: center;">File Name</th>
+<th style="text-align: center;">Mean KE</th>
+<th style="text-align: center;"><span class="math inline">\(r^2\)</span></th>
+<th style="text-align: center;">Mean TE</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: right;">x10</td>
+<td style="text-align: center;">S2.0010</td>
+<td style="text-align: center;">0.0047</td>
+<td style="text-align: center;">0.0003</td>
+<td style="text-align: center;">0.1364</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">xn02</td>
+<td style="text-align: center;">S2.0033</td>
+<td style="text-align: center;">0.0154</td>
+<td style="text-align: center;">0.1931</td>
+<td style="text-align: center;">0.1615</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">x36</td>
+<td style="text-align: center;">S2.0036</td>
+<td style="text-align: center;">0.0146</td>
+<td style="text-align: center;">0.2887</td>
+<td style="text-align: center;">0.1591</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">x100</td>
+<td style="text-align: center;">S2.0100</td>
+<td style="text-align: center;">0.0499</td>
+<td style="text-align: center;">0.0230</td>
+<td style="text-align: center;">0.2242</td>
+</tr>
+</tbody>
+</table>
+</div>
+</figure>
+</div>
+<p>Below are the four auto-correlations. Note that they have not been de-trended, so <code>xno2</code> and <code>x36</code> are affected by trends.</p>
+<div id="fig-Autocorr4fig" class="quarto-figure quarto-figure-center quarto-float anchored">
+<figure class="quarto-float quarto-float-fig figure">
+<div aria-describedby="fig-Autocorr4fig-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<img src="four%20Autocorr.png" class="img-fluid figure-img">
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-Autocorr4fig-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure&nbsp;1: Autocorrelations of the four series in <a href="#tbl-AutoCorr4tb" class="quarto-xref">Table&nbsp;1</a>.
+</figcaption>
+</figure>
+</div>
+<p>While 200 appears to be sufficient for the hot (<code>x100</code>) sample, the problematic transition samples near total energies of 0.16 per particle need a bit more, perhaps 400.</p>
+<p>Below is the last summary plot of the variables.</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="S2%20last%20summ.PNG" class="img-fluid figure-img"></p>
+<figcaption>Final summary of the S2 initial runs. Note that this summary has the Nelson-Halperin order parameter <span class="math inline">\(|\psi|\)</span> plotted.</figcaption>
+</figure>
+</div>
+</section>
+<section id="updating-runcombiner.r" class="level3">
+<h3 class="anchored" data-anchor-id="updating-runcombiner.r">Updating <code>runcombiner.r</code></h3>
+<p>The <em>Julia</em> code produces step-by-step data in blocks of steps. This is for two reasons: 1) a run may need to be extended, and so another block of data could be added to existing runs, rather than starting over from the beginning, and 2) stuff, happens, and if a million steps is desired, experience has shown that having data written to “disk” occasionally is wise. This second reason may seem silly when a thousand steps can be run in .16 seconds, but as the size of the system is expanded, this will become important. Nevertheless, that is how the code is structured, and so the steps must be combined. This was done in R, as of this writing in a single file named <code>runcombiner.R</code>. The record of this is in <a href="file:///C:/Users/phils/My%20Drive/DSP/MD/UpdatetoRuncombiner.pdf">UpdatetoRuncombiner.pdf</a>.</p>
+<p>The resampled data with a regression on the last 2/3 of the data is represented in <a href="#fig-x33resamp" class="quarto-xref">Figure&nbsp;2</a> below:</p>
+<div id="fig-x33resamp" class="quarto-figure quarto-figure-center quarto-float anchored">
+<figure class="quarto-float quarto-float-fig figure">
+<div aria-describedby="fig-x33resamp-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<img src="x33resamp.png" class="img-fluid figure-img">
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-x33resamp-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure&nbsp;2: Fits to the re-sampled data, the red line is the fit to all of the data (red and blue circles), and the last two-thirds of truncated run S2-0033 (blue circles and line). Green lines indicate the mean (solid), and min &amp; max (dashed) of the blue points. The black line is the regression line for the red points.
+</figcaption>
+</figure>
+</div>
+<p>The algorithm to determine if a run has reached equilibrium is below (in seven easy steps):</p>
+<ol type="1">
+<li>Skip the first 1,000 points as a general rule.</li>
+<li>Re-sample the kinetic energy (<code>ke</code>) column.</li>
+<li>Regress the re-sampled column, and check if the F statistic p-value is below 50% (that is, if the data were truly random and uncorrelated, there is a 50% chance that we would reject the large the data set and and move to the next step). If it passes the F-test, accept the data as uncorrelated, and compute the averages for the rest of the columns.</li>
+<li>Having failed the first F-test, take the last two-thirds of the data, and repeat the F-test. If this fails, then a longer run is needed (i.e., we require that equilibrium be at least twice as long as the approach to equilibrium). At this point, simply report the full record’s averages, and let the statistics indicate the record’s problem.</li>
+<li>If the second F-test passes, then compute the mean, min, and max of the two-thirds data, and also compute the regression of the first third. This second regression will give the direction of the temperature movement.</li>
+<li>Find the last point outside the min or max of the two-thirds data. If the second regression has a positive coefficient (i.e., the ke is rising), use the min, and use the max otherwise.</li>
+<li>Perform a third regression on the new set of points. If the F-test fails, then resort to the original two-thirds data. If the use the F-test passes, use the expanded data set for the averages.</li>
+</ol>
+<p>The above has been encapsulated in the <code>findlmlen</code> function, and incorporated into the <code>createdf</code> function. A rather large amount of work went into extending the last two thirds back into the series, so an experiment was run on random data. THe following R code was the experiment (displayed here because of its marvelous simplicity):</p>
+<div class="cell">
+<div class="sourceCode cell-code" id="cb3"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>len <span class="ot">&lt;-</span> <span class="dv">50</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>(len3 <span class="ot">&lt;-</span> <span class="fu">floor</span>(len<span class="sc">/</span><span class="dv">3</span>))</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>trials <span class="ot">&lt;-</span> <span class="dv">10000</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>q <span class="ot">&lt;-</span> <span class="fu">t</span>( <span class="co"># need to transpose the result of replicate</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>   <span class="fu">replicate</span>( trials, <span class="fu">findlmlen</span>( <span class="fu">data.frame</span>( <span class="at">step =</span> <span class="dv">1</span><span class="sc">:</span>len, <span class="at">ke =</span> <span class="fu">rnorm</span>( len)))))</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+<p>This generated 10,000 length 50 series of random data and ran <code>findlmlen</code> on them. The results are in <a href="#tbl-findlmtst" class="quarto-xref">Table&nbsp;2</a> below.</p>
+<div id="tbl-findlmtst" class="quarto-float anchored">
+<figure class="quarto-float quarto-float-tbl figure">
+<figcaption class="quarto-float-caption-top quarto-float-caption quarto-float-tbl" id="tbl-findlmtst-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Table&nbsp;2: Results of <code>finlmlen</code> on random data.
+</figcaption>
+<div aria-describedby="tbl-findlmtst-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<table class="table">
+<thead>
+<tr class="header">
+<th style="text-align: right;">Item</th>
+<th style="text-align: center;">Count</th>
+<th style="text-align: center;">Percent</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: right;">Total Trials</td>
+<td style="text-align: center;">10,000</td>
+<td style="text-align: center;">100%</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">Full Length Passes</td>
+<td style="text-align: center;">5,007</td>
+<td style="text-align: center;">50.1%</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">Shortened Passes</td>
+<td style="text-align: center;">2,231</td>
+<td style="text-align: center;">22.3%</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">Exactly 2/3</td>
+<td style="text-align: center;">393</td>
+<td style="text-align: center;">3.9%</td>
+</tr>
+<tr class="odd">
+<td style="text-align: right;">Lengthened Passes</td>
+<td style="text-align: center;">1,838</td>
+<td style="text-align: center;">18.4%</td>
+</tr>
+<tr class="even">
+<td style="text-align: right;">Failed Passes</td>
+<td style="text-align: center;">2,762</td>
+<td style="text-align: center;">27.6%</td>
+</tr>
+</tbody>
+</table>
+</div>
+</figure>
+</div>
+<p>The first thing to notice: the expected number of full length passes is 50%, and this was observed. Of the 2,231 shortened passes, 82% were lengthened. The 1/3 length is given by <code>len3 &lt;- floor( 50/3)</code> which is 16. The 2/3 length is 50 - 16 = 34. The average length of the shortened runs was 34.88, so it looks like most runs were only lengthened by 1 point. The maximum short pass was 38 (lengthened by 4). A plot of the result is below.</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="findlmlentst.PNG" class="img-fluid figure-img"></p>
+<figcaption>Absolute value of the estimate vs.&nbsp;the standard error. Black points are failures, green are full length passes, and blue are shortened passes. The red line shows equality (estimate equals the standard error).</figcaption>
+</figure>
+</div>
+<p>There were two iterations, with the final summarization of the data performed with re-sampling block size of 500. The updated summary data is in <code>MD2DF.3.S2.Rdata</code>. The summary plot of the data is in <a href="#fig-MD2DF3S2" class="quarto-xref">Figure&nbsp;3</a> below:</p>
+<div id="fig-MD2DF3S2" class="quarto-figure quarto-figure-center quarto-float anchored">
+<figure class="quarto-float quarto-float-fig figure">
+<div aria-describedby="fig-MD2DF3S2-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<img src="MD2DF.3.S2.png" class="img-fluid figure-img">
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-MD2DF3S2-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure&nbsp;3: Summary of data in MD2DF.3.S2.Rdata. The red triangles are data runs not considered valid.
+</figcaption>
+</figure>
+</div>
+<p>The runs note considered valid are as follows:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>rerun <span class="ot">&lt;-</span> <span class="fu">with</span>( MD2DF, {MD2DF[ Fpvalue <span class="sc">&lt;</span> <span class="fl">0.5</span>, <span class="fu">c</span>(<span class="st">'series'</span>, <span class="st">'energy'</span>)]}</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>rerun<span class="sc">$</span>energy</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a> [<span class="dv">1</span>] <span class="st">"0021"</span> <span class="st">"0028"</span> <span class="st">"0029"</span> <span class="st">"0030"</span> <span class="st">"0031"</span> <span class="st">"0033"</span> <span class="st">"0036"</span> <span class="st">"0037"</span> <span class="st">"0038"</span> <span class="st">"0041"</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>[<span class="dv">11</span>] <span class="st">"0045"</span> <span class="st">"0046"</span> <span class="st">"0049"</span> <span class="st">"0051"</span> <span class="st">"0052"</span> <span class="st">"0053"</span> <span class="st">"0056"</span> <span class="st">"0059"</span> <span class="st">"0066"</span> <span class="st">"0067"</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>[<span class="dv">21</span>] <span class="st">"0070"</span> <span class="st">"0071"</span> <span class="st">"0073"</span> <span class="st">"0074"</span> <span class="st">"0079"</span> <span class="st">"0082"</span> <span class="st">"0083"</span> <span class="st">"0091"</span> <span class="st">"0092"</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</section>
+</section>
+<section id="extending-runs" class="level2">
+<h2 class="anchored" data-anchor-id="extending-runs">Extending Runs</h2>
+<p>On 22 and 23 September 2024 (one month following the first S2 runs), the runs listed above were extended by 15k steps (more than doubling their length), and new runs were made in the transition region. The details are documented in <a href="file:///C:/Users/phils/Documents/DSP/MD/MD2/ExtendRuns1.pdf">ExtendRuns1.pdf</a>. As noted in the pdf, an error had been spotted in the procedure <code>procMD2DF</code> and so the entire suite of files had to be reprocessed. The reprocessed data was saved in <code>MD2DF.4.S2.Rdata</code>. Note that I reorganized some files, and this file was missing, but as the run data was still available, it was re-created (and saved) on 12 October 2024. The state of the main scalars is shown below in <a href="#fig-MSER1" class="quarto-xref">Figure&nbsp;4</a>.</p>
+<div id="fig-MSER1" class="quarto-figure quarto-figure-center quarto-float anchored">
+<figure class="quarto-float quarto-float-fig figure">
+<div aria-describedby="fig-MSER1-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<img src="Mainscalars%20ER1.png" class="img-fluid figure-img" width="650">
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-MSER1-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure&nbsp;4: Eight key parameters, the first six (counting top-to-bottom, left-to-right) plotted against the mean total energy per particle. They are 1) the standard deviation of the kinetic energy, 2) the pressure, 3) the correlation coefficient, 4) the average of the modulus of the Nelson-Halperin order parameter, 5) the kinetic energy, and 6) the relative variance of the kinetic energy (i.e., the standard deviation divided by the mean). Then the total energy vs.&nbsp;the initialization total, and last the standard error of the slope estimate vs.&nbsp;the absolute value of the slope (with a a line showing where they are equal). Black circles indicate data declared valid and red triangles are data whose regression had too much significance (F-test p-value &lt; 0.5).
+</figcaption>
+</figure>
+</div>
+<p>The Nelson-Halperin order parameter <span class="math inline">\(\psi = \frac{1}{2(N-1)}\sum_{i \ne j} e^{i6\theta_{i j}}\)</span>, where <span class="math inline">\(\theta_{i j}\)</span> is the angle with the <span class="math inline">\(x\)</span>-axis of the vector from particle <span class="math inline">\(i\)</span> to <span class="math inline">\(j\)</span> (the factor of 2 because in the above, each particle is counted twice). This is very sensitive to the transition. <span class="citation" data-cites="NHOPER1">(<a href="#ref-NHOPER1" role="doc-biblioref"><strong>NHOPER1?</strong></a>)</span> below shows the current state with <span class="math inline">\(\pm\sigma\)</span> for each point.</p>
+<div id="fig-NHOPER1" class="quarto-figure quarto-figure-center quarto-float anchored">
+<figure class="quarto-float quarto-float-fig figure">
+<div aria-describedby="fig-NHOPER1-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<img src="NHOPER1.png" class="img-fluid figure-img" width="700">
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-NHOPER1-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figure&nbsp;5: The Nelson-Halperin order parameter versus TE (energy in scaled units). Red triangles denote points not considered valid.
+</figcaption>
+</figure>
+</div>
+
+</section>
+</section>
+
+<div id="quarto-appendix" class="default"><section class="quarto-appendix-contents" role="doc-bibliography" id="quarto-bibliography"><h2 class="anchored quarto-appendix-heading">References</h2><div id="refs" class="references csl-bib-body hanging-indent" data-entry-spacing="0" role="list">
+<div id="ref-halperin1978" class="csl-entry" role="listitem">
+Halperin, B. I., and David R. Nelson. 1978. <span>“Theory of Two-Dimensional Melting.”</span> <em>Physical Review Letters</em> 41 (2): 121–24. <a href="https://doi.org/10.1103/PhysRevLett.41.121">https://doi.org/10.1103/PhysRevLett.41.121</a>.
+</div>
+<div id="ref-Novaco1982" class="csl-entry" role="listitem">
+Novaco, Anthony D., and Philip A. Shea. 1982. <span>“Relaxation and Fluctuation Effects Near the Melting Transition in a Two-Dimensional Solid.”</span> <em>Physical Review B</em> 26 (1): 284–94. <a href="https://doi.org/10.1103/physrevb.26.284">https://doi.org/10.1103/physrevb.26.284</a>.
+</div>
+<div id="ref-Shea1980" class="csl-entry" role="listitem">
+Shea, Philip A. 1980. <span>“Meting in <span>Two Dimensions</span>: <span>A Molecular Dynamics Calculation</span>.”</span> Undergradualte, Easton, PA: Lafayette College.
+</div>
+</div></section></div></main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+window.document.addEventListener("DOMContentLoaded", function (event) {
+  const toggleBodyColorMode = (bsSheetEl) => {
+    const mode = bsSheetEl.getAttribute("data-mode");
+    const bodyEl = window.document.querySelector("body");
+    if (mode === "dark") {
+      bodyEl.classList.add("quarto-dark");
+      bodyEl.classList.remove("quarto-light");
+    } else {
+      bodyEl.classList.add("quarto-light");
+      bodyEl.classList.remove("quarto-dark");
+    }
+  }
+  const toggleBodyColorPrimary = () => {
+    const bsSheetEl = window.document.querySelector("link#quarto-bootstrap");
+    if (bsSheetEl) {
+      toggleBodyColorMode(bsSheetEl);
+    }
+  }
+  toggleBodyColorPrimary();  
+  const icon = "";
+  const anchorJS = new window.AnchorJS();
+  anchorJS.options = {
+    placement: 'right',
+    icon: icon
+  };
+  anchorJS.add('.anchored');
+  const isCodeAnnotation = (el) => {
+    for (const clz of el.classList) {
+      if (clz.startsWith('code-annotation-')) {                     
+        return true;
+      }
+    }
+    return false;
+  }
+  const clipboard = new window.ClipboardJS('.code-copy-button', {
+    text: function(trigger) {
+      const codeEl = trigger.previousElementSibling.cloneNode(true);
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+  });
+  clipboard.on('success', function(e) {
+    // button target
+    const button = e.trigger;
+    // don't keep focus
+    button.blur();
+    // flash "checked"
+    button.classList.add('code-copy-button-checked');
+    var currentTitle = button.getAttribute("title");
+    button.setAttribute("title", "Copied!");
+    let tooltip;
+    if (window.bootstrap) {
+      button.setAttribute("data-bs-toggle", "tooltip");
+      button.setAttribute("data-bs-placement", "left");
+      button.setAttribute("data-bs-title", "Copied!");
+      tooltip = new bootstrap.Tooltip(button, 
+        { trigger: "manual", 
+          customClass: "code-copy-button-tooltip",
+          offset: [0, -8]});
+      tooltip.show();    
+    }
+    setTimeout(function() {
+      if (tooltip) {
+        tooltip.hide();
+        button.removeAttribute("data-bs-title");
+        button.removeAttribute("data-bs-toggle");
+        button.removeAttribute("data-bs-placement");
+      }
+      button.setAttribute("title", currentTitle);
+      button.classList.remove('code-copy-button-checked');
+    }, 1000);
+    // clear code selection
+    e.clearSelection();
+  });
+    var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+    var mailtoRegex = new RegExp(/^mailto:/);
+      var filterRegex = new RegExp('/' + window.location.host + '/');
+    var isInternal = (href) => {
+        return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+    }
+    // Inspect non-navigation links and adorn them if external
+ 	var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool)');
+    for (var i=0; i<links.length; i++) {
+      const link = links[i];
+      if (!isInternal(link.href)) {
+        // undo the damage that might have been done by quarto-nav.js in the case of
+        // links that we want to consider external
+        if (link.dataset.originalHref !== undefined) {
+          link.href = link.dataset.originalHref;
+        }
+      }
+    }
+  function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+    const config = {
+      allowHTML: true,
+      maxWidth: 500,
+      delay: 100,
+      arrow: false,
+      appendTo: function(el) {
+          return el.parentElement;
+      },
+      interactive: true,
+      interactiveBorder: 10,
+      theme: 'quarto',
+      placement: 'bottom-start',
+    };
+    if (contentFn) {
+      config.content = contentFn;
+    }
+    if (onTriggerFn) {
+      config.onTrigger = onTriggerFn;
+    }
+    if (onUntriggerFn) {
+      config.onUntrigger = onUntriggerFn;
+    }
+    window.tippy(el, config); 
+  }
+  const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+  for (var i=0; i<noterefs.length; i++) {
+    const ref = noterefs[i];
+    tippyHover(ref, function() {
+      // use id or data attribute instead here
+      let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+      try { href = new URL(href).hash; } catch {}
+      const id = href.replace(/^#\/?/, "");
+      const note = window.document.getElementById(id);
+      if (note) {
+        return note.innerHTML;
+      } else {
+        return "";
+      }
+    });
+  }
+  const xrefs = window.document.querySelectorAll('a.quarto-xref');
+  const processXRef = (id, note) => {
+    // Strip column container classes
+    const stripColumnClz = (el) => {
+      el.classList.remove("page-full", "page-columns");
+      if (el.children) {
+        for (const child of el.children) {
+          stripColumnClz(child);
+        }
+      }
+    }
+    stripColumnClz(note)
+    if (id === null || id.startsWith('sec-')) {
+      // Special case sections, only their first couple elements
+      const container = document.createElement("div");
+      if (note.children && note.children.length > 2) {
+        container.appendChild(note.children[0].cloneNode(true));
+        for (let i = 1; i < note.children.length; i++) {
+          const child = note.children[i];
+          if (child.tagName === "P" && child.innerText === "") {
+            continue;
+          } else {
+            container.appendChild(child.cloneNode(true));
+            break;
+          }
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(container);
+        }
+        return container.innerHTML
+      } else {
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        return note.innerHTML;
+      }
+    } else {
+      // Remove any anchor links if they are present
+      const anchorLink = note.querySelector('a.anchorjs-link');
+      if (anchorLink) {
+        anchorLink.remove();
+      }
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(note);
+      }
+      // TODO in 1.5, we should make sure this works without a callout special case
+      if (note.classList.contains("callout")) {
+        return note.outerHTML;
+      } else {
+        return note.innerHTML;
+      }
+    }
+  }
+  for (var i=0; i<xrefs.length; i++) {
+    const xref = xrefs[i];
+    tippyHover(xref, undefined, function(instance) {
+      instance.disable();
+      let url = xref.getAttribute('href');
+      let hash = undefined; 
+      if (url.startsWith('#')) {
+        hash = url;
+      } else {
+        try { hash = new URL(url).hash; } catch {}
+      }
+      if (hash) {
+        const id = hash.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note !== null) {
+          try {
+            const html = processXRef(id, note.cloneNode(true));
+            instance.setContent(html);
+          } finally {
+            instance.enable();
+            instance.show();
+          }
+        } else {
+          // See if we can fetch this
+          fetch(url.split('#')[0])
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.getElementById(id);
+            if (note !== null) {
+              const html = processXRef(id, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      } else {
+        // See if we can fetch a full url (with no hash to target)
+        // This is a special case and we should probably do some content thinning / targeting
+        fetch(url)
+        .then(res => res.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const htmlDoc = parser.parseFromString(html, "text/html");
+          const note = htmlDoc.querySelector('main.content');
+          if (note !== null) {
+            // This should only happen for chapter cross references
+            // (since there is no id in the URL)
+            // remove the first header
+            if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+              note.children[0].remove();
+            }
+            const html = processXRef(null, note);
+            instance.setContent(html);
+          } 
+        }).finally(() => {
+          instance.enable();
+          instance.show();
+        });
+      }
+    }, function(instance) {
+    });
+  }
+      let selectedAnnoteEl;
+      const selectorForAnnotation = ( cell, annotation) => {
+        let cellAttr = 'data-code-cell="' + cell + '"';
+        let lineAttr = 'data-code-annotation="' +  annotation + '"';
+        const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+        return selector;
+      }
+      const selectCodeLines = (annoteEl) => {
+        const doc = window.document;
+        const targetCell = annoteEl.getAttribute("data-target-cell");
+        const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+        const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+        const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+        const lineIds = lines.map((line) => {
+          return targetCell + "-" + line;
+        })
+        let top = null;
+        let height = null;
+        let parent = null;
+        if (lineIds.length > 0) {
+            //compute the position of the single el (top and bottom and make a div)
+            const el = window.document.getElementById(lineIds[0]);
+            top = el.offsetTop;
+            height = el.offsetHeight;
+            parent = el.parentElement.parentElement;
+          if (lineIds.length > 1) {
+            const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+            const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+            height = bottom - top;
+          }
+          if (top !== null && height !== null && parent !== null) {
+            // cook up a div (if necessary) and position it 
+            let div = window.document.getElementById("code-annotation-line-highlight");
+            if (div === null) {
+              div = window.document.createElement("div");
+              div.setAttribute("id", "code-annotation-line-highlight");
+              div.style.position = 'absolute';
+              parent.appendChild(div);
+            }
+            div.style.top = top - 2 + "px";
+            div.style.height = height + 4 + "px";
+            div.style.left = 0;
+            let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+            if (gutterDiv === null) {
+              gutterDiv = window.document.createElement("div");
+              gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+              gutterDiv.style.position = 'absolute';
+              const codeCell = window.document.getElementById(targetCell);
+              const gutter = codeCell.querySelector('.code-annotation-gutter');
+              gutter.appendChild(gutterDiv);
+            }
+            gutterDiv.style.top = top - 2 + "px";
+            gutterDiv.style.height = height + 4 + "px";
+          }
+          selectedAnnoteEl = annoteEl;
+        }
+      };
+      const unselectCodeLines = () => {
+        const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+        elementsIds.forEach((elId) => {
+          const div = window.document.getElementById(elId);
+          if (div) {
+            div.remove();
+          }
+        });
+        selectedAnnoteEl = undefined;
+      };
+        // Handle positioning of the toggle
+    window.addEventListener(
+      "resize",
+      throttle(() => {
+        elRect = undefined;
+        if (selectedAnnoteEl) {
+          selectCodeLines(selectedAnnoteEl);
+        }
+      }, 10)
+    );
+    function throttle(fn, ms) {
+    let throttle = false;
+    let timer;
+      return (...args) => {
+        if(!throttle) { // first call gets through
+            fn.apply(this, args);
+            throttle = true;
+        } else { // all the others get throttled
+            if(timer) clearTimeout(timer); // cancel #2
+            timer = setTimeout(() => {
+              fn.apply(this, args);
+              timer = throttle = false;
+            }, ms);
+        }
+      };
+    }
+      // Attach click handler to the DT
+      const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+      for (const annoteDlNode of annoteDls) {
+        annoteDlNode.addEventListener('click', (event) => {
+          const clickedEl = event.target;
+          if (clickedEl !== selectedAnnoteEl) {
+            unselectCodeLines();
+            const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+            if (activeEl) {
+              activeEl.classList.remove('code-annotation-active');
+            }
+            selectCodeLines(clickedEl);
+            clickedEl.classList.add('code-annotation-active');
+          } else {
+            // Unselect the line
+            unselectCodeLines();
+            clickedEl.classList.remove('code-annotation-active');
+          }
+        });
+      }
+  const findCites = (el) => {
+    const parentEl = el.parentElement;
+    if (parentEl) {
+      const cites = parentEl.dataset.cites;
+      if (cites) {
+        return {
+          el,
+          cites: cites.split(' ')
+        };
+      } else {
+        return findCites(el.parentElement)
+      }
+    } else {
+      return undefined;
+    }
+  };
+  var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+  for (var i=0; i<bibliorefs.length; i++) {
+    const ref = bibliorefs[i];
+    const citeInfo = findCites(ref);
+    if (citeInfo) {
+      tippyHover(citeInfo.el, function() {
+        var popup = window.document.createElement('div');
+        citeInfo.cites.forEach(function(cite) {
+          var citeDiv = window.document.createElement('div');
+          citeDiv.classList.add('hanging-indent');
+          citeDiv.classList.add('csl-entry');
+          var biblioDiv = window.document.getElementById('ref-' + cite);
+          if (biblioDiv) {
+            citeDiv.innerHTML = biblioDiv.innerHTML;
+          }
+          popup.appendChild(citeDiv);
+        });
+        return popup.innerHTML;
+      });
+    }
+  }
+});
+</script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>
