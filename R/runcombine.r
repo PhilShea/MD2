@@ -13,9 +13,29 @@ source("C:/Users/phils/Documents/DSP/R/Common/Common/common.R")
 #' @export
 #'
 #' @examples
-#' x = combineruns(  ".", "S1\\.0014\\.") # will read files "S1.0014.*.csv"
+#' x = combineruns(  ".", "S1\\.0014\\.") # reads files "S1.0014.*.scalars.csv"
 #'
 combineruns <- function( directory, pattern, verbose=FALSE){
+   pattsplit <- unlist( strsplit( patt, split="\\\\."))
+   # cat( "patsplit: ", pattsplit[1], "& ", pattsplit[2], "\n")
+   runname <- paste(pattsplit[1], pattsplit[2], sep = ".") # bare run name
+   rfdtname <- paste( runname, "rfdt.RDS", sep = ".") # rftd file name
+   rfdtpath <- paste( directory, rfdtname, sep="/")
+   crname <- paste( runname, "cr.RDS", sep = ".")
+   crpath <- paste( directory, crname, sep = "/")
+   # cat("fullpath: ", fullpath, "\n")
+   # find old data.
+   if (file.exists( rfdtpath)) {
+      rfdt <- readRDS( rfdtpath) # read the run file data table rfdt
+      compare <- TRUE # set as flag to compare file list to rfdt.
+      sdf <- readRDS( crpath)
+   } else {
+      rfdt <- data.table()
+      compare <- FALSE
+      sdf <- data.table::data.table() # init to empty data.table
+   } # end if (file.exists...)
+
+   # get list of all files that match pattern.
    patt <-  paste( pattern,
                    "(.*).scalars.csv", sep=".")
    if (verbose) cat( "Searching Directory: ", directory,
@@ -24,16 +44,33 @@ combineruns <- function( directory, pattern, verbose=FALSE){
    filetimes <- file.mtime( files)
    stopifnot( !anyNA( filetimes)) # if any return NA, the sort will fail.
    files <- files[ order( filetimes)]
+   if (compare) {
+      # find files that haven't been read yet.
+      # rfdt should have been sorted by mtime, so last record should have
+      # latest time
+      lt <- last( rfdt)$time
+      files <- files[ filetimes > lt]
+      filetimes <- filetimes[ filetimes > lt]
+   } # end if (compare) ...
+   lenf <- length( files)
+   stopifnot( lenf > 0) # in ordinary use this should not occur.
    if (verbose) cat( "Files found: ", files, "\n")
    stepoffset <- 0
-   sdf <- data.frame() # init to empty dataframe
-   for (j in 1:length( files)) { # walk through all files in group
-      data <- read.csv( files[ j])
+
+   stepj <- rep( 0, lenf)
+   for (j in 1:lenf) { # walk through all files in group
+      data <- data.table::fread( files[ j])
       steps <- nrow( data)
-      data[ "step"] <- data[ "step"] + stepoffset
+      stepj[ j] <- steps
+      #data[ "step"] <- data[ "step"] + stepoffset
+      data[, step := step + stepoffset] #dt method of modifying columns
       stepoffset <- stepoffset + steps
-      sdf <- rbind( sdf, data)
+      sdf <- data.table::rbindlist( list(sdf, data))
    } # end for (j ...
+   newrfdt <- data.table( file = files, time = filetimes, steps = stepj)
+   rfdt <- data.table( list( newrfdt, rfdt))
+   saveRDS( rfdt, file = rfdtpath) # save for next time.
+   saveRDS(  sdf, file = crpath)
    invisible( sdf)
 }
 
@@ -134,12 +171,12 @@ colStats <- function( x, FUN, tag, ...) {
   t
 }
 
-#' Create block avereages and resample.
+#' Create block averages and re-sample.
 #'
-#' @param x A vector to resample.
+#' @param x A vector to re-sample.
 #' @param n An integer number of samples in the block averages.
 #'
-#' @return A vector of the resampled data.
+#' @return A vector of the re-sampled data.
 #' @export
 #'
 #' @examples
@@ -178,6 +215,32 @@ lmMD2 <- function( df) {
       Fpvalue = unname( Fpvalue), df = t['dendf'])
 }
 
+#' Finds a reasonable length for an LM fit to a full run.
+#'
+#' `findlmlen` will first look at the whole record and see if it meets the
+#' `minp`criteria.  If that fails, then it will look at the last 2/3rds of
+#' the record (the tail).  If that works, it will do a regression on the
+#' first third
+#' to get a direction (rising or falling), and will then find the first
+#' point that is above the max of the tail (for falling) or below the min of
+#' the tail (for rising), and add all the points up to that point to the
+#' regression.  It will return the resulting regression. If it fails to find
+#' a valid regression, it will return the the first (whole record)
+#' regression (the failure indicated by the `Fpvalue` that is below `minp`).
+#'
+#' @param df Ordinarily a re-sampled ke data frame with items ke and step.
+#' @param minp A threshold to test if the fit is considered valid. `minp = 0.5`
+#'    means that the probability that the fit was to purely random (no trend)
+#'    data is 50% or greater.
+#'
+#' @return
+#' @export
+#'
+#' @examples
+#'    Rke <- rsmpavg( ke, rsblk)
+#'    Rkedf <- data.frame( step = seq_along( Rke), ke = Rke)
+#'    kefit <- findlmlen( Rkedf, minp)
+#'
 findlmlen <- function( df, minp = 0.50) {
    kefit <- lmMD2( df)
    lendf <- nrow( df)
@@ -208,7 +271,7 @@ findlmlen <- function( df, minp = 0.50) {
    } # if kefit...
    # if we get here, then either the original fit passed the F-test,
    # or neither passed, so the original fit is returned.
-   # The F p-value will show that this record is suspect.
+   # The F p-value will show if this record is suspect.
    return( kefit)
 }
 
@@ -326,9 +389,10 @@ procMD2DF <- function( df, skip = 0, fftblock = 4096, rsblk = 250,
 createdf <- function( directory, filenames, skip = 1000, df=data.frame(),
                       clusters=0, fftblock = 4096, rsblk = 250,
                       minp = 0.50, verbose=FALSE) {
-   filenames = sort( filenames)
+   filenames <- sort( filenames)
    count <- length( filenames)
-   runfiles <- strsplit( filenames,split="[.]") # runfiles[[i]] is array of fields
+   # runfiles[[i]] is array of fields
+   runfiles <- strsplit( filenames,split="[.]")
    dfrows <- unlist( unique( lapply( runfiles,
                                      function(y) paste(y[1], y[2], sep="\\."))))
    # series and energy will define an init.
@@ -473,8 +537,8 @@ plotconf <- function( x, y, sd, Fpvalue = rep( 1, length.out = length( x)),
 #' plotconf.
 #'
 #' @param df The data frame
-#' @param x The x variable.  If omitted, will default to the mean total energy
-#'  "TE.mean"
+#' @param x The x variable.  If omitted, will default to the resampled mean
+#' total energy "TE.mean.rs".
 #' @param y The main y variable name as a string.  Must be one of the variables
 #' that are statistical summaries and thus have a "y.mean" and a "y.sd"
 #' column in `df`.
