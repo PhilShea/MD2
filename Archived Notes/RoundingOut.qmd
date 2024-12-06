@@ -1,0 +1,467 @@
+---
+title: "RoundingOut"
+author: "Phil Shea"
+format: pdf
+editor: visual
+glossary:
+  path: MD2Glossary.yml
+  popup: hover
+  show: true
+---
+
+```{r}
+#| echo: false
+#| output: false
+library( parallel)
+# Calculate the number of cores
+num_cores <- detectCores() - 1
+ source("C:/Users/phils/Documents/DSP/MD/MD2/R/runcombine.r")
+require( glossary)
+#glossary_path("MD2Glossary.yml")
+#glossary_popup("hover")
+```
+
+# Rounding Out the Runs
+
+When `ExtendedRuns2.qmd` finished, we had a number of the `r glossary("run")` that were "not considered valid," and substantial evidence that while the validity tests were very good, some runs might have been declared valid prematurely.
+
+```{r}
+#| label: fig-MDDF6
+#| output: true
+#| fig-cap: "The scalars of all runs so far (22 October 2024)."
+load("MD2DF.4.S2.Rdata") # loads data into MD2DF
+MD2DF.S2b.5 <- readRDS( "MD2DF.S2b.5.RDS")
+MD2DF.6 <- rbind( MD2DF, MD2DF.S2b.5)
+saveRDS( MD2DF.6, "MD2DF.6.RDS")
+op= par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+with( MD2DF.6, plotScalars( MD2DF.6))
+par(op)
+```
+
+```{r}
+with( MD2DF.6, MD2DF.6[ Fpvalue < 0.5,
+         c("series", "energy", "TE.mean.rs", "steps.avg", "total.steps")])
+```
+
+`S2` series runs `0051`, `0059`, and `0074` are hotter runs, and likely near equilibrium (just based on their mean total energy), all with only 26k steps. Five 5k runs will roughly double the runs. `S2.0030` has a total energy near the transition region, and `S2b.0028` is suspect as `S2b.0027` looked almost rock solid until about 700k steps. We need to extend to the right and left in energy too, as runs declared valid after only 25k steps might be optimistic.
+
+```{r}
+with( MD2DF.6, MD2DF.6[ TE.mean.rs %within% c( 0.154, 0.166),
+         c("series", "energy", "TE.mean.rs", "steps.avg", "total.steps")])
+```
+
+We will gather the files for extension in the `H:\Data\DSP\MD\Data` directory by hand. We need to copy the S2 files from the `\1980` directory. It has temperature field from `0030` through `0040` (`0039` was not in the list as it has $0.168\epsilon$, but we'll include it anyway; the S2 series did not correct the initialization energy, so the total energies are not strictly increasing with the input initialization energy). These files have as few as 11k steps, so we ought to add a million to each. Twenty 50k step runs ought to do the job. The `S2b` runs in question have various lengths from 51k to over a million, and all these are in the transition region. We'll add a million steps to these too.
+
+Finally,
+
+```{r}
+#| label: fig-rtv
+#| output: true
+#| fig-cap: "The relative temperature variance."
+
+with( MD2DF.6, plot( x=TE.mean.rs, y=rtv, panel.first=grid()))
+
+```
+
+## Extending Runs Again
+
+Running the *Julia* code in a standalone fashion (rather than a terminal window in *VSCode*).
+
+``` julia
+C:\Users\phils>julia -t 6
+julia> cd(".\\Documents\\DSP\\MD\\dev\\MD2")
+julia> include(".\\src\\MD2.jl")
+julia> using .MD2
+julia> list1 = "S2." .* ["0051", "0059", "0074"]
+3-element Vector{String}:
+ "S2.0051"
+ "S2.0059"
+ "S2.0074"
+julia> list1 = list1 .* "."
+3-element Vector{String}:
+ "S2.0051."
+ "S2.0059."
+ "S2.0074."
+ 
+ julia> @time MD2.filerun_thread( "H:\\Data\\DSP\\MD\\Data", list1, "6", 5000, 5)
+ 
+ 17.814140 seconds (874.30 M allocations: 16.764 GiB, 8.71% gc time, 6 lock conflicts, 106.19% compilation time: 5% of which was recompilation)
+ 
+```
+
+# File Naming Issues
+
+This didn't go well, as the file names are rather bollixed up. The difficulty was caused by trying to reconcile the old way of naming additional runs (where a single character was incremented) and the new way (where a four digit counter was added). This combined with the `R` imperatives of combining runs makes for an interesting problem. Complicating the issue was an separate error which caused file names to overlap, and code to ensure a file was saved after an execution caused confused executions. What occurred was that files were being saved with `(1)` appended to the names (in some cases, twice), but the next run would not be from that execution saved to the `(1)` file. Consequently, all runs with such a name are suspect. The smoking gun is that some the logged start save times and restore times overlapped backward.
+
+The resolution is to have a coherent naming strategy, and here it is. A `r glossary("run")` will be simply series and temperature separated by a dot (e.g.: `S2b.0030`). Any file with such a combination will be considered part of the same run by `combineruns` and will be sorted by date and time of modification (i.e., the time the file was closed). The old runs will be extended by *renaming* the last `.jld2` file to reflect the current correct execution number. Thus, what was `S2.0051.U.jld2` will be renamed to `S2.0051.0031.jld2` (the count was "0" to "9", then "A" to "Z", then, stupidly, "a" to "z"). It is only the `.jld2` file that must be renamed. The other example in the wild today is `S2b.0029.e(1).jld2` which translates to `S2b.0029.0042.jld2`. Before this scheme was adopted, a large number of files of the form `S2b.0029.e(1).0036.jld2` where created (with all the intervening numbers). The `e(1)` corresponds to 42 executions of the run.
+
+While all the above is likely valid, we had to delete lots of files. Here is what is left.
+
+```{r}
+MD2DF.7 <- MD2DFfile( "MD2DF.7.RDS", "H:/Data/DSP/MD/Data", 
+                       "S2*.scalars.csv", verbose=TRUE)
+```
+
+Here are the resulting scalars left after the deletions.
+
+```{r}
+#| label: fig-MDDF7
+#| output: true
+#| fig-cap: "The scalars of all runs left after deleting confused files (23 October 2024)."
+op= par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+with( MD2DF.7, plotScalars( MD2DF.7))
+par(op)
+```
+
+```{r}
+with( MD2DF.7, MD2DF.7[ Fpvalue < 0.5,
+         c("series", "energy", "TE.mean.rs", "steps.avg", "total.steps")])
+```
+
+## Re-Extending Runs Again
+
+So, following the prior data, and examining the `MD2DF.7` data, we see a couple of categories of data to be extended. There are a number of runs with only three executions.
+
+```{r}
+with( MD2DF.7, MD2DF.7[ order( total.steps), 
+                        c("series", "energy", "total.steps", "TE.mean.rs")])
+```
+
+Here are the new runs. The six `list3` runs have only three `r glossary( "execution", "executions")`, the five `list6` have only six executions, the three `list11` runs have 11, three `list32` runs have 32, and seven `list36` have 36. We will add 50k steps to the first two groups, and two million to all the others.
+
+``` julia
+C:\Users\phils>julia -t 6
+
+julia> cd(".\\Documents\\DSP\\MD\\dev\\MD2")
+julia> include(".\\src\\MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> using .MD2
+
+julia> list3 = "S2." .* ["0032", "0033", "0034", "0035", "0039", "0040"]
+6-element Vector{String}:
+ "S2.0032"
+ "S2.0033"
+ "S2.0034"
+ "S2.0035"
+ "S2.0039"
+ "S2.0040"
+
+julia> td = "H:\\Data\\DSP\\MD\\Data"
+"H:\\Data\\DSP\\MD\\Data"
+
+julia> @time MD2.filerun_thread( td, list3, 3, 5000, 10)
+ 36.495906 seconds (3.45 G allocations: 65.335 GiB, 16.36% gc time, 8 lock conflicts, 18.80% compilation time)
+ 
+ julia> list6 = "S2." .* ["0030", "0031", "0036", "0037", "0038"]
+5-element Vector{String}:
+ "S2.0030"
+ "S2.0031"
+ "S2.0036"
+ "S2.0037"
+ "S2.0038"
+
+julia> @time MD2.filerun_thread( td, list6, 6, 5000, 10)
+ 30.250901 seconds (2.87 G allocations: 54.334 GiB, 15.53% gc time, 6 lock conflicts)
+ 
+ julia> list11 = "S2b." .* ["0026", "0036", "0037"]
+3-element Vector{String}:
+ "S2b.0026"
+ "S2b.0036"
+ "S2b.0037"
+
+julia> @time MD2.filerun_thread( td, list11, 11, 50000, 40)
+956.395272 seconds (69.05 G allocations: 1.271 TiB, 17.32% gc time, 3 lock conflicts)
+
+julia> list36 = "S2b.00" .* ["27", "29", "30", "31", "32", "33", "38"]
+7-element Vector{String}:
+ "S2b.0027"
+ "S2b.0029"
+ "S2b.0030"
+ "S2b.0031"
+ "S2b.0032"
+ "S2b.0033"
+ "S2b.0038"
+
+julia> @time MD2.filerun_thread( td, list36, 36, 50000, 40)
+┌ Warning: Opening file with JLD2.MmapIO failed, falling back to IOStream
+└ @ JLD2 C:\Users\phils\.julia\packages\JLD2\3zWRM\src\JLD2.jl:153
+ERROR: TaskFailedException
+
+    nested task error: SystemError: opening file "S2b.0032.0074.jld2": 
+      No such file or directory
+```
+
+At this point, I had to exit *Julia* in the command window to get it to close the open text files. `S2b.0032.txt` only showed runs through the `0012`, but there were runs through `S2b.0032.0073.scalars.csv` in the directory. Exiting *Julia* caused the io buffer to flush and that last save was recorded in the `.txt` file. Also, files were found in the `\dev\MD2` directory of the `C:` drive, which really makes no sense. I have no explanation for this, but perhaps I should rely less on the `cd()` in `extendrun()` and simply set the directory before calling `filerun_thread()`.
+
+``` julia
+C:\Users\phils>julia -t 6
+
+julia> cd(".\\Documents\\DSP\\MD\\dev\\MD2")
+
+julia> include(".\\src\\MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> using .MD2
+julia> td = "H:\\Data\\DSP\\MD\\Data"
+"H:\\Data\\DSP\\MD\\Data"
+
+julia> list32 = "S2b.00" .* ["28", "34", "35"]
+3-element Vector{String}:
+ "S2b.0028"
+ "S2b.0034"
+ "S2b.0035"
+ 
+ julia> @time MD2.filerun_thread( td, list32, 32, 50000, 40)
+905.749043 seconds (68.97 G allocations: 1.270 TiB, 15.21% gc time, 4 lock
+conflicts, 4.08% compilation time: 2% of which was recompilation)
+```
+
+```{r}
+#| label: MDDF8
+system.time( MD2DF.8 <- MD2DFfile( "MD2DF.8.RDS", "H:/Data/DSP/MD/Data", 
+                       "S2*.scalars.csv", verbose=TRUE))
+```
+
+```{r}
+#| label: fig-MDDF8
+#| output: true
+#| fig-cap: "The scalars of all runs left after deleting confused files (23 October 2024)."
+op= par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+with( MD2DF.8, plotScalars( MD2DF.8))
+par(op)
+```
+
+## Melting?
+
+In the previous, confused, runs, we clearly saw melting in run `S2b.0027`.
+
+```{r}
+#| label: xn27
+
+dir <- "H:/Data/DSP/MD/Data"
+lrfdt27 <- combineruns( dir, "S2b\\.0027\\.", verbose = TRUE)
+str(lrfdt27)
+xn27 <- lrfdt27$rundt
+```
+
+And here is the plot.
+
+![Plots of the basic data in run S2b.0027 after 2M steps.](xn272M.png)
+
+```{r}
+#| label: fig-xn27
+#| eval: false
+#| fig-cap: "Plots of the basic data in run S2b.0027 after 2M steps."
+plotMD2( as.data.frame(xn27), dt=0.01)
+pl <- recordPlot()
+png("xn272M.png", width=600, height=300)
+replayPlot(pl)
+dev.off()
+```
+
+That's different from what we saw before. Previously, the system melted after $6000\tau$; now, it melted, and re-froze.
+
+# Rounding out the Runs
+
+Here are the runs sorted by mean total energy.
+
+```{r}
+with( MD2DF.8, MD2DF.8[ order( TE.mean.rs), 
+               c("series", "energy", "total.steps", "steps.avg","TE.mean.rs", "Fpvalue")])
+```
+
+It looks like there is a lot of overlap between the long runs not declared in `r glossary("equilibrium")`, and the short runs in equilibrium.
+
+```{r}
+#| label: fig-stepsvt
+#| output: true
+#| fig-cap: "The number of steps  vs. the total energy. Black circles are consididered valid, and red tiangles not."
+with( MD2DF.8, { valid <- Fpvalue >= 0.5
+col <- ifelse( valid, 'black', 'red')
+symb <- ifelse( valid, 1, 2)
+plot(  total.steps ~ TE.mean.rs, data = MD2DF.8, col=col, pch=symb)})
+grid()
+```
+
+The non-valid runs may become valid with a few more steps. The criteria is such that if the data were drawn from a random normal distribution (that is, with no correlation), it would be declared valid with only 50% probability.
+
+```{r}
+with( MD2DF.8, MD2DF.8[ total.steps < 500000 & Fpvalue < 0.5, 
+         c( "series", "energy", "TE.mean.rs","Fpvalue", "total.steps")])
+```
+
+`S2.0039` looks hopeful as becoming valid, as its F test probability is almost 20%, but all these should be brought to two million steps, so let's just do it and stop wringing our hands about it. When the TE is below about 0.166, even runs declared valid could be extended to see if they remain so.
+
+```{r}
+with( MD2DF.8, MD2DF.8[ total.steps < 500000 & TE.mean.rs < 0.166, 
+         c( "series", "energy", "TE.mean.rs","Fpvalue", "total.steps")])
+```
+
+Unfortunately, we cannot extend runs unless the runs are the same execution count (as the automation tools will be looking for the same file names; this is an opportunity to expand those *Julia* functions, to behave more like `R` list recycling. I did add the feature of making the start number a list. Below is the execution.
+
+``` julia
+julia> cd("C:\\Users\\phils\\Documents\\DSP\\MD\\dev\\MD2")
+
+julia> include(".\\src\\MD2.jl")
+WARNING: replacing module MD2.
+MD2 included.
+Main.MD2
+
+julia> using .MD2
+
+julia> cd(td)
+julia> listm = "S2.00" .* ["30", "31", "32", "33", "34", "35", "36", "37", "38", "40"]
+10-element Vector{String}:
+ "S2.0030"
+ "S2.0031"
+ "S2.0032"
+ "S2.0033"
+ "S2.0034"
+ "S2.0035"
+ "S2.0036"
+ "S2.0037"
+ "S2.0038"
+ "S2.0040"
+julia> sl = [16, 16, 13, 13, 13, 13, 16, 16, 16, 13]
+10-element Vector{Int64}:
+ 16
+ 16
+ 13
+ 13
+ 13
+ 13
+ 16
+ 16
+ 16
+ 13
+
+julia> @time MD2.filerun_thread( td, listm, sl, 50000, 40)
+2432.275557 seconds (229.86 G allocations: 4.230 TiB, 16.68% gc time, 6 lock conflicts, 0.31% compilation time)
+```
+
+Ten files each extended by 40, 50k step executions is 20,000 1k step runs in 2,432.3 s (40.54 minutes), yielding 0.122 s per 1k step run.
+
+## Ugrading `runcombiner` Functions
+
+So that took over 40 minutes, and now I have to decide what to do with the data. A simple thing is reprocess all the series `S2` data in the `H:\Data\DSP\MD\Data` directory, but the reprocessing has been getting lengthy too: creating MD2DF.8 took over 200 s (3 1/3 minutes) and that used multiprocessing. The time consuming operation is reading the `csv` files. and unless major changes are made to the *Julia* `MD2` code, that will not change.
+
+For the moment, I will leave the *Julia* `MD2` code be, as it is the data generator, and the rest is data analysis. However, there is really no reason to re-process properly processed files, so `combineruns` (which should probably be named `combineexecs`, as we name a single `csv` file an `r glossary("execution")`, not a `r glossary("run")`) needs to save it output as an `RDS` file. Note that `xn27` above takes about 420MB as CSV files, but only(!) 122MB as an `RDS` file. Regardless, `RDS` files are faster to read in (perhaps more than four times faster) so we need to save them and reuse them.
+
+Additionally, the following items should be stored: 1. each read of an `r glossary("execution")` file should save info about that file: the number of steps in the file, and the main stats from that file, as if it where a whole execution. 2. The filename and timestamp of the last file. This will make it easier to look if a new process should be run. 3. Keep the resampled data. To keep this simple, we need to require that the re-sampling factor be a sub-multiple of the number of steps of *any* of the executions. We are re-sampling with 500 steps, and 200 seems to be a minimum, so this isn't much of a restriction. 4. Keep the last processed file name and time stamp in the MD2DF file. This will ease the updates of an `MD2DF` data frame when new data is processed.
+
+The structure of the current code is as follows: 1. The `MD2DF` data frame is created typically with a call to `MD2DFfile`. This checks if the file already exists and reads that in, or creates a list of all files meeting the given pattern and passes that list to `createdf`. 2. `createdf` splits the file list into individual runs by the first two parts of the file name ({{< series >}} and {{< energy >}}), and passes the *pattern* identifying a particular run to `combineruns`, whose output is simply passed to `procMD2DF`. 3.`combineruns` reads in all the `csv` files that match the pattern sorted by file creation time (using `file.mtime()`) and combines them into a data frame, adjusting the steps count to change it from zero-up in each execution file to the running total of steps. 4. `procMD2DF` first creates a spectrum of the whole run, and then starts the regression processing on the kinetic energy (ke). It does this by creating the re-sampled set of the ke. It attempts to find a suitable part of the tail of the re-sampled data that has no trend (as defined by the `minp` parameter). It then produces the stats on the entire data record as a list and returns it to `createdf`
+
+While working on this, I realized that the `rbind` in `combineruns` may be a bottleneck, and the `data.table` package is already included (in the `common` routines included to access the `sdf` spectral estimation function), so `data.table::rbindlist` is available. Let's time it to see if it helps. It was 50.86 s with the old code. Well, `rbindlist` was a little faster: 47.66 s. Adding `data.table::fread` reduced it to 16.28 s, but required changes to code beyond the `fread()` call (and, `fread` is multithreaded, so may not have much of an advantage when called as part of multithreaded `creatdf`). `data.table` is a "keeper", but may break `createdf`.
+
+```{r}
+#| label: crst
+
+fn <- "S2b.0027.cr.RDS"
+(fullname <- paste( dir, fn, sep="/"))
+if (file.exists( fullname)) file.remove( fullname)
+fn <- "S2b.0027.rfdt.RDS"
+(fullname <- paste( dir, fn, sep="/"))
+if (file.exists( fullname)) file.remove( fullname)
+system.time( xn27l <- combineruns( dir, "S2b\\.0027\\."))
+```
+
+Note that the file `S2b.0027.cr.RDS` which stores a `data.table` is a bit bigger at 124 MB to the old size of 121.5 MB for the storage of the same data in a `data.frame`. The raw `csv` files occupy 420 MB. Let's look at the application of `procMD2DF()`.
+
+```{r}
+system.time( l <- procMD2DF( xn27l, skip=2000))
+str(l)
+```
+
+1.7 s isn't that long, and there are only 27 observations in `MD2DF.8`, so the worst case will be around a minute (once there are the background files created by `combineruns`).
+
+## Upgrading `createdf`
+
+We are adding three columns to the MS2DF database, and this is an obstacle. Previously, when this database was modified, we merely reprocessed all of the data. This was expedient, but prevented testing modification of existing records. We could do this yet again, but the whole point of these upgrades is to make the data analysis more efficient. In order to fully test the upgrade, we need to actually change existing entries. To do this fully, the old data will have to be added. Unfortunately, what is needed is file names and times, and what we will do is get these, and modify them for the recent `S1` series executions. We will use the basic file machinery in `combineruns` to gather the data.
+
+```{r}
+#| label: filetable
+patt <- "S*.scalars.csv"
+files <- list.files( dir, pattern = patt, full.names = FALSE)
+filetimes <- file.mtime( paste( dir, files, sep = "/"))
+length( files)
+runfiles <-  strsplit( files, split = "[.]")
+#example
+runfiles[1]
+dfrows <- unlist( lapply( runfiles,
+                          function(y) paste(y[1], y[2], sep=".")))
+dfrows[1]
+filetable <- data.table( file = files, time = filetimes, run = dfrows)
+setkey( filetable, run, time)
+runtable <- filetable[, j=.(lastfile=file[which.max(time)], 
+                            lasttime=time[which.max(time)], 
+                            filecount = .N), by=run]
+runtable
+```
+
+`runtable` now contains the data we want to add to the `MD2DF` data frame, except that we want to change the first nine (those with times after 2024-10-24 19:58). There were other runs that day, but they were in the morning, so we can use noon as the cuttoff. We will use these as a test as we will add these runs on the eveneing of the 24th to the table, once we update `createdf` to accept a data frame (or perhaps it will be a data table). The easiest way to do this is to delete the rows of those nine files from `filetable`, and then re-create `runtable`.
+
+```{r}
+t <- as.POSIXct(strptime("2024-10-24 12:00:00", "%Y-%m-%d %H:%M:%S"))
+adjustedft <- filetable[ !(time > t),]
+adjrt <- adjustedft[, j=.(lastfile=file[which.max(time)], 
+                         lasttime=time[which.max(time)], 
+                         filecount = .N), by=run]
+adjrt
+```
+
+Now we need to merge that with `MD2DF.8` to create the new format of MD2DF that we desire.
+
+```{r}
+#| label: MD2DF9
+MD2DF.9 <- as.data.table( MD2DF.8)
+MD2DF.9[, run := paste( series, energy, sep = ".")]
+setkey( MD2DF.9, run)
+MD2DF.9 <- merge( MD2DF.9, adjrt, by = 'run')
+```
+
+`MD2DF.9` now has the last file and last time of each run. `creatdf` can replace run records when executions are added. The first step is identifying which records to process. Since `createdf` operates on file lists, we can create a function which will walk down the subject MD2DF table and determine if there are any files in the subject directory whose time stamp exceeds that in the table. The file name template is simply the `run` field with `*.scalars.csv` appended. The following function can get such a file list for us.
+
+```{r}
+#| label: newfiles
+
+newfiles <- function( dir, patt, time) {
+   files <- list.files( dir, pattern = patt, full.names = TRUE)
+   filetimes <- file.mtime( files)
+   return( files[ filetimes > time])
+}
+
+newfiles( dir, "S2.0030.*.scalars.csv", t)
+cat( "Should be none\n")
+newfiles( dir, "S2b.0030.*.scalars.csv", t)
+```
+
+What do we do with it? All we really need is the updated run numbers, and we can get those like the following *impure* function (its an example of what might be included in `createdf` or a second wrapper function).
+
+```{r}
+#| label: changelist
+
+changelist <- function( i) {
+   a <-  MD2DF.9[ i,.(run, lasttime)]; 
+   fl <- newfiles( dir, paste( a$run, ".*.scalars.csv", sep=""), 
+                   a$lasttime)
+   return( list( run = a$run, nfiles = length( fl)))
+}
+
+cl <- rbindlist(lapply( 1:nrow(MD2DF.9), changelist))
+(dfrows <- cl[ nfiles > 0, run])
+gsub( ".", "\\.", paste( dfrows, ".", sep=""), fixed=TRUE)
+```
+
+`createdf` needs to be passed a list of *all* the files making up a run, not just the subset of new files. `combineruns` will figure that part out (it only get passed the pattern).
+
+Frankly, the whole mess of `R` software has gotten to be too complicated (as of 30 October 2024), and needs to be split apart into simpler routines. I'm going to make it into a package too, and split the functions into individual files. As of today, I'm going to publish this `qmd` file to a PDF. A new `qmd` will pick up the re-structureing documentation.
+
+# Glossary
+
+{{< glossary table=true >}}

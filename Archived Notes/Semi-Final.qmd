@@ -1,0 +1,1300 @@
+---
+title: "Semi-Final Data"
+author: "Philip A. Shea"
+date: last-modified
+format:
+  pdf:
+    documentclass: article
+    papersize: letter
+    toc: true
+    toc-depth: 2
+mainfont: Cambria
+
+editor: visual
+bibliography: references.bib
+---
+
+```{r}
+#devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+require( MD2RP)
+require( parallel)
+require( pracma)
+require( data.table)
+num_cores <- detectCores() - 1
+options(digits=5)
+```
+
+## Last Update
+
+I paused the data analysis to upgrade the `R` functions to a full package, and to allow `createdf` to add executions to a run vs. re-processing all runs from scratch. Today (11 November 2024, Veteran's day, among other things) this appears to be complete.
+
+```{r}
+#| label: MD2DF9
+getwd()
+MD2DF.9 <- readRDS( "..\\MD2\\MD2DF.9.RDS")
+op <- par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3, 
+           mgp = c(1.7, 0.4, 0))
+with( MD2DF.9, plotScalars( MD2DF.9))
+par(op)
+```
+
+The modifications we did to get to `MD2DF.9` (see [RoundingOut.pdf](RoundingOut.pdf)) is not exactly compatible with the new `createdf`, so it needs to be made so. Here is the problem:
+
+```{r}
+colnames(MD2DF.9)[57:59]
+colnames(TestMD2DF)[54:56]
+```
+
+The column numbers don't matter here, but the names and contents do. The fields `lastfile` and `lasttime` match the new names of `lrfdt.file` and `lrfdt.time`, so that is simply a rename, but we need to create the `lrfdt.steps` field for `MD2DF.9`. This field is really a useless field, which carries the number of steps in the last file that was appended to the run. These could be recorded as simply `NA` for the older files, as it is not likely to be used other than forensically.
+
+```{r}
+colnames(MD2DF.9)[57:59] <- colnames(TestMD2DF)[54:56]
+MD2DF.9$lrfdt.steps <- NA
+```
+
+## Inventory of `MD2DF` files
+
+```{r}
+#| label: MD2DF6
+MD2DF.6 <- readRDS( "..\\MD2\\MD2DF.6.RDS")
+nrow(MD2DF.6)
+op <- par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3, 
+           mgp = c(1.7, 0.4, 0))
+with( MD2DF.6, plotScalars( MD2DF.6))
+par(op)
+```
+
+```{r}
+#| label: MD2DF7
+MD2DF.7 <- readRDS( "..\\MD2\\MD2DF.6.RDS")
+nrow(MD2DF.7)
+op <- par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3, 
+           mgp = c(1.7, 0.4, 0))
+with( MD2DF.7, plotScalars( MD2DF.7))
+par(op)
+```
+
+```{r}
+#| label: MD2DF678eq
+cat( ".6 & .7 equal:", all.equal(MD2DF.6, MD2DF.7), "\n")
+MD2DF.8 <- readRDS( "..\\MD2\\MD2DF.6.RDS")
+cat( "MD2DF.8 obs.: ", nrow(MD2DF.8), "\n")
+cat( "is.data.table:", is.data.table( MD2DF.8), "\n")
+op <- par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3, 
+           mgp = c(1.7, 0.4, 0))
+with( MD2DF.8, plotScalars( MD2DF.8))
+par(op)
+cat( ".7 & .8 equal:", all.equal(MD2DF.7, MD2DF.8), "\n")
+```
+
+While we tried to execute care in keeping these three files different, the change to `data.table`s likely caused them to end up being identical.
+
+The next task is to merge the the data in `MD2DF.9` with the older files.
+
+```{r}
+MD2DF.8b <- copy( MD2DF.8) # Create a copy
+MD2DF.8b$run <- with( MD2DF.8, paste( series, energy, sep = "."))
+MD2DF.9$run %in% MD2DF.8b$run
+```
+
+The 27 rows of `MD2DF.9` must replace the rows of `.8b`, which must first have the new columns added to it (at least for the runs which are not being replaced). We'll follow the procedure from `RoundingOut.pdf`
+
+```{r}
+#| label: runtable
+dir <- "H:/Data/DSP/MD/Data/1980"
+patt <- glob2rx( "S2*.scalars.csv") # we don't want the S1 files.
+files <- list.files( dir, pattern = patt, full.names = FALSE)
+filetimes <- file.mtime( paste( dir, files, sep = "/"))
+length( files)
+runfiles <- strsplit( files, split = "[.]")
+dfrows <- unlist( lapply( runfiles, 
+                          function(y) paste(y[1], y[2], sep=".")))
+filetable <- data.table( file = files, time = filetimes, 
+                         run = dfrows)
+setkey( filetable, run)
+runtable <- filetable[, j=.(lrfdt.file = file[which.max(time)],
+                            lrfdt.time = time[which.max(time)],
+                            lrfdt.steps = NA), by=run]
+nrow( runtable)
+```
+
+That is only 100 runs. There are, evidently, 13 series `S2b` runs already represented in `.8`. For the moment we'll ignore this, as those rows will likely be replaced anyway. The following will merge `runtable` into `MD2DF.8b`,
+
+```{r}
+#| label: MD2DFA
+MD2DF.8c <- merge(MD2DF.8b, runtable, by = 'run', all.x = TRUE) # dt will do the merge in place in .8b
+(dl <- !(MD2DF.8c$run %in% MD2DF.9$run))
+MD2DF.8d <- MD2DF.8c[ dl,]
+MD2DF.A <- rbindlist( list(MD2DF.9, MD2DF.8d), use.names = TRUE)
+```
+
+```{r}
+#| label: fig-MD2DFA
+#| eval: true
+#| output: true
+#| fig-cap: "Scalar plots of the data in `MD2DF.A` combining the older data and the new runs.  Red triangles indicate data points not considered valid."
+#
+nrow(MD2DF.A)
+op <- par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3, 
+           mgp = c(1.7, 0.4, 0))
+plotScalars( MD2DF.A)
+par(op)
+```
+
+```{r}
+#| label: MD2DFB
+MD2DF.B <- MD2DFfile( "C:/Users/phils/Documents/DSP/MD/MD2/MD2DF.B.RDS", 
+                      dir, "*.scalars.csv", df = MD2DF.A, verbose = TRUE)
+```
+
+The original run of the code above processed the following files. When this document is rendered, MD2DF.B will already exist, so it will be simply read.
+
+``` r
+1475  files found.
+Processing  1475  files.
+S2\.0030 S2\.0031 S2\.0032 S2\.0033 S2\.0034 S2\.0035 S2\.0036 S2\.0037 
+S2\.0038 S2\.0039 S2\.0040 S2\.0051 S2\.0059 S2\.0074 S2b\.0026 S2b\.0027
+S2b\.0028 S2b\.0029 S2b\.0030 S2b\.0031 S2b\.0032 S2b\.0033 S2b\.0034 S2b\.0035 
+S2b\.0036 S2b\.0037 S2b\.0038  runs to process. 
+```
+
+```{r}
+#| label: fig-MD2DFB
+#| eval: true
+#| output: true
+#| fig-cap: "Scalar plots of the data as of 17 November 2024 (`MD2DF.B`).  Red triangles indicate data points not considered valid."
+#
+nrow(MD2DF.B)
+op <- par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3, 
+           mgp = c(1.7, 0.4, 0))
+plotScalars( MD2DF.B)
+pl <- recordPlot()
+png("MD2DF.B.png", width=600, height=300)
+replayPlot(pl)
+dev.off()
+par(op)
+```
+
+```{r}
+#| label: clearoldMD
+#| echo: false
+#| output: false
+rm( pl, filetable, MD2DF.6, MD2DF.7, MD2DF.8, MD2DF.8b, MD2DF.8c, MD2DF.8d, 
+    MD2DF.9, MD2DF.A, runtable, runfiles, dfrows, files, filetimes, patt, dl)
+gc()
+```
+
+# Data Analysis
+
+This set looks pretty complete, but some of the points, such as the highest `rtv`, need to be examined.
+
+```{r}
+#| label: fig-rtv
+#| eval: true
+#| output: true
+#| fig-cap: 'The kinetic energy relative variance $\sigma_{ke}^2 / {ke}^2$.'
+with( MD2DF.B,  
+      plotconf(TE.mean.rs, rtv, Fpvalue = Fpvalue, xlab = "Mean TE", 
+               ylab = "rtv", linethresh = 200))
+```
+
+Perhaps any of the *valid* points with rtv \> 0.0005 or so should be questioned.
+
+```{r}
+#| label: lrtvi
+(mrtvi <- which.max( MD2DF.B$rtv)) # max rtv index
+ (lrtvi <- MD2DF.B[ rtv > 0.0005 & Fpvalue > 0.5, which = TRUE]) # large rtv
+MD2DF.B[lrtvi, .(run, TE.mean.rs, rtv, ke.mean.rs, psiavg, total.steps, steps.avg, Estimate, Fpvalue)]
+```
+
+## `S2b.0028` Analysis
+
+`S2b.0028` is the worst offender. We'll look into that first.
+
+```{r}
+#| label: xn28
+
+dir <- "H:/Data/DSP/MD/Data"
+#lrfdt28 <- combineruns( dir, "S2b","0028")
+xn28 <- combineruns( dir, "S2b","0028")$rundt
+#rm( lrfdt28)
+```
+
+```{r}
+#| label: fig-xn28
+#| eval: true
+#| output: true
+#| fig-cap: "Plots of the basic data in run S2b.0028 after 2M steps."
+plotMD2( tail(xn28, -1000), dt=0.01)
+pl <- recordPlot()
+png("xn282M.png", width=600, height=300)
+replayPlot(pl)
+dev.off()
+```
+
+We can look at the kinetic energy closer. The first 1,000 points are skipped in the plot below.
+
+```{r}
+HPplot( 0.01*(1001:nrow( xn28)), tail( xn28$ke, -1000), xlab = "time",
+      ylab = "ke", type="l", panel.first = grid())
+```
+
+The Nelson-Halperin order parameter has a similar shape. The relaxation until $t \approx 2,500\tau$, or 250,000 steps.
+
+```{r}
+#| label: psi28
+psi <- Mod( complex( real = xn28$Rpsi, imaginary = xn28$Impsi))
+HPplot( 0.01*(1001:nrow( xn28)) + 10.01, tail( psi, -1000), type = "l", 
+        xlab = "time", ylab = expression( psi), panel.first = grid())
+```
+
+Averages of the two quantities can be plotted against each other.
+
+```{r}
+#| label: fig-psivke
+#| eval: true
+#| output: true
+#| fig-cap: '500 point block avereages of step-by-step Nelson-Halperin order paramter $| \langle \psi \rangle_n |$ vs mean kinetic energy for run `S2b.0028`.  The first 250,000 steps were skipped before the block avereages were started.'
+skip <- 250000
+kers28 <- rsmpavg( tail( xn28$ke, -skip), 500)
+psirs28 <- rsmpavg( tail( psi, -skip), 500)
+plot( kers28, psirs28, xlab = " Mean KE", 
+      ylab = expression( group( "|", psi, "|")))
+```
+
+Clearly, when the hexagonal state dissolves the temperature drops. This may be analogous to the phase change absorbing energy of ice melting when salt is introduced. Here, of course, the total energy is constant; the kinetic energy is becoming potential energy.
+
+### Rolling Regressions
+
+We can look at how the slope changes over a portion of the re-sampled data. The following code block creates a function to do that: hand it a vector and a length $n$, and it will move along the re-sampled data $n$ points at a time performing a length $n$ regression.
+
+```{r}
+#| label: rollest
+#| fig-cap: 'Point-by-point rolling linear regression slopes of 50 of the 500 step block avereages of the kinetic energy.  The dark blue line in the center is the mean of the data, and hte surrounding dark blue lines represent two standard deviations about the mean.  The dark red line in the center is the regression line of the points.'  
+rolllm <- function( vec, n) {
+   starti <- seq( from = 1, to = length( vec) - n, by = n)
+   steps <- 1:n
+   nm1 <- n - 1
+   unlist( lapply( starti, 
+                   function( i) coef( lm( y ~ steps, 
+                                    data = data.frame( y = vec[ i:(i + nm1)], 
+                                                   steps = steps)))["steps"]))
+}
+ke28 <- rsmpavg( xn28$ke, 500)
+rollest <- rolllm( ke28, 50)
+plot( rollest, panel.first = grid(), xlab = "Block Number", 
+      ylab = "50 block slope")
+rm <- mean(rollest)
+abline( h = rm, col = 'blue')
+rsd <- sd( rollest)
+abline( h = rm + 2 * rsd, col = 'darkblue')
+abline( h = rm - 2 * rsd, col = 'darkblue')
+abline( coef = coef(lm( rollest ~ seq_along(rollest))), col = 'darkred')
+```
+
+The oscillations are positive and negative, and move fairly slow. Autocorrelation will quantify "slow".
+
+```{r}
+acf(rollest, lag.max = 5)
+```
+
+So these rolling regressions are uncorrelated.
+
+```{r}
+#| label: clearxn28
+#| echo: false
+#| output: false
+rm( xn28, kers28, lrtvi, mrtvi, psi, psirs28, skip, ke28)
+gc()
+```
+
+### Faster High-Density Line Plots
+
+After much experimentation, we really don't see a great alternative to line plot, which takes minutes on million-point plots. I turned to the technique used in the old HP-8568 spectrum analyzer to plot a graph that appeared as it did in the older analog analyzers. The following was copied from <https://hpmemoryproject.org/an/pdf/8568_operating_q5.pdf>
+
+[![Description of HP 8568 Normal plotting algorithm.](Archived%20Notes/HP8568plot.PNG)](https://hpmemoryproject.org/an/pdf/8568_operating_q5.pdf)
+
+Created the `HPplot()` function on 16 November 2024.
+
+## `S2.0070` Analysis
+
+`S2.0070` has the second highest `rtv` value of the valid runs.
+
+```{r}
+#| label: xn70
+
+dir <- "H:/Data/DSP/MD/Data/1980"
+xn70 <- combineruns( dir, "S2","0070")$rundt
+```
+
+```{r}
+#| label: fig-xn70
+#| eval: true
+#| output: true
+#| fig-cap: "Plots of the basic data in run S2.0070 after 11k steps (first 1k steps skipped in plots)."
+plotMD2( tail( xn70, -1000), dt=0.01)
+pl <- recordPlot()
+png("xn702M.png", width=600, height=300)
+replayPlot(pl)
+dev.off()
+```
+
+There does seem to be some fluctuations happening here. Indeed, the relative temperature variance `rtv` is an indication that the $F_p$ value may be high because the variance was high. Perhaps the initialization was particularly unusual. This is a candidate for doubling the run length in order to be confident in the thermodynamic averages.
+
+```{r}
+#| label: clearxn70
+#| echo: false
+#| output: false
+rm( pl, xn70)
+gc()
+```
+
+## `S2b.0027` Analysis
+
+We had previously looked at this run, and it has the distinction of having the minimum highest `rtv` and the lowest $|\langle \psi_l \rangle|$. As a reminder of what we saw previously, here is the plot os `S2b.0027`.
+
+```{r}
+#| label: xn27
+dir <- "H:/Data/DSP/MD/Data"
+lrfdt27 <- combineruns( dir, "S2b","0027")
+xn27 <- lrfdt27$rundt
+```
+
+```{r}
+#| label: fig-xn27
+#| eval: true
+#| output: true
+#| fig-cap: "Plots of the basic data in run S2b.0027 after 2M steps."
+plotMD2( as.data.frame( xn27), dt = 0.01)
+pl <- recordPlot()
+png( "xn272M.png", width = 600, height = 300)
+replayPlot(pl)
+dev.off()
+```
+
+The real and imaginary components of $| \langle \psi_l \rangle_n |$ look like a rotation took place. This can be made evident by the following plot.
+
+```{r}
+#| label: fig-xn27angle
+#| eval: true
+#| output: true
+#| fig-cap: 'Plots the $\mathrm{Arg}( \langle \psi \rangle_n)$ for run `S2b.0027`. We use the notation $\langle \  \rangle_n$ to remind us that the value plotted is still an average, but here only over the $n$ particles.'
+with( xn27, {
+      HPplot( (30/pi) * Arg( complex( real = Rpsi, imaginary = Impsi)),
+              type = "l", xlab = "steps", ylab = "degrees", 
+              panel.first = grid())})
+```
+
+Since $\psi = e^{i 6 \theta_{i,j}}$, so in the plot, instead of multiplying by $180 / \pi$, we multiplied by $180 / 6 \pi = 30 / \pi$. A 15 degree shift should be observable.
+
+```{r}
+#| label: fig-xn27anglez
+#| eval: true
+#| output: true
+#| fig-cap: 'Zoom into shift of @fig-xn27angle. Top plot is angle; bottom plot is $| \langle \psi \rangle_n |$.'
+zi <- 1250000:1650000
+op <- par( mfrow = c(2, 1), mar = c(3, 3, 0.5, 0.5), tcl = -0.3, 
+           mgp = c(1.7, 0.4, 0))
+with( xn27[ zi,],{ 
+      HPplot( x = zi, 
+            y = (30/pi) * Arg( complex( real = Rpsi, imaginary = Impsi)),
+              type="l", xlab = "steps", ylab = "degrees", 
+              panel.first = grid())
+      HPplot( Mod( complex( real = Rpsi, imaginary = Impsi)),
+              type="l", xlab = "steps", ylab = expression(group( "|", psi, "|")), 
+              panel.first = grid())})
+par(op)
+```
+
+The fast shift is in the beginning, and it is about 15 degrees. Let's really zoom in.
+
+```{r}
+#| label: fig-xn27anglez2
+#| eval: true
+#| output: true
+#| fig-cap: 'Extreme zoom into first shift of @fig-xn27anglez.'
+zi <- 1305000:1330000
+op <- par( mfrow = c(2, 1), mar = c(3, 3, 0.5, 0.5), tcl = -0.3, 
+           mgp = c(1.7, 0.4, 0))
+with( xn27[ zi,], {
+      plot( x = zi/1000, 
+            y = (30/pi) * Arg( complex( real = Rpsi, imaginary = Impsi)),
+              type="l", xlab = "steps / 1,000", ylab = "degrees", 
+              panel.first = grid())
+      plot( x = zi/1000, y = Mod( complex( real = Rpsi, imaginary = Impsi)),
+            type="l", xlab = "steps", 
+            ylab = expression( group( "|", psi, "|")), 
+            panel.first = grid())})
+pl <- recordPlot()
+png("xn27anglez2.png", width=600, height=300)
+replayPlot(pl)
+dev.off()
+par(op)
+```
+
+So that's 5,000 steps over which the shift occurs (1,310K to 1,315k). If we can find the execution in which this is contained, we can re-execute it, and actually plot the points to a `gif` file and watch what happens. More on that in a moment.
+
+```{r}
+#| label: fig-xn27zpolar
+#| eval: true
+#| output: true
+#| fig-cap: 'Polar plot of $\langle \psi \rangle_n$ from @fig-xn27anglez2.  The blue circle shows unity magnitude.'
+zi <- 1310000:1330000
+with( xn27[ zi,], 
+      plot( x = Rpsi, y = Impsi, type="p", pch = ".",  xlab = "real", 
+            main = expression( paste( symbol("\341"), psi, symbol("\361"))),
+            ylab = "imaginary", xlim = c(-1, 1), ylim = c( -1, 1), asp=1,
+            panel.first = grid()))
+c <- complex( modulus = 1, argument = (pi/500)*(0:1000))
+points( Re(c), Im(c), pch = ".", col = 'blue')
+rm(c)
+```
+
+### Watching Melting in S2b.0027
+
+We need to find the specific execution (i.e., the file) where step 1,310K starts. The runs started small (5k), but grew to 50K steps per run. They are recorded in the `rftd` part of the `lrfdt` list.
+
+```{r}
+lrfdt27$rfdt[, ts := cumsum(steps)]
+lrfdt27$rfdt[ ts > 1200000 & ts < 1400000, .(file, ts, steps)]
+```
+
+The `ts` column reports the ending number of steps in that file. Therefore `S2b.0027.0056.scalars.csv` stops at 1,301k steps. The way the *Julia* `MD2` run scripts work, the state file will have been saved in the next number: `S2b.0027.0057.jld2`. To capture the action in @fig-xn27anglez2 we need to run another 9k steps to get to 1,310k, and then run 5k steps producing a `gif` file covering 1,310k to 1,315k.
+
+To make this work, we have to modify the start file name as the program uses it to name the output files, and we don't want to overwrite the existing files. `S2b.0027.0057.jld2` was copied to `gs.S2b.0027.0057.jld2`. Things did not go as smoothly as it shows below, but these were the main steps. Note that it had been a while since I produced a gif file, and the file was not named properly, so I had to modify that code to append ".gif" to the read file name. See *git* check-ins on or just after 18 November 2024 for details.
+
+``` julia
+  _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.11.1 (2024-10-16)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org/ release
+|__/                   |
+
+julia> pwd()
+"C:\\WINDOWS\\system32"
+
+julia> include("C:\\Users\\phils\\Documents\\DSP\\MD\\dev\\MD2\\src\\MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> td = "H:\\Data\\DSP\\MD\\Data"
+"H:\\Data\\DSP\\MD\\Data"
+
+julia> cd( td)
+
+julia> rf = td * "\\gs.S2b.0027.0057"
+"H:\\Data\\DSP\\MD\\Data\\gs.S2b.0027.0057"
+
+julia> sf = td * "\\gs.S2b.0027.0057b"
+"H:\\Data\\DSP\\MD\\Data\\gs.S2b.0027.0057b"
+
+
+julia> @time MD2.RunSystem( rf, sf, 9000)
+Restoring system on 2024-11-18T16:11:58.470
+System State restored from H:\Data\DSP\MD\Data\gs.S2b.0027.0057.jld2, timestamp: 2024-10-23T21:00:27.084
+Total Kinetic Energy: 3.527315361291719
+Linear Momentum: [-2.299883374023981e-12, 8.141924634497144e-13]
+Angular Momentum: 6.563786163483726
+MD2State: Pe(rskn) = 0.0032243875163311076, Force(rskn) = 0.001624785848491362
+Density: 0.3183098861837907, Shell: 5.0, NHOPr: 2.601766973050859
+Mean # in shell: 25.0, Min Mmax: 6400.0
+System state saved in H:\Data\DSP\MD\Data\gs.S2b.0027.0057b.jld2 at 2024-11-18T16:12:01.777
+Scalars saved in H:\Data\DSP\MD\Data\gs.S2b.0027.0057.scalars.csv
+  4.555619 seconds (105.38 M allocations: 2.044 GiB, 5.12% gc time, 29.88% compilation time: 25% of which was recompilation)
+false
+
+julia> rf = sf
+"H:\\Data\\DSP\\MD\\Data\\gs.S2b.0027.0057b"
+
+julia> sf = "H:\\Data\\DSP\\MD\\Data\\gs.S2b.0027.0057c"
+"H:\\Data\\DSP\\MD\\Data\\gs.S2b.0027.0057c"
+
+
+julia> @time MD2.RunSystem( rf, sf, 5000, animate = true)
+Restoring system on 2024-11-18T16:40:32.775
+System State restored from H:\Data\DSP\MD\Data\gs.S2b.0027.0057b.jld2, timestamp: 2024-11-18T16:12:01.777
+Total Kinetic Energy: 3.0471098145154794
+Linear Momentum: [-2.3292999473678577e-12, 3.925124114623202e-13]
+Angular Momentum: -12.927422835122153
+MD2State: Pe(rskn) = 0.0032243875163311076, Force(rskn) = 0.001624785848491362
+Density: 0.3183098861837907, Shell: 5.0, NHOPr: 2.601766973050859
+Mean # in shell: 25.0, Min Mmax: 6400.0
+System state saved in H:\Data\DSP\MD\Data\gs.S2b.0027.0057c.jld2 at 2024-11-18T16:44:49.899
+[ Info: Saved animation to H:\Data\DSP\MD\Data\gs.S2b.0027.0057b.gif
+Scalars saved in H:\Data\DSP\MD\Data\gs.S2b.0027.0057b.scalars.csv
+300.877655 seconds (219.43 M allocations: 6.982 GiB, 0.37% gc time, 0.73% compilation time)
+false
+```
+
+The animation is available here: [gs.S2b.0027.0057b.gif](H:/Data/DSP/MD/Data/gs.S2b.0027.0057b.gif). It is difficult to determine exactly what is happening. The crystal appears to shift, and attempts to take up another orientation. I suspect that the periodic boundary conditions are incompatible with the other angle. This system may be too small for an "island" of rotated crystals to exist in suspended in a liquid state.
+
+```{r}
+#| label: clearxn27
+#| echo: false
+#| output: false
+rm( lrfdt27, xn27, zi, pl)
+gc()
+```
+
+# Reversal Test
+
+If we're pinning our hope that the old process of perturbing the initialization positions was putting the system in an odder state than the minimum potential energy state, we really should run the reversal test that we have never run. To do this, we need a *Julia* program which will read in a state file and reverse the velocities. The particles ought to reverse their trajectories and end up where they started.
+
+Adding a `revtest` function to the suite is a good idea, as it will allow us to test different incarnations of the software easily.
+
+``` julia
+C:\Users\phils>julia --threads 7
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.11.1 (2024-10-16)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org/ release
+|__/                   |
+
+julia> pwd()
+"C:\\Users\\phils"
+
+julia> include("C:\\Users\\phils\\Documents\\DSP\\MD\\dev\\MD2\\src\\MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> using .MD2
+
+julia> MD2.revtest( "test",30,"revt1.0030.",1000)
+temp = 0.03
+basename = "revt1.0030.0030"
+System state saved in revt1.0030.0030.0000(5).jld2 at 2024-11-22T14:35:47.968
+0.007217981517795372
+
+julia> MD2.revtest( "test",15,"revt1.0015.",1000)
+temp = 0.015
+basename = "revt1.0015.0015"
+System state saved in revt1.0015.0015.0000.jld2 at 2024-11-22T14:48:23.549
+0.0009535855761690912
+```
+
+The final statement in `revtest()`is `sum( dot( dp, dp))`, where `dp` is the delta-position vector. Therefore, these return numbers are the square of the sum of the particle positions deltas. The initialization at `t = 30` yielded a squared difference of 0.00721798 meaning that the RMS particle displacement was `{r}  sqrt(0.007217981517795372/256)`. The second colder initialization at `t = 15` had an RMS displacement of `{r}  sqrt(0.0009535855761690912/256)`. Note that these are random initializations, so each run will be different.
+
+# Questioning Validity
+
+The validity of the following points must be considered: the highest `rtv` point in @fig-MD2DFA, which has a large relative variance but is still considered valid, and other points considered valid within the transition region. We also note that in [UpdatetoRuncombiner.pdf](file:///C:/Users/phils/Documents/DSP/MD/MD2/Archived%20Notes/UpdatetoRuncombiner.pdf) we ran a 10,000 trial experiment of 50-point trials of the equilibrium scheme against random normal data. 50 points represent 500-point block averages, or 26,000 step runs (assuming the first 1,000 steps are skipped). In that experiment, the method failed to recognize almost 28% of the trials as having no slope. This is similar to what what we see.
+
+```{r}
+#| label: fig-runns
+#| output: true
+#| fig-cap: "The number of runs vs. total energy plotted on a log scale. There are 72 runs with 11k steps (the basic initial run for all initializxations), 17 runs with between 26K and 31K steps, one with 61k, and 23 with between 2M and 2.25M steps."
+with( MD2DF.B, plotconf(  TE.mean.rs, total.steps, Fpvalue = Fpvalue, 
+                          linethresh = 200, log = "y", xlab = "Total Energy",
+                          ylab = "Steps"))
+pl <- recordPlot()
+png("runs241118.png", width=600, height=300)
+replayPlot(pl)
+dev.off()
+```
+
+Here are the counts.
+
+```{r}
+nrow(MD2DF.B)
+MD2DF.B[ order( total.steps), .N, by = total.steps]
+```
+
+The basic run was 11k steps: 1k initialization plus 10k at equilibrium. Of the 113 runs, 72 (63.7%) appear to be in equilibrium. The other 41 required more runs.
+
+```{r}
+MD2DF.B[ Fpvalue < 0.5, .(run, TE.mean.rs, psiavg,
+                          total.steps, Estimate, Std.Error, 
+                          Fpvalue)][order(TE.mean.rs),]
+```
+
+Note that all of these have very small estimated slopes, and most have small $F_p$ values.
+
+### Examination of `S2b.0026`
+
+`S2b.0026` has a large value of $|\langle \psi \rangle_{n,s} |$ (where the average is over $n,s$: the particles and steps), appears to be below the start of the transition region, and has over 2M steps, but is still not flagged as valid. Read it in and skip the first 2,000 steps.
+
+```{r}
+#| label: xn26
+dir <- "H:/Data/DSP/MD/Data"
+xn26 <- tail( combineruns( dir, "S2b","0026")$rundt, -2000)
+```
+
+```{r}
+#| label: fig-xn26
+#| eval: true
+#| output: true
+#| fig-cap: "Plots of the basic data in run S2b.0026 after 2M steps. The first 2k steps were dropped before plotting."
+plotMD2( as.data.frame( xn26), dt = 0.01)
+pl <- recordPlot()
+png( "xn262M.png", width = 600, height = 300)
+replayPlot( pl)
+dev.off()
+```
+
+The following is a close-up of the kinetic energy.
+
+```{r}
+#| label: fig-xn26ke
+#| eval: true
+#| output: true
+#| fig-cap: 'Kinetic energy over steps for run S2b.0026 (the first 2,000 steps have been dropped).'
+with( xn26, {
+      HPplot( ke, type="l", xlab = "steps", ylab = "ke", 
+              panel.first = grid())})
+```
+
+We need to look at the regression data to see why this has such a small slope, yet the slope is still so significant. The current data frame of `MD2DF.B` was developed using a block average of 500, as can be seen in the data frame's attributes `attr( MD2DF.B, "call")$rsblk` = `{r} attr( MD2DF.B, "call")$rsblk`. We can recreate this via
+
+```{r}
+#| label: fig-rsxn26ke
+#| eval: true
+#| output: true
+#| fig-cap: 'Re-sampled kinetic energy.  The blue line in the center (almost under the red line) is the reported mean, and the two dark blue lines surrounding it represent $\pm1\sigma_{ke}$.  The red line is the regression line with the center crossing the mean.'
+rsxn26ke <- rsmpavg( xn26$ke, 500)
+rec26 <- MD2DF.B[ run == "S2b.0026"]
+plot( rsxn26ke, type="p", pch = ".", xlab = "Resammpler Steps", 
+      ylab = "avereage kinetic energy")
+abline( h = rec26$ke.mean.rs, col = 'blue')
+abline( h = rec26$ke.mean.rs + rec26$ke.sd.rs * c(-1, 1), col = 'darkblue')
+#abline( h = rec26$ke.mean.rs - rec26$ke.sd.rs, col = 'darkblue')
+abline( a = rec26$ke.mean.rs - rec26$Estimate * length( rsxn26ke)/2, 
+        b = rec26$Estimate, col='red', lwd = 2)
+```
+
+So, we can see that our criteria for equilibrium leaves something to be desired. What we have here is a positive slope that is almost four times its standard error, but that slope is tiny. It is *significantly* tiny. The deviation from the mean at the two ends of the line is about 18% of the standard deviation (although, frankly, it hardly looks it). This can be calculated with `50 * rec26$Estimate * length(rsxn26ke) / rec26$ke.sd.rs` = `{r} rec26$Estimate * length(rsxn26ke) / rec26$ke.sd.rs` (since half the error is on the left and half on the right, we multiply by 50 instead of 100).
+
+The autocorrelation of the re-sampled block averages will tell us how long correlations are lasting.
+
+```{r}
+#| label: rsacf
+acf( rsxn26ke, lag.max = 40, panel.first=grid(), 
+     main="Re-sampled S2b.0026 ke")
+```
+
+We can make an argument that the correlations don't diminish until 13 to 20 lags in the above plot. Since each sample is the average of 500 steps, that means that the relaxation is taking 20 x 500 = 10,000 steps, and that's after we already skipped 2,000 in making the data frame. The data for the re-sampled $\langle |\psi_l| \rangle_{n,b}$ (where the average here is over the $n$ particles and the $b$ steps in the block) looks similar to the kinetic energy:
+
+```{r}
+#| label: fig-rspsi26
+rsxn26psi <- rsmpavg( Mod( complex( real = xn26$Rpsi, imaginary = xn26$Impsi)),
+                      500)
+plot( rsxn26psi, type="p", pch = ".", ylab = expression(psi), xlab = "steps")
+```
+
+Since we have the data handy, we wanted to plot the difference between block averages of the modulus of the average ($| \langle \psi \rangle_{n,b}|$) versus the average of the modulus ($\langle |\psi_l| \rangle_{n,b}$):
+
+```{r}
+#| label: fig-rspsi26d
+#| caption: '$\langle |\psi_l| \rangle_{n,b} - | \langle \psi \rangle_{n,b}|$ in the 500 step re-sampled blocks.'
+rsxn26psi2 <-  Mod( rsmpavg( complex( real = xn26$Rpsi, imaginary = xn26$Impsi),
+                      500))
+plot(rsxn26psi - rsxn26psi2, ylab = "psiabs - psiacg", xlab = "steps")
+```
+
+We can see that this run is trying to melt as $\langle |\psi| \rangle_n$ drops below 0.6.
+
+```{r}
+#| label: fig-rspsi26vke
+#| caption: '$\langle |\psi| \rangle_n$'
+plot( rsxn26ke, rsxn26psi, type = "p", pch = 1, ylab = expression(psi), 
+      xlab = "ke")
+```
+
+We need to decide how to determine if a very small slope is small enough. First, as long as we are going to accept a small slope, we will want it to have at least a 5% significance, as measured by the F-statistic $F_p$. The term is `rec26$Fpvalue`: `{r} rec26$Fpvalue`, so this one is very good in that regard. How mony points should we use? The table and plots below will help us understand how to decide.
+
+```{r}
+#| label: t3
+lrsxn26 <- length( rsxn26ke)
+t<-lapply( 0:10, function(i) {
+   steps <- (i*200+1):lrsxn26
+   lmMD2( data.frame( step = steps, ke = rsxn26ke[steps]))
+})
+t2 <- t( matrix( unlist(t), nrow = 7, ncol = 11, 
+              dimnames = list( names(unlist(t)[1:7]), 1:11)))
+t2 <- t2[ order( t2[,"nr"]),]
+(t3 <- cbind( t2, Perr = 50 * t2[,"nr"] * t2[,"Estimate"] / rec26$ke.sd.rs))
+```
+
+```{r}
+#| label: fig-rsxn26reg
+#| eval: true
+#| output: true
+#| fig-cap: 'Results of eleven different length regressions (200-block steps) on re-sampled `S2b.0026` run. Top panel is the $F_p$ value (the probability that the slope is due to random data). The bottom panel is the error of the slope at the ends of the sample as a percentage of the kinetic energy standard deviation (this $\sigma$ calculated just once over the whole 4,098 block average).'
+op <- par( mfrow = c(3, 1), mar = c(3, 3, 0.5, 0.5), tcl = -0.3, 
+           mgp = c(1.7, 0.4, 0))
+plot( t3[,"nr"], t3[, "Estimate"], xlab = "blocks", ylab = "Slope",
+      panel.first = grid())
+plot( t3[,"nr"], t3[,"Fpvalue"], xlab = "blocks", ylab = "Fp",
+      panel.first = grid())
+text( t3[,"nr"], t3[,"Fpvalue"],  
+      format( t3[,"Fpvalue"], trim=TRUE, digits=2), pos = 3, cex = 0.8)
+plot( t3[,"nr"], t3[,"Estimate"], 
+      xlab = "blocks", ylab = "% error", panel.first = grid())
+par(op)
+```
+
+This run failed the $F_p$ test at all but the first and third sample above, with $F_p$ values of (`{r}  t3[c(1, 3), "Fpvalue"]`) and with number of samples (`{r}  t3[  c(1, 3), "nr"]`), respectively. A test which takes $F_p > 0.5$ or a slope with percentage error less than 10% with significance 5% or better would have accepted all but the seventh length of 3,298 blocks, which had an error of `{r} 50 * t3[7, "nr"] * t3[7, "Estimate"] / rec26$ke.sd.rs`%.
+
+The auto-correlations need further examination.
+
+```{r}
+#| label: acf1
+ acf(xn26$ke, lag.max=2000)
+```
+
+Dropping the first 10k steps doesn't change it much (recall that the first 2,000 steps had already been skipped.) The calculations above and below each take about 10 seconds.
+
+```{r}
+#| label: acf2
+ acf(tail( xn26$ke, -10000), lag.max=2000)
+```
+
+I think we are seeing a different behavior than we saw in 1980. This may be due to the initialization. While the initialization with all particles sitting in their home positions is clearly an unusual state, which has all the particles in their minimum potential energy positions. This is obvious on all of the kinetic energy plots which start at almost double the final average kinetic energy.
+
+```{r}
+#| label: clearxn26
+#| echo: false
+#| output: false
+rm( xn26, pl, rec26,t, t2, t3, rsxn26ke, rsxn26psi, rsxn26psi2)
+gc()
+```
+
+## Nelson-Halperin Order Parameter
+
+There are two metrics recorded for the parameter: `psiavg` and `psiabs.mean.rs`. The parameter is recorded step-by-step as real and imaginary components of the base parameter. Its calculation is as follows:
+
+$$
+\psi_l = \frac{1}{N_q} \sum_{j = 1}^{N_p - 1} \sum_{k \ near\ j} e^{i 6 \theta_{j,k}}
+$$
+
+where $l$ is the step number, $N_p$ are the number of particles, $k \ near\ j$ means the particles "near" particle $j$ such that $k > j$ (and near is simply defined as less than 3/2 of the mean inter-particle distance, a constant in the calculation), and $\theta_{j,k}$ is the angle between the x-axis and the vector between particles $j$ and $k$. $N_q$ is the count of those particles that met the $k \ near\ j$ criteria. $\psi_l$ is a complex quantity whose magnitude indicates the average alignment of the particles in a hexagonal lattice at step $l$. Since we have the step-by-step value of $\psi_l$, we can perform the average two ways. Perhaps the obvious is to compute the magnitude of each $\psi_l$ and then average those magnitudes over $l$. This is $\langle |\psi_l| \rangle_s$, where the magnitude is computed at each step (and that is what is plotted in the bottom right pane of `plotMD2`) and teh ebverage is over all steps $s$. The analogy to Fourier analysis is supported by this technique, in which multiple spectrums taken at different times are averaged in magnitude. The other value we can compute is the magnitude of the average, or $|\langle \psi_l \rangle_s|$. The spectral analogy is of a higher resolution Fourier transform. They are both plotted in @fig-bothpsi below.
+
+```{r}
+#| label: fig-bothpsi
+#| output: true
+#| fig-cap: 'Plots of $\langle |\psi_l| \rangle$ (red open symbols) and $|\langle \psi_l \rangle|$ (blue closed symbols).  The triangles are those points not considered valid.'
+minp <- 0.5
+with( MD2DF.B,{
+   valid <- Fpvalue > minp
+   pch <- rep_len( 16, length.out = nrow( MD2DF.B)) # solid symbols
+   pch[ !valid] <- 17
+   plot( x = TE.mean.rs, y = psiavg, col = "darkblue", pch = pch, 
+         xlab = "Total Energy", ylab = expression(psi),
+         panel.first = grid())
+   pch <- pch - 15 # This will switch to open symbols
+   points( x = TE.mean.rs, y = psiabs.mean.rs, col = "darkred", pch = pch)
+})
+pl <- recordPlot()
+png("bothpsi.png", width=600, height=300)
+replayPlot(pl)
+dev.off()
+```
+
+The two techniques are almost identical in the colder (solid) runs, but the second average $|\langle \psi_l \rangle|$ (the modulus of the average) shows a sharp break at `psiavg`$\approx$ 0.6. The below code finds the minimum value above 0.6:
+
+```{r}
+#| label: findpsibrk
+#| output: true
+
+setkey( MD2DF.B, TE.mean.rs ) # make the mean TE the sort item
+(i <- which.min (MD2DF.B[ psiavg > 0.6,]$psiavg))
+(minspsi <- MD2DF.B[ i, .(run, psiavg, psiabs.mean.rs, TE.mean.rs, ke.mean.rs,
+                          total.steps, steps.avg)])
+```
+
+This was the run we had looked at in `RoundingOut.pdf` that appeared to melt and re-freeze.
+
+The difference between the two metrics is striking.
+
+```{r}
+#| label: fig-psidelta
+#| output: true
+#| fig-cap: 'Plot of $\langle |\psi_l| \rangle - |\langle \psi_l \rangle|$ \.  The blue verticle line is the total energy of run `S2b.0027`, and it pierces the black circle data point for Sb2.0027 with the value of 0.026.'
+minp <- 0.5
+with( MD2DF.B,{
+   valid <- Fpvalue > minp
+   pch <- ifelse( valid, 1, 2)
+   color <- ifelse( valid, "black", "red")
+   plot( x = TE.mean.rs, y = (psiabs.mean.rs - psiavg), col = color, pch = pch, 
+         panel.first = grid())
+})
+abline( v = minspsi$TE.mean.rs, col="blue")
+```
+
+This is due to the melting causing $\theta$ to rotate (see @fig-xn27angle below), but the magnitude remains high.
+
+## `S2.0029` Analysis
+
+`S2.0029` is the next higher value of $|\langle \psi_l \rangle_{n,s}|$ at 0.63, and is worth taking a look at.
+
+```{r}
+(S2.0029 <- unlist( MD2DF.B[ run=="S2.0029", 
+                            .(total.steps, steps.avg, TE.mean.rs, TE.sd.rs,
+                              ke.mean.rs, ke.sd.rs)]))
+```
+
+The total energy and temperature (kinetic energy) is very close to the min $\psi$ we looked at earlier:
+
+```{r}
+minspsi
+minspsi$TE.mean.rs - S2.0029["TE.mean.rs"]
+```
+
+The following code will read it in and plot it.
+
+```{r}
+#| label: xn29
+
+dir <- "H:/Data/DSP/MD/Data/1980"
+xn29 <- combineruns( dir, "S2","0029")$rundt
+```
+
+```{r}
+#| label: fig-xn29
+#| eval: true
+#| output: true
+#| fig-cap: "Plots of the basic data in run S2.0029 after 11k steps."
+plotMD2( as.data.frame(xn29), dt=0.01)
+pl <- recordPlot()
+png("xn292M.png", width=600, height=300)
+replayPlot(pl)
+dev.off()
+```
+
+The phase question can be answered by a phase plot of $| \psi_l |$.
+
+```{r}
+#| label: fig-xn29zpolar
+#| eval: true
+#| output: true
+#| fig-cap: 'Polar plot of $\psi$ from @fig-xn29.  The blue circle shows full magnitude.'
+zi <- 1000:nrow(xn29)
+with( xn29[ zi,], 
+      plot( x = Rpsi, y = Impsi, type="p", pch = ".",  xlab = "real", 
+            ylab = "imaginary", xlim = c(-1, 1), ylim = c( -1, 1), asp=1,
+            panel.first = grid()))
+c <- complex( modulus = 1, argument = (pi/500)*(0:1000))
+points( Re(c), Im(c), pch = ".", col = 'blue')
+pl <- recordPlot()
+png("xn292polar.png", width=300, height=300)
+replayPlot(pl)
+dev.off()
+rm(c)
+```
+
+```{r}
+#| label: cleanx29
+#| eval: true
+#| output: false
+rm( zi, pl, xn29)
+gc()
+```
+
+# Defining the transition region.
+
+The exact position of the transition region is a bit difficult to pin down. While there does appear to be a highest temperature (i.e., total energy) at which the system remains solid (set by run S2.0029) at TE = 0.1535243$\epsilon$, pinpointing the end of the region, where the entire system is fluid, is harder to do. The plot below with run `S2.0029` pegging the start of the transition region shows the issues.
+
+```{r}
+#| label: fig-tempener
+#| output: true
+#| fig-cap: 'Kinetic energy (i.e., temperature) vs total energy.  The triangles are those points not considered valid.'
+temin <- S2.0029["TE.mean.rs"]
+kemin <- S2.0029["ke.mean.rs"]
+plotconfMD2(df = MD2DF.B[ TE.mean.rs < 0.18,], y = "ke")
+abline( v = temin, h = kemin)
+```
+
+The pressure plot is even less help.
+
+```{r}
+#| label: fig-pressener
+#| output: true
+#| fig-cap: 'Pressure vs. total energy.  The triangles are those points not considered valid. The verticle line is temin.'
+
+plotconfMD2(df = MD2DF.B[ TE.mean.rs < 0.18,], y = "Pressure",)
+abline( v=temin)
+```
+
+As discussed above, the Nelson-Halperin order parameter defines a sharp start to the region.
+
+```{r}
+#| label: fig-psike
+#| caption: '$|\langle \psi_l \rangle_s|$ vs. kinetic energy, with the hypothesiszed meting point noted as a verticle line.'
+with( MD2DF.B[ TE.mean.rs < 0.18,], 
+      plotconf( ke.mean.rs, psiavg, Fpvalue = Fpvalue, linethresh = 200, 
+                xlab = "Kinetic Energy", ylab = expression(psi)))
+abline(v=kemin)
+```
+
+Here we use the kinetic energy min and max to make a range. The two "ears" at and below TE = 0.15 indicate that there was a temperature excursion not present in the other valid data.
+
+```{r}
+#| label: fig-keminmax
+#| caption: 'Kinetic energy vs. total energy with the raw kinetic energy limit plotted.'
+with( MD2DF.B[ TE.mean.rs < 0.18,], 
+      plotconf( TE.mean.rs, ke.mean.rs, sd = ke.max.raw - ke.min.raw, 
+                Fpvalue = Fpvalue, linethresh = 200, xlab = "Total Energy",
+                ylab = "Kinetic Energy"))
+abline( v = temin, h = kemin)
+```
+
+## Regression Approach
+
+Let's look closely at the transition region.
+
+```{r}
+#| label: fig-tempenerz1
+#| output: true
+#| fig-cap: 'Kinetic energy (i.e., temperature) vs total energy, zoomed into the transition region.  The triangles are those points not considered valid.'
+temin <- S2.0029["TE.mean.rs"]
+kemin <- S2.0029["ke.mean.rs"]
+plotconfMD2(df = MD2DF.B[ 0.15 < TE.mean.rs & TE.mean.rs < 0.165,], y = "ke")
+abline( v = temin, h = kemin)
+```
+
+We can see points designated valid below total energy of $0.158\epsilon$, and while those are likely good equilibrium temperatures, they may be in the transition region. The next point flagged valid is above $0.16\epsilon$. We'll perform regressions below $0.158\epsilon$ for the solid region and above $0.16\epsilon$ for the fluid region. Note that the solid region has a "x" intercept at total energy equal to $0.127373\epsilon$ (see *Mathematica* [MD Notes.nb](MD%20Notes) notebook for the calculation). The simple linear regression is as follows:
+
+```{r}
+#|label: simplm
+vs <- MD2DF.B[TE.mean.rs <= temin & Fpvalue > 0.5, # valid solid
+              .(run, ke.mean.rs, TE.mean.rs, ke.sd.rs)]
+vf <- MD2DF.B[TE.mean.rs > 0.16 & Fpvalue > 0.5,   # valid fluid
+              .(run, ke.mean.rs, TE.mean.rs, ke.sd.rs)]
+slm <- lm( ke.mean.rs ~ TE.mean.rs, data=vs, weights = 1/(vs[,ke.sd.rs])^2) 
+# solid lm
+flm <- lm( ke.mean.rs ~ TE.mean.rs, data=vf, weights = 1/(vf[,ke.sd.rs])^2) 
+# fluid lm
+(sslm <- summary( slm)) # summary of solid lm
+(sflm <- summary( flm)) # summary of fluid lm
+```
+
+We can use the variances as weights to the regression
+
+```{r}
+#| label: wtlm
+swlm <- lm( ke.mean.rs ~ TE.mean.rs, data=vs, weights = 1/(vs[,ke.sd.rs])^2) 
+# solid weighted lm
+fwlm <- lm( ke.mean.rs ~ TE.mean.rs, data=vf, weights = 1/(vf[,ke.sd.rs])^2) 
+# fluid weighted lm
+(sswlm <- summary( swlm)) # summary of solid weighted lm
+(sfwlm <- summary( fwlm)) # summary of solid weighted lm
+```
+
+The intercept for the solid phase listed above is really a reflection of the potential energy at rest. The total energy at zero kinetic energy is this intercept divided by the slope:
+
+```{r}
+solidc <- coef( swlm) # solid coefficients
+-unname(solidc['(Intercept)'] / solidc['TE.mean.rs'])
+```
+
+This is pretty close to the known correct value of $0.127373\epsilon$. The following will perform the regression using the known correct intercept:
+
+```{r}
+#| label: intreg
+minpe <-  0.127373 # Theoretical minimum PE
+swlm2 <- lm( ke.mean.rs ~ I(TE.mean.rs - minpe) - 1, data=vs, 
+             weights = 1/(vs[,ke.sd.rs])^2) # Solid weighted lm with minpe
+summary( swlm2)
+```
+
+We need that zero point energy reflected as "y" intercept for the `abline` function, and that is merely the minimum potential energy times the slope (as a negative number). We can now draw the complete temperature curve with estimated slopes and intercepts. Without getting wrapped up in the statistics (that can come later), we can use `temin` as the minimum energy at the start of the region, and use the fluid regression line to "predict" where that line intercepts the horizontal line predicted by the solid regression line.
+
+```{r}
+#| label: fig-treg
+#| fig-cap: 'Drawing of the transition region, clearly showing where adding energy does not change the temperature. The black line is the solid region (weighted regression of valid points below `{r} temin`), the blue line the fluid region (weighted regression of valid points above 0.16), and the red line the transition region. one-$\sigma$ confidence intervals of measurements are plotted along with the regression lines, as well as gray region showing the maximum - minimum range for each measurement. Points are shown in black circles and red triangles showing valid and not valid points.'
+cswlm2 <- coef( swlm2) # Coefficients of solid wtd. lm with minpe
+intercept <- -cswlm2 * minpe # y intercept of solid wtd. minpe line.
+slinex <- c(minpe, temin) # TE endpoints for solid line.
+sliney <- predict( swlm2, data.frame( TE.mean.rs = slinex)) # solid line ke's
+cfwlm  <- coef( fwlm) # coefficients of fluid lm
+tlinex <- c( temin, (sliney[2] - cfwlm[1]) / cfwlm[ 2]) 
+# transition line x endpoints
+tliney <- c( sliney[2],  sliney[2]) # trans. line y endpoints
+maxte <- max( MD2DF.B[ Fpvalue > 0.5, TE.mean.rs]) # yep, max TE
+flinex <- c( tlinex[2], maxte) # fluid line x endpoints
+fliney <- predict( fwlm, data.frame( TE.mean.rs = flinex)) # fluid line y ends
+plotconfMD2( y="ke", df = MD2DF.B, linethresh = 200,
+      xlab = "Total Energy per Particle", ylab = "Kinetic Energy per Particle") # sets up plot
+#points( ke.mean.rs ~ TE.mean.rs, data = vs, pch=1)
+#points( ke.mean.rs ~ TE.mean.rs, data = vf, pch = 1, col='blue')
+#abline( intercept, cswlm2)
+#abline( coef=cfwlm, col='blue')
+lines( slinex, sliney, lwd = 2)
+lines( tlinex, tliney, lwd = 2, col = 'red')
+lines( flinex, fliney, lwd = 2, col = 'blue')
+grid()
+pl <- recordPlot()
+png("wreg.png", width=600, height=300)
+replayPlot(pl)
+dev.off()
+```
+
+So the transition regions starts at `TE =` `{r} temin` at kinetic energy of `{r} sliney[2]`, and ends at `TE =` `{r} flinex[1]`.
+
+```{r}
+#| label: fig-tregz
+#| fig-cap: 'Close-up of transition region from @fig-treg.'
+
+"%within%" <- function( vector, range) # define convenience function.
+   (vector > range[ 1]) & (vector < range[ 2])
+plotconfMD2( y="ke", df = MD2DF.B[TE.mean.rs %within% c(0.15, 0.165),], 
+             linethresh = 200, xlab = "Total Energy per Particle", 
+             ylab = "Kinetic Energy per Particle") # sets up plot
+#points( ke.mean.rs ~ TE.mean.rs, data = vs, pch=1)
+#points( ke.mean.rs ~ TE.mean.rs, data = vf, pch = 1, col='blue')
+#abline( intercept, cswlm2)
+#abline( coef=cfwlm, col='blue')
+lines( slinex, sliney, lwd = 2)
+lines( tlinex, tliney, lwd = 2, col = 'red')
+lines( flinex, fliney, lwd = 2, col = 'blue')
+text( x = tlinex, y = tliney, labels = format( tlinex, trim=TRUE, digits=4), 
+      pos = c( 3, 1), cex = 0.8)
+grid()
+pl <- recordPlot()
+png("wregz.png", width=600, height=300)
+replayPlot(pl)
+dev.off()
+```
+
+It is obvious that the fluid region regression is missing data near the bottom. Also, there are two "valid" points below `TE = 0.158`. Also note that we are using the regressions to determine the transition region, but the majority of the points are far from the transition region. One more regression including these points (i.e., those "valid" points such that `TE.mean.rs > 0.156`) is worth a try.
+
+```{r}
+#| label: freg2
+vf2 <- MD2DF.B[TE.mean.rs > 0.156 & Fpvalue > 0.5, # expanded valid fluid points
+               .(run, ke.mean.rs, TE.mean.rs, ke.sd.rs)]
+fwlm2 <- lm( ke.mean.rs ~ TE.mean.rs, data=vf2, weights = 1/(vf2[,ke.sd.rs])^2)
+# fluid wtd. lm on expanded valid points
+summary( fwlm2)
+```
+
+```{r}
+#| label: fig-tregz2
+#| fig-cap: 'Close-up of transition region from with regression on fluid region including two additional points below total energy of $0.158\epsilon$.'
+
+cfwlm2  <- coef( fwlm2) # coefficients of fluid wtd. lm on expanded points
+tlinex2 <- c( temin, (sliney[2] - cfwlm2[1]) / cfwlm2[ 2])
+# new tlinex right endpoint correspoinding to new fluid line.
+flinex2 <- c( tlinex2[2], maxte) # expanded fluid line x endpoints
+fliney2 <- predict( fwlm2, data.frame( TE.mean.rs = flinex2)) 
+# expanded fluid line y points
+plotconfMD2( y="ke", df = MD2DF.B[ TE.mean.rs %within% c(0.15, 0.165),], 
+             linethresh = 200, xlab = "Total Energy per Particle", 
+             ylab = "Kinetic Energy per Particle") # sets up plot
+lines( slinex, sliney, lwd = 2)
+lines( tlinex2, tliney, lwd = 2, col = 'red')
+lines( flinex2, fliney2, lwd = 2, col = 'blue')
+text( x = tlinex2, y = tliney, labels = format( tlinex2, trim=TRUE, digits=4), 
+      pos = c( 3, 1), cex = 0.8)
+grid()
+```
+
+That made little difference. There is clearly either a wider variance than we are seeing reflected in the statistics, or the fluid line is curving.
+
+One last thought on regression. The next topic will be expanding the definition of valid points, and will likely include the non-valid points above $0.158\epsilon$ total energy. Therefore, let's simply try them:
+
+```{r}
+#| label: vf3
+vf3 <- MD2DF.B[TE.mean.rs > 0.157, .(run, ke.mean.rs, TE.mean.rs, ke.sd.rs)]
+# ALL points above 0.157
+fwlm3 <- lm( ke.mean.rs ~ TE.mean.rs, data=vf3, weights = 1/(vf3[,ke.sd.rs])^2)
+# fluid wtd. lm of all points.
+summary( fwlm3)
+```
+
+```{r}
+#| label: fig-tregz3
+#| warning: false
+#| fig-cap: 'Close-up of transition region from with regression on fluid region including *all* points above total energy of $0.157\epsilon$. 95% confidence intervals on the regression predictions are shown in thick dotted blue lines.'
+
+cfwlm3  <- coef( fwlm3) # coefficients of fluid lm of all points.
+tlinex3 <- c( temin, (sliney[2] - cfwlm3[1]) / cfwlm3[ 2])
+# the right endpoint needs to be updated.
+flinex3 <- c( tlinex3[2], maxte)
+fliney3 <- predict( fwlm3, data.frame( TE.mean.rs = flinex3))
+plotconfMD2( y="ke", df = MD2DF.B[ TE.mean.rs %within% c(0.15, 0.165),], 
+             linethresh = 200, xlab = "Total Energy per Particle", 
+             ylab = "Kinetic Energy per Particle") # sets up plot
+lines( slinex, sliney, lwd = 2)
+lines( tlinex3, tliney, lwd = 2, col = 'red')
+lines( flinex3, fliney3, lwd = 2, col = 'blue')
+pred.s.plim <- predict( swlm2, interval = "prediction")
+matlines(vs$TE.mean.rs, pred.s.plim[,-1], lty = c(3,3), lwd = c(3,3), 
+        col = c('blue','blue'), type = "l")
+pred.f.plim <- predict( fwlm3, interval = "prediction")
+matlines(vf3$TE.mean.rs, pred.f.plim[,-1], lty = c(3,3), lwd = c(3,3), 
+        col = c('blue','blue'), type = "l")
+text( x = tlinex3, y = tliney, labels = format( tlinex3, trim=TRUE, digits=4), 
+      pos = c( 3, 1), cex = 0.8)
+grid() # replot grid so it sits in foreground
+```
+
+That is still unsatisfactory. The transition region starts at the upper range of the solid data, and ends at the lower range of the fluid data. Of course, these lines were drawn as *mean* with no consideration of the error bounds on the regression lines. It is remarkable that the confidence intervals seem to "hit" the extreme points: the upper interval on the solid side and the lower interval on the fluid side.
+
+## Close look at Lowest Valid Fluid Points
+
+Runs `S2.0030` and `S2b.0031` are both declared valid, but they are very near the end of the transition region.
+
+```{r}
+MD2DF.B[ (run == 'S2.0030' | run == 'S2b.0031') ,         
+         .(run, total.steps, steps.avg, TE.mean.rs, ke.mean.rs, psiavg,
+           psiabs.mean.rs, Estimate, Std.Error, Fpvalue, rtv, specwidth)]
+```
+
+Both appear to be truly fluid, and pass the equilibrium criteria after skipping only 1,000 steps, however over 2M steps were run because they previously were not considered in equilibrium.
+
+### `S2.0030`
+
+`S2.0030` was not meeting the criteria at 76,000 steps (see [RoundingOut.pdf](RoundingOut.pdf), where all files failing to meet the criteria were brought to over 2M steps). The code below will read and plot the data.
+
+```{r}
+#| label: xn030
+dir <- "H:/Data/DSP/MD/Data"
+xn30 <- combineruns( dir, "S2","0030")$rundt
+```
+
+```{r}
+#| label: fig-xn30
+#| eval: true
+#| output: true
+#| fig-cap: "Plots of the basic data in run S2.0030 after 2M steps (first 1k steps skipped)."
+plotMD2( as.data.frame( tail( xn30, -1000)), dt = 0.01)
+pl <- recordPlot()
+png("xn30M.png", width = 600, height = 300)
+replayPlot(pl)
+dev.off()
+```
+
+It looks like `TE` is slightly decreasing.
+
+```{r}
+with( tail( xn30, -1000), 
+      HPplot( x = 0.01 * step, y = TE, typ = 'l', xlab = "Time",
+              ylab = "Total Energy"))
+grid()
+```
+
+While it is decreasing, especially just after $\tau = 10,000$, none of the other thermodynamic parameters show any effects. This sample appears to be a fluid in equilibrium.
+
+```{r}
+#| label: cleanx30
+#| eval: true
+#| output: false
+rm( pl, xn30)
+```
+
+`S2b.0031`
+
+```{r}
+#| label: xn31
+dir <- "H:/Data/DSP/MD/Data"
+xn31 <- combineruns( dir, "S2b","0031")$rundt
+```
+
+```{r}
+#| label: fig-xn31
+#| eval: true
+#| output: true
+#| fig-cap: "Plots of the basic data in run S2b.0031 after 2M steps (first 1k steps skipped)."
+plotMD2( as.data.frame( tail( xn31, -1000)), dt = 0.01)
+pl <- recordPlot()
+png("xn31M.png", width = 600, height = 300)
+replayPlot(pl)
+dev.off()
+```
+
+```{r}
+with( tail( xn31, -1000), 
+      HPplot( x = 0.01 * step, y = ke, typ = 'l', xlab = "Time",
+              ylab = "Kinetic Energy"))
+grid()
+```
+
+Nothing unusual about this plot either. Both of these runs are fluids in equilibrium. However, this mean that our definition of the transition region is to the left of the coldest of these.
+
+```{r}
+#| label: cleanx31
+#| eval: true
+#| output: false
+rm( pl, xn31)
+gc()
+```
+
+# Plots of All Parameters
+
+We have not looked at all the parameters yet, and we really should look at them all together. Presently (29 November 2024) there are 59 columns. As this will be a fairly common need, a new plotting function is desired. `plotScalars()` is a good place to start. There, we modified `plotconf` and `plotconfMD2` to plot the min and max ranges. Consequentially, all plots using `plotconfMD2` will have the min-max ranges plotted, including those in this document when it is re-rendered. We also want to see the difference between `psiavg` and `psiabs`
+
+```{r}
+plotAllMD2 <- function( df, minp = 0.5, linethresh = 100, ...) {
+   plotScalars( df, minp, linethresh = linethresh, ...)
+   plotconfMD2( df, y="psiabs", linethresh = linethresh, ...)
+   xlab <- "Mean TE" # often used
+   valid <- df$Fpvalue > minp
+   pch <- ifelse( valid, 1, 2)
+   color <- ifelse( valid, "black", "red")
+   plot( x = df$TE.mean.rs, 
+         y = 100 * (df$TE.max.raw - df$TE.min.raw) / df$TE.mean.rs, 
+         log = "y", pch = pch, col = color, xlab = xlab, ylab = "TE Range(%)", 
+         panel.first = grid(), ...)
+   points( x = df$TE.mean.rs, y = df$TE.sd.rs / df$TE.mean.rs, pch = pch + 15, 
+           col = color)
+   plotconfMD2( df, y = "M.2", linethresh = linethresh, ylab = "Momentum^2", 
+                ...)
+   plot( M.2.max.raw ~ total.steps, data = df, log = "xy", xlab = "Total Steps", 
+         ylab = "Max Momentum^2")
+   plotconf( x = df$TE.mean.rs, y = df$specwidth, 
+             Fpvalue = df$Fpvalue, xlab = xlab, ylab = "Spectral Width",
+             linethresh = linethresh, ...)
+
+   plot( x = df$TE.mean.rs, y = (df$psiabs.mean.rs - df$psiavg), col = color, 
+         pch = pch, xlab = xlab, ylab = "psi delta", panel.first = grid())
+   plotconf( x = df$TE.mean.rs, df$total.steps, Fpvalue = df$Fpvalue,
+             xlab = xlab, linethresh = linethresh, 
+             ylab = "Total Steps", log = "y")
+}
+```
+
+```{r}
+#| label: fig-MD2DF.Ball
+#| fig-cap: 'All (or most) of the 59 columns represented one way or another below. The first nine plots are simply `plotScalars`.  These are followed by (left to right, top to bottom) TE Range (`TE.max.raw - TE.min.raw` in open symbols, and `TE.sd.rs` in closed symbols, plotted logrithmically), Momentum squared (with standard deviation and range), Maximum of momentum squared vs. total steps, spectral width (in units of $1/\tau$), $\psi$ delta - the difference berween `psiabs` and `psiavg`, and total steps.'
+#| fig-width: 7
+#| fig-height: 8
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3, 
+           mgp = c(1.7, 0.4, 0))
+plotAllMD2( MD2DF.B, linethresh = 200)
+par(op)
+```
+
+The total energy range merits special attention.
+
+```{r}
+#| label: fig-TErange
+#| fig-cap: 'A close up the TE range.  Note that the maximum *range* is less than 1% of the mean total energy.'
+ xlab <- "Mean TE" # often used
+with( MD2DF.B,{
+   valid <- Fpvalue >= 0.5
+   pch <- ifelse( valid, 1, 2)
+   color <- ifelse( valid, "black", "red")
+   plot( x = TE.mean.rs, y = 100*(TE.max.raw - TE.min.raw)/TE.mean.rs, 
+         log = "y", pch = pch, col = color, xlab = xlab, ylab = "TE Range(%)", 
+         ylim = c(0.01, 1), panel.first = grid())
+   points( x = TE.mean.rs, y = 100*TE.sd.rs/TE.mean.rs, pch = pch + 15, col = color)
+   })
+```
+
+# New Definition of Validity
+
+The previous definition was using any $F_p > 0.5$ as indication of validity. The reason being that if perfectly random data had greater than a 50% chance of causing that observation, any trend was likely spurious. However, we see that when millions of steps are run, regression will report that the slope is minuscule with high significance (thus, very small $F_p$). These cases are just as valid. So the new criteria will combine the two: $F_p > 0.5$ or the estimated slope is *small* with with significance (say, 95%). We define *small* as an error of less than 20% of the standard deviation of the temperature. Unfortunately, we must re-run all of the files through `procMD2DF` to accomplish this. We could probably just run the invalid files, but is is possible, although unlikely, that the regression length will change with the expanded criteria. (it is unlikely because of the required small slope estimate will not likely be significant without many points.)
+
+The code snippet below shows that all but 4 would be valid.
+
+```{r}
+nv <- !with( MD2DF.B[ MD2DF.B$Fpvalue < 0.5,], 
+      (Estimate * steps.avg / 2 < 0.2 * ke.sd.rs) & (Fpvalue <= 0.05))
+MD2DF.B[ MD2DF.B$Fpvalue < 0.5,][nv, .(run, TE.mean.rs, Estimate, Fpvalue, ke.sd.rs, steps.avg)]
+```
+
+The next step here is to upgrade `procMD2DF`, and update the plotting algorithms to deal with a `valid` tag vs. simply filtering on `Fpvalue`.
