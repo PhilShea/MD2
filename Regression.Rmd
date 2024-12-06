@@ -25,11 +25,11 @@ plot( (Estimate/Std.Error) ~ r.squared, data = MD2DF)
 ```
 
 
-The graph above was generated from data which had a different data, although all the data had the same number of samples.  One other characteristic: the data was an over-sampled time series of 10,000 samples each.
+The graph above was generated from data which was random, although all the data had the same number (10,001) of samples.  The data was an over-sampled time series of temperature.
 
 ## Random Relationships
 
-To examine the effect observed above, we generated a *lot* of random data.  The function `sbor` below will generate a random number of samples (drawn from a Poisson distribution), and will generate random data from an equation $y_i = a + b x_i + \varepsilon_i$.  The function's parameters set the means of the distribution of the equation parameters.  The equation parameters are drawn from normal distributions with standard deviation of one, and $x_i$ is drawn from a standard normal distribution $N(0,1)$ . The error terms are drawn from a normal distribution with mean zero and standard deviation with a default of 1/2.  
+To examine the effect observed above, we generated a *lot* of random data.  The function `sbor()` below will generate a random number of samples (drawn from a Poisson distribution), and will generate random data from an equation $y_i = a + b x_i + \varepsilon_i$.  The function's parameters `a` & `b` set the means of the distribution of the equation parameters.  The equation parameters are drawn from normal distributions with standard deviation of one, and $x_i$ is drawn from a standard normal distribution $N(0,1)$ . The error terms are drawn from a normal distribution with mean zero and standard deviation with a default of 1/2.  
 
 ```{r}
 sbor <- function(n, a, b, sde=0.5, plt=FALSE) {
@@ -61,7 +61,7 @@ pl <- recordPlot()
 
 ```
 
-The above call generated 96 samples of data of an equation $y_i = 2.84 + 3.86 x_i + \varepsilon_i$.  A second call would generate a different $n$, $a$, and $b$, as well as different $\varepsilon_i$.  The other thing that `sbor` does is return the coefficients estimated, the standard error of the slope, and the regression coefficient. 
+The above call generated 96 samples of data of an equation $y_i = 2.84 + 3.86 x_i + \varepsilon_i$.  The `(Intercept)` term is the estimate of $a$, and the `x` term is the estimate of the slope ($b$).  Also in the data frame is the number of degrees of freedom (`n` above, but $n - 2$ where $n$ is the number of samples) and the regression coefficient `r`. A second call would generate a different $n$, $a$, and $b$, as well as different $\varepsilon_i$.  The other thing that `sbor()` does is return the coefficients estimated, the standard error of the slope, and the regression coefficient. 
 
 Below we can call `sbor` 10,000 times, each call generating a random number of points with a mean of 1,000, $\bar{a} = 2$ and $\bar{b} = 3$ and generate a data frame of the results.
 
@@ -107,7 +107,7 @@ replayPlot(pl2)
 dev.off()
 ```
 
-The dependence on the large number of samples in the fit is shown below, where only 100 points is used for each fit.
+The "randomness" of the resulting graph is increased when fewer points are used, as is shown below, where only 100 points is used for each fit.
 
 
 ```{r}
@@ -130,23 +130,32 @@ replayPlot(pl2)
 dev.off()
 ```
 
+Here is what it looks like when $r^2$ is plotted onteh $y$ axis.
+
 ```{r}
 plot( r^2 ~ b, data=newdf)
 ```
+
+Below is a plot of $S_{\widehat{\beta}}$ vs. the estimates slopes (`x` in the data frame).
 
 ```{r}
 plot( Sb ~ x, data=newdf)
 ```
 
+
+Below is the calculation of the $t$ statistic for the regression coefficient $t_r = \sqrt{n - 2} \frac{r}{\sqrt{1 - r^2}}$, followed by the plot. Remember that `n` in the data frame is the number of degrees of freedom $n - 2$.
+
 ```{r}
 newdf$tr <- newdf$n * newdf$r / sqrt(1 - newdf$rs)
 ```
 
+Below is a plot if the $t$ statistic for the regression coefficient $t_r$:
+
 ```{r}
-plot( BoSb ~ tr, data=newdf, xlim=c(-30,30),ylim=c(-10,10))
+plot( BoSb ~ tr, data = newdf, xlim = c(-30, 30),ylim = c(-10, 10))
 ```
 
-The source of the parabola is the 
+The source of the parabola is explained by the Regression Ratios document.
 
 # Definitions
 
@@ -193,6 +202,8 @@ c3 <- mx^2 + Sx2
 cat( "x mean: ", mx, " Var(x): ", Sx2, "\n")
 cat( "c1: ", Sx4, " c2: ", c2, " c3: ", c3)
 ```
+
+# Distribution Plots
 
 The below from https://www.statology.org/working-with-the-student-t-distribution-in-r-dt-qt-pt-rt/
 
