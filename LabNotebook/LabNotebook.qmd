@@ -132,7 +132,7 @@ The algorithm to determine if a run has reached equilibrium is below (in seven e
 6.  Find the last point outside the min or max of the two-thirds data. If the second regression has a positive coefficient (i.e., the ke is rising), use the min, and use the max otherwise.
 7.  Perform a third regression on the new set of points. If the F-test fails, then resort to the original two-thirds data. If the use the F-test passes, use the expanded data set for the averages.
 
-The above has been encapsulated in the `findlmlen` function, and incorporated into the `createdf` function. A rather large amount of work went into extending the last two thirds back into the series, so an experiment was run on random data. THe following R code was the experiment (displayed here because of its marvelous simplicity):
+The above has been encapsulated in the `findlmlen` function, and incorporated into the `createdf` function. A rather large amount of work went into extending the last two thirds back into the series, so an experiment was run on random data. The following R code was the experiment (displayed here because of its marvelous simplicity):
 
 ```{r}
 #| eval: false
@@ -158,7 +158,7 @@ This generated 10,000 length 50 series of random data and ran `findlmlen` on the
 
 The first thing to notice: the expected number of full length passes is 50%, and this was observed. Of the 2,231 shortened passes, 82% were lengthened. The 1/3 length is given by `len3 <- floor( 50/3)` which is 16. The 2/3 length is 50 - 16 = 34. The average length of the shortened runs was 34.88, so it looks like most runs were only lengthened by 1 point. The maximum short pass was 38 (lengthened by 4). A plot of the result is below.
 
-![Absolute value of the estimate vs. the standard error. Black points are failures, green are full length passes, and blue are shortened passes. The red line shows equality (estimate equals the standard error).](findlmlentst.PNG){#fig-regtest}
+![Absolute value of the estimate vs. the standard error for 10,000 trials of length 50 regressions. Black points are failures, green are full length passes, and blue are shortened passes. The red line shows equality (estimate equals the standard error).](findlmlentst.PNG){#fig-regtest}
 
 There were two iterations, with the final summarization of the data performed with re-sampling block size of 500. The updated summary data is in `MD2DF.3.S2.Rdata`. The summary plot of the data is in @fig-MD2DF3S2 below:
 
