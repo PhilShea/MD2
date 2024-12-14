@@ -31,7 +31,7 @@ I paused the data analysis to upgrade the `R` functions to a full package, and t
 ```{r}
 #| label: MD2DF9
 getwd()
-MD2DF.9 <- readRDS( "..\\MD2\\MD2DF.9.RDS")
+MD2DF.9 <- readRDS( "C:\\Users\\phils\\Documents\\DSP\\MD\\MD2\\MD2DF.9.RDS")
 op <- par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3, 
            mgp = c(1.7, 0.4, 0))
 with( MD2DF.9, plotScalars( MD2DF.9))
@@ -56,7 +56,7 @@ MD2DF.9$lrfdt.steps <- NA
 
 ```{r}
 #| label: MD2DF6
-MD2DF.6 <- readRDS( "..\\MD2\\MD2DF.6.RDS")
+MD2DF.6 <- readRDS( "C:\\Users\\phils\\Documents\\DSP\\MD\\MD2\\MD2DF.6.RDS")
 nrow(MD2DF.6)
 op <- par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3, 
            mgp = c(1.7, 0.4, 0))
@@ -66,7 +66,7 @@ par(op)
 
 ```{r}
 #| label: MD2DF7
-MD2DF.7 <- readRDS( "..\\MD2\\MD2DF.6.RDS")
+MD2DF.7 <- readRDS( "C:\\Users\\phils\\Documents\\DSP\\MD\\MD2\\MD2DF.6.RDS")
 nrow(MD2DF.7)
 op <- par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3, 
            mgp = c(1.7, 0.4, 0))
@@ -77,7 +77,7 @@ par(op)
 ```{r}
 #| label: MD2DF678eq
 cat( ".6 & .7 equal:", all.equal(MD2DF.6, MD2DF.7), "\n")
-MD2DF.8 <- readRDS( "..\\MD2\\MD2DF.6.RDS")
+MD2DF.8 <- readRDS( "C:\\Users\\phils\\Documents\\DSP\\MD\\MD2\\MD2DF.8.RDS")
 cat( "MD2DF.8 obs.: ", nrow(MD2DF.8), "\n")
 cat( "is.data.table:", is.data.table( MD2DF.8), "\n")
 op <- par( mfrow = c(4, 2), mar = c(3, 3, 0.5, 0.5), tcl = -0.3, 
@@ -679,6 +679,7 @@ We can make an argument that the correlations don't diminish until 13 to 20 lags
 
 ```{r}
 #| label: fig-rspsi26
+#| fig-cap: '|\psi| on a step-by-step basis for run S2b.0026.'
 rsxn26psi <- rsmpavg( Mod( complex( real = xn26$Rpsi, imaginary = xn26$Impsi)),
                       500)
 plot( rsxn26psi, type="p", pch = ".", ylab = expression(psi), xlab = "steps")
@@ -688,7 +689,7 @@ Since we have the data handy, we wanted to plot the difference between block ave
 
 ```{r}
 #| label: fig-rspsi26d
-#| caption: '$\langle |\psi_l| \rangle_{n,b} - | \langle \psi \rangle_{n,b}|$ in the 500 step re-sampled blocks.'
+#| fig-cap: '$\langle |\psi_l| \rangle_{n,b} - | \langle \psi \rangle_{n,b}|$ in the 500 step re-sampled blocks.'
 rsxn26psi2 <-  Mod( rsmpavg( complex( real = xn26$Rpsi, imaginary = xn26$Impsi),
                       500))
 plot(rsxn26psi - rsxn26psi2, ylab = "psiabs - psiacg", xlab = "steps")
@@ -698,7 +699,7 @@ We can see that this run is trying to melt as $\langle |\psi| \rangle_n$ drops b
 
 ```{r}
 #| label: fig-rspsi26vke
-#| caption: '$\langle |\psi| \rangle_n$'
+#| fig-cap: '$\langle |\psi| \rangle_n$'
 plot( rsxn26ke, rsxn26psi, type = "p", pch = 1, ylab = expression(psi), 
       xlab = "ke")
 ```
@@ -712,8 +713,8 @@ t<-lapply( 0:10, function(i) {
    steps <- (i*200+1):lrsxn26
    lmMD2( data.frame( step = steps, ke = rsxn26ke[steps]))
 })
-t2 <- t( matrix( unlist(t), nrow = 7, ncol = 11, 
-              dimnames = list( names(unlist(t)[1:7]), 1:11)))
+t2 <- t( matrix( unlist(t), nrow = 8, ncol = 11, 
+              dimnames = list( names(unlist(t)[1:8]), 1:11)))
 t2 <- t2[ order( t2[,"nr"]),]
 (t3 <- cbind( t2, Perr = 50 * t2[,"nr"] * t2[,"Estimate"] / rec26$ke.sd.rs))
 ```
@@ -722,7 +723,7 @@ t2 <- t2[ order( t2[,"nr"]),]
 #| label: fig-rsxn26reg
 #| eval: true
 #| output: true
-#| fig-cap: 'Results of eleven different length regressions (200-block steps) on re-sampled `S2b.0026` run. Top panel is the $F_p$ value (the probability that the slope is due to random data). The bottom panel is the error of the slope at the ends of the sample as a percentage of the kinetic energy standard deviation (this $\sigma$ calculated just once over the whole 4,098 block average).'
+#| fig-cap: 'Results of eleven different length regressions (200-block steps) on re-sampled `S2b.0026` run. Top panel is the slope, middle panel is the $F_p$ value (the probability that the slope is due to random data). The bottom panel is the error of the slope at the ends of the sample as a percentage of the kinetic energy standard deviation (this $\sigma$ calculated just once over the whole 4,098 block average).'
 op <- par( mfrow = c(3, 1), mar = c(3, 3, 0.5, 0.5), tcl = -0.3, 
            mgp = c(1.7, 0.4, 0))
 plot( t3[,"nr"], t3[, "Estimate"], xlab = "blocks", ylab = "Slope",
@@ -731,7 +732,7 @@ plot( t3[,"nr"], t3[,"Fpvalue"], xlab = "blocks", ylab = "Fp",
       panel.first = grid())
 text( t3[,"nr"], t3[,"Fpvalue"],  
       format( t3[,"Fpvalue"], trim=TRUE, digits=2), pos = 3, cex = 0.8)
-plot( t3[,"nr"], t3[,"Estimate"], 
+plot( t3[,"nr"], t3[,"Perr"], 
       xlab = "blocks", ylab = "% error", panel.first = grid())
 par(op)
 ```
