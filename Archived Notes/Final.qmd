@@ -1,0 +1,535 @@
+---
+title: "Final Analysis of 1980 Data"
+author: "Philip A. Shea"
+date: last-modified
+format:
+  pdf:
+    documentclass: article
+    papersize: letter
+    toc: true
+    toc-depth: 2
+mainfont: Cambria
+crossref:
+  fig-title: '**Figure**'
+  fig-labels: arabic
+  title-delim: "**.**"
+editor: visual
+bibliography: references.bib
+---
+
+```{r}
+#| label: init
+#
+# NOTE: if the package has changed, it must be installed locally via:
+#
+# devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+#
+# You probably have to re-start r after this.
+#
+# *****************************************************
+require( MD2RP)
+require( parallel)
+require( pracma)
+require( data.table)
+num_cores <- detectCores() - 1
+options(digits=5)
+```
+
+## Update to Equilibrium Test
+
+When we finished [Semi-Final.pdf](Semi-Final.pdf) we indicated that we needed to update the criteria for equilibrium, which had been simply using the F-Test with the probability being above 050%. However, we have made some very long runs (over 2M steps) and we see many runs which appear to be in equilibrium (or very close to it).
+
+The previous definition was using any $F_p > 0.5$ as indication of validity. The reason being that if perfectly random data had greater than a 50% chance of causing that observation, any trend was likely spurious. However, we see that when millions of steps are run, regression will report that the slope is minuscule with high significance (thus, very small $F_p$). These cases are just as valid. So the new criteria will combine the two: $F_p > 0.5$ or the estimated slope is *small* with with significance (say, 95%). We define *small* as an error of less than 20% of the standard deviation of the temperature. Unfortunately, we must re-run all of the files through `procMD2DF()` to accomplish this. We could probably just run the invalid files, but is is possible, although unlikely, that the regression length will change with the expanded criteria. (it is unlikely because of the required small slope estimate will not likely be significant without many points.)
+
+The code snippet below shows that all but four would be valid.
+
+```{r}
+#| label: four
+MD2DF.B <- readRDS("MD2DF.B.RDS")
+nv <- !with( MD2DF.B[ MD2DF.B$Fpvalue < 0.5,], 
+      (Estimate * steps.avg / 2 < 0.2 * ke.sd.rs) & (Fpvalue <= 0.05))
+MD2DF.B[ MD2DF.B$Fpvalue < 0.5,][nv, .(run, TE.mean.rs, Estimate, Std.Error, 
+                                       Fval, Fpvalue, ke.sd.rs, steps.avg, nr)]
+```
+
+The other statistic that might be used is $t_\beta = \frac{\widehat\beta - \beta}{S_{\widehat\beta}}$, where $\beta$ is the slope (zero in our problem), $\widehat\beta$ is the estimate of the slope, and $S_{\widehat\beta}$ is the standard deviation of the slope estimate.
+
+The below from [https://www.statology.org/working-with-the-student-t-distribution-in-r-dt-qt-pt-rt/](statology.org)
+
+```{r}
+#| label: fig-tstat
+#| fig-cap: 'The distribution of the $t$ statistic for $\nu = 20$ degrees of freedom, thus the standard deviation is $s = \sqrt{20/18}$, or 1.0541.  The green region is the 5% confidence interval that the slope is zero.  The blue region each indicate a 95% confidence interval that the slope is *not* zero. As the degrees off freedom grow, the distribution becomes normal with zero mean and variance $\sigma^2 = \nu/(\nu - 2)$ (which approaches one).'
+#Create a sequence of 100 equally spaced numbers between -4 and 4
+x <- seq(-4, 4, length=100)
+p <- qt(0.05, 20)
+p2 <- qt( .475, 20)
+x <- sort( c( x, p, -p, p2, -p2))
+
+#create a vector of values that shows the height of the probability distribution
+#for each value in x, using 20 degrees of freedom
+y <- dt(x = x, df = 20)
+
+#plot x and y as a scatterplot with connected lines (type = "l") and add
+#an x-axis with custom labels
+plot(x, y, type = "l", lwd = 2, axes = FALSE, xlab = "", ylab = "")
+axis(1, at = -3:3, labels = c("-3s", "-2s", "-1s", "mean", "1s", "2s", "3s"))
+polygon( c(-4, x[x <= p], p), c( 0, y[ x <= p], 0), col = 'blue')
+polygon( c(-p, x[x >= -p], 4), c( 0, y[ x >= -p], 0), col = 'blue')
+l <- min( which( x >= p2))
+h <- max( which( x <= -p2))
+polygon( x[c( l, l:h, h)], c( 0, y[ l:h], 0), col = 'green')
+```
+
+The tails of the F distribution are quite heavy, so the area accumulates in very thin strips heading off to $\infty$. The plot below show the 50% tails.
+
+```{r}
+#| label: fig-fdist
+#| fig-cap: 'F distribution for 1 and 20 degrees of freedom. The filled in regions show 50% point.'
+#Create a sequence of 100 equally spaced numbers between 0.001 and 3
+df1 <- 1
+df2 <- 20
+x <- seq(0.001, 3, length=1000)
+cat( "5%: ", qf( 0.05, df1, df2), " 95%: ", qf( .95, df1, df2))
+p <- qf( 0.5, df1, df2)
+x <- sort( c( x, p, p2))
+
+#create a vector of values that shows the height of the probability distribution
+#for each value in x, using 20 degrees of freedom
+yf <- df( x, df1, df2)
+
+#plot x and y as a scatter plot with connected lines (type = "l") and add
+#an x-axis with custom labels
+plot(x, yf, type = "l", lwd = 2, axes = FALSE, xlab = "", ylab = "", 
+     ylim=c(0, 3))
+axis(1, at = 0:3, labels = c( "0", "1", "2", "3"))
+polygon( c(0, x[x <= p], p), c( 0, yf[ x <= p], 0), col = 'green')
+#l <- min( which( ))
+h <- length(x)
+polygon( c( p, x[ x >= p], 5),c( 0, yf[ x >= p], 0), col = 'blue')
+```
+
+The coordinate for 5% is `{r} qf( 0.05, df1, df2)`, which would not show up on the graph above. The 50% point is at `{r} p`. Back in September of 2024, when `runcombiner()` was updated (see [UpdatetoRuncombiner.pdf](.\Archived%20Notes\UpdatetoRuncombiner.pdf)) we ran little experiment to see how the update would work, resulting in @fig-firsttrial below.
+
+![Absolute value of the estimate vs. the standard error for 10,000 trials of length 50 regressions. Black points are failures, green are full length passes, and blue are shortened passes. The red line shows equality (estimate equals the standard error).](LabNotebook/findlmlentst.PNG){#fig-firsttrial}
+
+The trials of 50 point regression seem quaint now. The points are 500 step block averages, so 50 points would be the equivalent of 25k steps. The 2M point runs have regressions of over 4,000 points. Let's update the above graph to show 4,000 point regressions. First, we need to copy the function `findlmlen()` from `UpdatetoRuncombiner.rmd` (the source file for the pdf) as the package has since been updated. Note that the code below does call the new version of `lmMD2()`, which returns an alternate `valid` item.
+
+```{r}
+#| label: oldfindlmlen
+oldfindlmlen <- function( df, minp = 0.50) {
+   kefit <- lmMD2( df)
+   lendf <- nrow( df)
+   if (kefit[ 'Fpvalue'] < minp) { # The data appears to be correlated
+      third <- floor( lendf / 3) # Errs on the side of a longer 2/3s.
+      ttdf <- tail( df, -third) # two thirds df
+      kefit2 <- lmMD2( ttdf)
+      if (kefit2[ 'Fpvalue'] >= minp) { # The 2nd 2/3s passed
+       # Try to expand fit
+         ftdf <- head( df, third) #first third df
+         approach <- lmMD2( ftdf) # fit the approach to equilibrium
+         if (sign( approach[ 'Estimate']) > 0) { # ke was growing
+            adder <- which.max( ftdf$ke > min( ttdf$ke))
+         } else {
+            adder <- which.max( ftdf$ke < max( ttdf$ke))
+         } # if (sign( approach...))
+         newlen <- lendf - third + adder
+         kefit3 <- lmMD2( tail( df, newlen))
+         if (kefit3[ 'Fpvalue'] >= minp) return( kefit3) else
+            return( kefit2)
+         # the above `if` should return either way - no way to get here.
+      } # if (kefit2....)
+      # if we get here, then neither whole nor 2/3's passed.
+   } # if kefit...
+   # if we get here, then either the original fit passed the F-test,
+   # or neither passed, so the original fit is returned.
+   # The F p-value will show that this record is suspect.
+   return( kefit)
+}
+```
+
+10,000 evaluations of 4,000 points each (40M points total) takes some time, so a `parallel::parSapply()` application speeds it up.
+
+```{r}
+#| label: simmany
+len <- 4000
+(len3 <- floor(len/3))
+trials <- 10000
+if (!exists("q1") || !all( dim(q1) == c( trials, 8))) { # don't do unless needed.
+    stopifnot("parallel" %in% .packages())
+    # require( parallel) # only load if needed
+   cl <- parallel::makeCluster( num_cores)
+   parallel::clusterExport( cl, c( "len", "lmMD2", "oldfindlmlen", "combineruns"))
+   system.time( q1 <- t( # need to transpose the result of parSapply
+      parallel::parSapply( cl, integer( trials), 
+                           function(i) oldfindlmlen( data.frame( step = 1:len, 
+                                                     ke = rnorm( len))), 
+                           simplify = "array")
+         ) # t
+      ) # system.time
+   parallel::stopCluster( cl)
+}
+head( q1, 10)
+```
+
+The results of that are below.
+
+```{r}
+fails <- q1[,'nr'] == len & q1[,'Fpvalue'] < 0.5
+flp <-  q1[,'nr'] == len & q1[,'Fpvalue'] >= 0.5 # full length pass
+sp <- q1[,'nr'] < len # short pass
+cat( "Fails: ", sum( fails), "(passes: ", trials - sum(fails), ")", '\n')
+cat( "Full Length Passes: ", sum( flp), '\n')
+cat( "Shortened passes: ", sum( sp), '\n')
+cat( "Exactly Two-Thirds: ", sum( q1[,"nr"] == (len - len3)), '\n')
+shorts <- q1[,'Fpvalue'] >= 0.5 & q1[,'nr'] < len
+cat( "Averge shorter length: ", mean(q1[ shorts,"nr"]), "\n" )
+cat( "Max short pass: ", max( q1[ sp,]), "\n")
+
+cat( "Mean Beta: ", mean(q1[, "Estimate"]), 
+     " Standard Dev.: ", sd(q1[,"Estimate"]), "\n")
+```
+
+The full correlation should fail about 50% of the time. A rather large amount of variability has been observed, but the procedure to revert to the last two-thirds adds perhaps half again as many successes. The plot below opens an interesting discussion.
+
+```{r}
+#| label: fig-estvstderr
+#| fig-cap: "Absolute value of the estimate vs. the standard error for 10,000 trials of length 4,000 regressions (just as in @fig-firsttrial). Black points are failures, green are full length passes, and blue are shortened passes.  The red line shows equality (estimate equals the standard error)."
+plot( abs(Estimate) ~ Std.Error, data=q1[fails, ], 
+      xlim=c(0, max( q1[, 'Std.Error'])), ylim = c(0, max( q1[, 'Estimate'])))
+grid()
+abline(a=0, b=1, col='red')
+points( abs(Estimate) ~ Std.Error, data=q1[ sp, ], col='blue',
+       pch = 2)
+points( abs(Estimate) ~ Std.Error, data=q1[ flp, ], col='darkgreen',
+       pch = 2)
+```
+
+That certainly looks different than the length 50 regression, but the essential character remains: the accepted passes all lie below the `Estimate = Std.Error` line. The variances of the resulting estimates are much tighter though, and so where we previously saw overlap between the green and blue regions (full and shortened passes, respectively), they are now well separated. One other important difference is the magnitude of the slopes. The 50 point runs showed slopes up to 0.03 (which is, after all, pretty small). The 4,000 point run slopes are below about $5\times10^{-5}$.
+
+To put these in context, the regression line will go through the center of the blob of points, (between points 25 & 26, or points 2000 & 2001) and then rise or fall by an amount equal to the slope multiplied by half the number of steps. So the 50 step regressions would drift by at most $0.03 \times 25 = 0.75$ units. The 4,000 point regressions drift by at most $5\times10^{-5} \times 2,000 = 0.1$. Remember that the variance of the data in both of these are the same, so that is why we now compare the regression to the variance.
+
+Now we can add the new criteria of *requireing* high confidence on a low variance to validate the run.
+
+```{r}
+#| label: fig-estvstderr2
+#| fig-cap: "Absolute value of the estimate vs. the standard error, just as in @fig-estvstderr. As before, Black points are failures, green are full length passes, blue are shortened passes, and the red points are those added where the regression line ends 20% or less than the standard deviation.  The red line shows equality (estimate equals the standard error)."
+plot( abs(Estimate) ~ Std.Error, data=q1[fails, ], 
+      xlim=c(0, max( q1[, 'Std.Error'])), ylim = c(0, max( q1[, 'Estimate'])))
+grid()
+abline(a = 0, b = 1, col = 'red')
+points( abs(Estimate) ~ Std.Error, data = q1[ sp, ], col = 'blue',
+       pch = 2)
+points( abs(Estimate) ~ Std.Error, data = q1[ flp, ], col = 'darkgreen',
+       pch = 2)
+new <- !(q1[,"Fpvalue"] >= 0.5) & q1[,"valid"]
+points( abs(Estimate) ~ Std.Error, data = q1[ new, ], col = 'red')
+pl <- recordPlot()
+png("estvstderrflm2.png", width=600, height=300)
+replayPlot(pl)
+dev.off()
+```
+
+So we see that the regression slope must be big enough to be declared "significant," but this yields a pathological result: smaller slopes are rejected due to lack of significance. So the significance test was clearly a mistake, and nothing more than an attempt to make the validity decision grounded in some sort of quantitative criterion being  simply within the standard deviation of the temperature (even is only 20%f it).  
+
+The standard error estimate is pretty tight, depending strongly on the number of samples.
+
+```{r}
+#| label: stderrvn
+#| fig-cap: 'Standard Error vs the number of samples.'
+plot(Std.Error ~ nr, data=q1)
+```
+
+The square of the $t$ statistic for the regression coefficient $r$ is directly related to the $F$ statistic such that $t_{\widehat{\beta}}^2 = F$.
+
+```{r}
+#| label: rtvFval
+rt <-  sqrt(q1[,"r.squared"]) * sqrt(q1[,"nr"] - 2) / sqrt(1 - q1[,"r.squared"])
+#ptq <- pt(rt, q1[,"nr"] - 2)
+sum((rt^2 - q1[,"Fval"])^2)
+```
+
+It is also known that $t_{\widehat{\beta}}$ is equal to the $t$-statistic for the regression coefficient. We had previously decided that the idea of the standard error being above the estimated slope was *quaint*, but it is perhaps on better ground than setting the $F$ probability to 50\%.
+
+The computation below show the results for a 4,002 sample computation:
+
+```{r}
+# Setting the slope to be less than the standard error of the slope.
+ pt(1, 4000, lower.tail = TRUE) - pt(-1, 4000, lower.tail = TRUE) 
+# The probability that the F-statistic is less than one.
+pf(1, 1, 4000, lower.tail = TRUE)
+# The F-statistic at 50%
+qf( 0.5, 1, 4000)
+# The regression coefficient at t=1
+fzero( function(r) 1 - (sqrt(4000) * r / sqrt(1 - r^2)), .5)$x
+```
+
+So we need to consider reverting the code to simply using the `Fpvalue`, but more likely at `Fval = 1`.
+
+# Re-running regression tests from `Semi-Final`.
+
+There was an error in how the regression tests of different length were plotted in the last set of notes on run `S2b.0026`, and we need to correct these.
+
+## Re-Examination of `S2b.0026`
+
+`S2b.0026` has a large value of $|\langle \psi \rangle_{n,s} |$ (where the average is over $n,s$: the particles and steps) which appears to be below the start of the transition region, and has over 2M steps, but is still not flagged as valid. The following code reads it in and skips the first 2,000 steps.
+
+```{r}
+#| label: xn26
+dir <- "H:/Data/DSP/MD/Data"
+xn26 <- tail( combineruns( dir, "S2b","0026")$rundt, -2000)
+```
+
+Plot the run:
+
+```{r}
+#| label: fig-xn26
+#| eval: true
+#| output: true
+#| fig-cap: "Plots of the basic data in run `S2b.0026` after 2M steps. The first 2k steps were dropped before plotting."
+plotMD2( as.data.frame( xn26), dt = 0.01)
+pl <- recordPlot()
+png( "xn262M.png", width = 600, height = 300)
+replayPlot( pl)
+dev.off()
+```
+
+The following is a close-up of the kinetic energy.
+
+```{r}
+#| label: fig-xn26ke
+#| eval: true
+#| output: true
+#| fig-cap: 'Kinetic energy over steps for run S2b.0026 (the first 2,000 steps have been dropped).'
+with( xn26, {
+      HPplot( ke, type="l", xlab = "steps", ylab = "ke", 
+              panel.first = grid())})
+```
+
+We need to look at the regression data to see why this has such a small slope, yet the slope is still so significant. The current data frame of `MD2DF.B` was developed using a block average of 500, as can be seen in the data frame's attributes `attr( MD2DF.B, "call")$rsblk` = `{r} attr( MD2DF.B, "call")$rsblk`. We can recreate this via
+
+```{r}
+#| label: fig-rsxn26ke
+#| eval: true
+#| output: true
+#| fig-cap: 'Re-sampled kinetic energy.  The blue line in the center (almost under the red line) is the reported mean, and the two dark blue lines surrounding it represent $\pm1\sigma_{ke}$.  The red line is the regression line with the center crossing the mean.'
+rsxn26ke <- rsmpavg( xn26$ke, 500)
+rec26 <- MD2DF.B[ run == "S2b.0026"]
+plot( rsxn26ke, type="p", pch = ".", xlab = "Resammpler Steps", 
+      ylab = "avereage kinetic energy")
+abline( h = rec26$ke.mean.rs, col = 'blue')
+abline( h = rec26$ke.mean.rs + rec26$ke.sd.rs * c(-1, 1), col = 'darkblue')
+#abline( h = rec26$ke.mean.rs - rec26$ke.sd.rs, col = 'darkblue')
+abline( a = rec26$ke.mean.rs - rec26$Estimate * length( rsxn26ke)/2, 
+        b = rec26$Estimate, col='red', lwd = 2)
+```
+
+The positive slope is almost four times its standard error, and so is statistically significant, but that slope is tiny. The deviation from the mean at the two ends of the line is about 18% of the standard deviation (although, frankly, it hardly looks it). This can be calculated with `50 * rec26$Estimate * length(rsxn26ke) / rec26$ke.sd.rs` = `{r} rec26$Estimate * length(rsxn26ke) / rec26$ke.sd.rs` (since half the error is on the left and half on the right, we multiply by 50 instead of 100).
+
+What is happening is that the sample is aperiodically melting and re-solidifying, and its temperature declines as it melts.  This appears to happen in the first half of the sample, so there are sections in the first half at a lower temperature, and thus a small but significant upward slope of the whole measurement.
+
+How many points should we use? The table and plots below will help us understand how to decide. It will take increasingly shorter lengths of the re-sampled data so we can search for equilibrium.
+
+```{r}
+#| label: t3
+lrsxn26 <- length( rsxn26ke)
+t<-lapply( 0:10, function(i) {
+   steps <- (i*200+1):lrsxn26
+   lmMD2( data.frame( step = steps, ke = rsxn26ke[steps]))
+})
+t2 <- t( matrix( unlist(t), nrow = 8, ncol = 11, 
+              dimnames = list( names(unlist(t)[1:8]), 1:11)))
+t2 <- t2[ order( t2[,"nr"]),]
+(t3 <- cbind( t2, Perr = 50 * t2[,"nr"] * t2[,"Estimate"] / rec26$ke.sd.rs))
+```
+
+This is the plot which was erroneous in `Semi-Final.pdf`.
+
+```{r}
+#| label: fig-rsxn26reg
+#| eval: true
+#| output: true
+#| fig-cap: 'Results of eleven different length regressions (200-block steps) on re-sampled `S2b.0026` run. Top panel is the slope, middle panel is the $F_p$ value (the probability that the slope is due to random data). The red line is the 50\% criteria, and the blue line is the `Fval = 1` criteria.  The bottom panel is the error of the slope at the ends of the sample as a percentage of the kinetic energy standard deviation (this $\sigma$ calculated just once over the whole 4,098 block average).'
+op <- par( mfrow = c(3, 1), mar = c(3, 3, 0.5, 0.5), tcl = -0.3, 
+           mgp = c(1.7, 0.4, 0))
+plot( t3[,"nr"], t3[, "Estimate"], xlab = "blocks", ylab = "Slope",
+      panel.first = grid())
+plot( t3[,"nr"], t3[,"Fpvalue"], xlab = "blocks", ylab = "Fp",
+      panel.first = grid())
+abline( h = 0.5, col = 'red')
+lines( x = t3[,"nr"], y = pf( 1, 1, t3[,"df.dendf"], lower.tail = FALSE), col = 'blue')
+
+text( t3[,"nr"], t3[,"Fpvalue"],  
+      format( t3[,"Fpvalue"], trim=TRUE, digits=2), pos = 3, cex = 0.8)
+plot( t3[,"nr"], t3[,"Perr"], 
+      xlab = "blocks", ylab = "% error", panel.first = grid())
+par(op)
+```
+
+This run failed the 50\% $F_p$ test (red line in middle panel) at all but the first and third sample above, with $F_p$ values of (`{r}  t3[c(1, 3), "Fpvalue"]`) and with number of samples (`{r}  t3[  c(1, 3), "nr"]`), respectively. A test which takes either $F_p > 0.5$ or a slope with percentage error less than 10% with significance 5% or better would have accepted all but the seventh length of 3,298 blocks, which had an error of `{r} 50 * t3[7, "nr"] * t3[7, "Estimate"] / rec26$ke.sd.rs`%. The $F = 1$ test would have passed the 4\textsuperscript{th} sample too.
+
+Another statistic to examine is the slope of smaller blocks. One might expect a sample in equilibrium to have essentially random slopes.  The code below will create regressions of 50 re-sampled points in length (thus, 25k steps).  The re-sampled blocks of 50 start at the end and work backward, but are numbered forward, so to find an approximate point in the original data, multiply by 50 * 500 (a small number of samples at the beginning are skipped to ensure the last regression is at the latest time steps).
+
+```{r}
+bl <- 50 # block length for intermediate regressions
+(rstps <- lrsxn26 %/% bl) # regression steps
+(a <- lrsxn26 - rstps * bl + 1) # starting point
+t4 <- lapply( 1:rstps, function(i) {
+   steps <- (a + (i - 1) * bl):(a + i * bl - 1)
+#   cat( "i: ", i, "length(steps): ", length(steps), " is ", steps[1], ":",
+#        steps[bl], "\n")
+   lmMD2( data.frame( step = steps, ke = rsxn26ke[steps]))
+})
+t5 <- t( matrix( unlist( t4), nrow = 8, ncol = rstps, 
+              dimnames = list( names(unlist(t4)[1:8]), 1:rstps)))
+```
+
+The plot below shows that result.
+
+```{r}
+#| label: fig-x26regsteps
+#| eval: true
+#| output: true
+#| fig-cap: '50-sample regression of the re-sampled data.'
+plot( 1:nrow(t5), 1e5*t5[,"Estimate"], panel.first=grid(), 
+      xlab = "Block Number", ylab = "Slope x 10^5")
+```
+
+Note the slopes are all below $10^{-5}$, and the apparent change in character around block 50.  This is about 50 samples into these 50-point regressions, so we might want to skip about 2,500 of the re-sampled blocks.
+
+## Examining Normality of `S2b.0026`
+
+The re-sampled data is supposed to eliminate the correlations and should result, by the central limit theorem, more-or-less normally distributed data. The entire data set does not fit that criteria though.
+
+```{r}
+#| label: fig-x26qq
+#| eval: true
+#| output: true
+#| fig-cap: 'QQ plot of the the entire resampled kinetic energy data, showing significant departure from the normal distribution.'
+qqnorm(rsxn26ke, panel.first = grid())
+qqline(rsxn26ke)
+```
+
+If we skip the first 2,500 points, it looks much more normal, except at the low end (plotting with `car::qqPlot()` will verify that it departs around the -1 quantile).
+
+```{r}
+#| label: fig-x26tailqq
+#| eval: true
+#| output: true
+#| fig-cap: 'QQ plot of the last 1,598 resampled points (i.e., 50 * 50 resampled points skipped).'
+qqnorm( tail( rsxn26ke, -50 * 50), panel.first = grid())
+qqline( tail( rsxn26ke, -50 * 50))
+```
+
+
+```{r}
+#| label: clearxn26
+#| echo: false
+#| output: false
+rm( xn26, pl, rec26,t, t2, t3, t4, t5, rsxn26ke)
+gc(full=TRUE,verbose=FALSE)
+```
+
+
+# Final Equilibrium Test
+
+The slope being less than the standard error of the slope seems like a good criteria, as evidenced by the `S2b.0026` data above. This criteria does not fit the `minp` parameter though, as the minimum probability at $F = 1$ depends on the number of samples.
+
+```{r}
+#| label: fig-Fsamp
+#| eval: true
+#| output: true
+#| fig-cap: 'The change in `Fpvalue` for `Fval = 1` as the number of samples goes from 50 to 4,000 (the x axis is plotted logarithmically).'
+ plot( 50:4000, pf(1,1,50:4000, lower.tail = FALSE), log="x", xlab = "df2",
+       ylab = 'Fpvalue', panel.first = grid())
+```
+
+We can create `newfindlmlen` to test this criteria.  Unfortunately there is not a simple way make criteria passed in the call.
+
+```{r}
+#| label: newfindlmlen
+newfindlmlen <- function( df, maxf = 1) {
+   kefit <- lmMD2( df)
+   lendf <- nrow( df)
+   if (kefit[ 'Fval'] > maxf) { # The data appears to be correlated
+      third <- floor( lendf / 3) # Errs on the side of a longer 2/3s.
+      ttdf <- tail( df, -third) # two thirds df
+      kefit2 <- lmMD2( ttdf)
+      if (kefit2[ 'Fval'] <= maxf) { # The 2nd 2/3s passed
+       # Try to expand fit
+         ftdf <- head( df, third) #first third df
+         approach <- lmMD2( ftdf) # fit the approach to equilibrium
+         if (sign( approach[ 'Estimate']) > 0) { # ke was growing
+            adder <- which.max( ftdf$ke > min( ttdf$ke))
+         } else {
+            adder <- which.max( ftdf$ke < max( ttdf$ke))
+         } # if (sign( approach...))
+         newlen <- lendf - third + adder
+         kefit3 <- lmMD2( tail( df, newlen))
+         if (kefit3[ 'Fval'] <= maxf) return( kefit3) else
+            return( kefit2)
+         # the above `if` should return either way - no way to get here.
+      } # if (kefit2....)
+      # if we get here, then neither whole nor 2/3's passed.
+   } # if kefit...
+   # if we get here, then either the original fit passed the F-test,
+   # or neither passed, so the original fit is returned.
+   # The F p-value will show that this record is suspect.
+   return( kefit)
+}
+```
+
+We need to re-run the lengthy simulation to apply the new function.
+
+```{r}
+#| label: simmore
+if (!exists("q3") || !all( dim(q3) == c( trials, 8))) { # don't do unless needed.
+    stopifnot("parallel" %in% .packages())
+    # require( parallel) # only load if needed
+   cl <- parallel::makeCluster( num_cores)
+   parallel::clusterExport( cl, c( "len", "lmMD2", "newfindlmlen", "combineruns"))
+   system.time( q3 <- t( # need to transpose the result of parSapply
+      parallel::parSapply( cl, integer( trials), 
+                           function(i) newfindlmlen( data.frame( step = 1:len, 
+                                                     ke = rnorm( len))), 
+                           simplify = "array")
+         ) # t
+      ) # system.time
+   parallel::stopCluster( cl)
+}
+head( q3, 10)
+```
+
+The results of that are below.
+
+```{r}
+fails <- q3[,'nr'] == len & q3[,'Fval'] > 1
+flp <-  q3[,'nr'] == len & q3[,'Fval'] <= 1 # full length pass
+sp <- q3[,'nr'] < len # short pass
+cat( "Fails: ", sum( fails), "(passes: ", trials - sum(fails), ")", '\n')
+cat( "Full Length Passes: ", sum( flp), '\n')
+cat( "Shortened passes: ", sum( sp), '\n')
+cat( "Exactly Two-Thirds: ", sum( q3[,"nr"] == (len - len3)), '\n')
+shorts <- q3[,'Fval'] <= 1 & q3[,'nr'] < len
+cat( "Averge shorter length: ", mean(q3[ shorts,"nr"]), "\n" )
+cat( "Max short pass: ", max( q3[ sp,]), "\n")
+
+cat( "Mean Beta: ", mean(q3[, "Estimate"]), 
+     " Standard Dev.: ", sd(q3[,"Estimate"]), "\n")
+```
+
+The full correlation should fail about 62% of the time. A rather large amount of variability has been observed, but the procedure to revert to the last two-thirds adds perhaps half again as many successes. The plot below opens an interesting discussion.
+
+```{r}
+#| label: fig-newest
+#| fig-cap: "Absolute value of the estimate vs. the standard error, just as in @fig-firsttrial. Black points are failures, green are full length passes, and blue are shortened passes.  The red line shows equality (estimate equals the standard error; the points do not extend above the line, but the symbols drawn around the points do)."
+plot( abs(Estimate) ~ Std.Error, data=q3[fails, ], 
+      xlim=c(0, max( q3[, 'Std.Error'])), ylim = c(0, max( q3[, 'Estimate'])))
+grid()
+abline(a=0, b=1, col='red')
+points( abs(Estimate) ~ Std.Error, data=q3[ sp, ], col='blue',
+       pch = 2)
+points( abs(Estimate) ~ Std.Error, data=q3[ flp, ], col='darkgreen',
+       pch = 2)
+```
+
+The entire data set needs to be reprocessed with the new function.  As part of this set of notes, all of the data will be copied into the 1980 folder and all processing will be done there. The `*.jld2`, `*.csv`, and `*.txt` files need to be moved.
