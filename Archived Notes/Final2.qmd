@@ -1,0 +1,571 @@
+---
+title: "Second Final Analysis of 1980 Data"
+author: "Philip A. Shea"
+date: last-modified
+format:
+  pdf:
+    documentclass: article
+    papersize: letter
+    toc: true
+    toc-depth: 2
+mainfont: Cambria
+crossref:
+  fig-title: '**Figure**'
+  fig-labels: arabic
+  title-delim: "**.**"
+editor: visual
+bibliography: references.bib
+---
+
+```{r}
+#| label: init
+#
+# NOTE: if the package has changed, it must be installed locally via:
+#
+# devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+#
+# You probably have to re-start r after this.
+#
+# *****************************************************
+require( MD2RP)
+require( parallel)
+require( pracma)
+require( data.table)
+num_cores <- detectCores() - 1
+options(digits=5)
+```
+
+# Re-Processing the Data
+
+At the end of `Final.pdf` (19 December 2024) we realized that changes to the `MD2RP`package were needed which would break the ability to re-run `Final.qmd`. I suspected that naming it "Final" doomed me to it not being final. We abandoned the significance test and reverted to the simple criteria that the slope be less than the standard error of the slope (which is identical to the F-Statistic being less than one). We will start by re-reading all of the data and re-processing it.
+
+```{r}
+#| label: MD2DFC
+dir <- "H:/Data/DSP/MD/Data/1980"
+MD2DF.C <- MD2DFfile(
+    "C:/Users/phils/Documents/DSP/MD/MD2/MD2DF.C.RDS",
+    dir, "S2*.scalars.csv", verbose = TRUE)
+```
+
+On the first running, this was the output:
+
+```         
+1775  files found.
+Processing  1775  files.
+S2\.0001 S2\.0002 S2\.0003 S2\.0004 S2\.0005 S2\.0006 S2\.0007 S2\.0008 S2\.0009 S2\.0010 S2\.0011 S2\.0012 S2\.0013 S2\.0014 S2\.0015 S2\.0016 S2\.0017 S2\.0018 S2\.0019 S2\.0020 S2\.0021 S2\.0022 S2\.0023 S2\.0024 S2\.0025 S2\.0026 S2\.0027 S2\.0028 S2\.0029 S2\.0030 S2\.0031 S2\.0032 S2\.0033 S2\.0034 S2\.0035 S2\.0036 S2\.0037 S2\.0038 S2\.0039 S2\.0040 S2\.0041 S2\.0042 S2\.0043 S2\.0044 S2\.0045 S2\.0046 S2\.0047 S2\.0048 S2\.0049 S2\.0050 S2\.0051 S2\.0052 S2\.0053 S2\.0054 S2\.0055 S2\.0056 S2\.0057 S2\.0058 S2\.0059 S2\.0060 S2\.0061 S2\.0062 S2\.0063 S2\.0064 S2\.0065 S2\.0066 S2\.0067 S2\.0068 S2\.0069 S2\.0070 S2\.0071 S2\.0072 S2\.0073 S2\.0074 S2\.0075 S2\.0076 S2\.0077 S2\.0078 S2\.0079 S2\.0080 S2\.0081 S2\.0082 S2\.0083 S2\.0084 S2\.0085 S2\.0086 S2\.0087 S2\.0088 S2\.0089 S2\.0090 S2\.0091 S2\.0092 S2\.0093 S2\.0094 S2\.0095 S2\.0096 S2\.0097 S2\.0098 S2\.0099 S2\.0100 S2b\.0026 S2b\.0027 S2b\.0028 S2b\.0029 S2b\.0030 S2b\.0031 S2b\.0032 S2b\.0033 S2b\.0034 S2b\.0035 S2b\.0036 S2b\.0037 S2b\.0038  runs to process. 
+```
+
+Here is the plot.
+
+```{r}
+#| label: plotall1
+#| fig-cap: 'All (or most) of the (now) 60 columns represented one way or another below. The first nine plots are simply `plotScalars`.  These are followed by (left to right, top to bottom) TE Range (`TE.max.raw - TE.min.raw` in open symbols, and `TE.sd.rs` in closed symbols, plotted logrithmically), Momentum squared (with standard deviation and range), Maximum of momentum squared vs. total steps, spectral width (in units of $1\tau$), $\psi$ delta - the difference berween `psiabs` and `psiavg`, and total steps.'
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3, 
+           mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.C, linethresh = 200)
+par(op)
+```
+
+Let's zoom into the transition region of the kinetic energy.
+
+```{r}
+#| label: fig-ketrans1
+#| eval: true
+#| output: true
+#| fig-cap: 'Kinetic energy for mean total energy below 0.18'
+plotconfMD2( MD2DF.C[ TE.mean.rs < 0.18, ], y="ke", linethresh=200)
+```
+
+```{r}
+#| label: MD2DFB
+MD2DF.B <- data.table( 
+    readRDS( "C:/Users/phils/Documents/DSP/MD/MD2/MD2DF.B.RDS"), key = "run")
+bruns <- MD2DF.B[ Fpvalue <= 0.5,]$run # not valid B
+cruns <- MD2DF.C[ valid == 0,]$run # not valid C
+cat("Run validated before, but not now: ", cruns[ !(cruns %in% bruns)], "\n")
+cat("Runs validated now, but not before: ", cruns[ !(bruns %in% cruns)], "\n")
+```
+
+## Initial Error
+
+So five more runs were tagged as valid, but oddly one that had been previously tagged as valid is now not. This should not be so, as the criteria have been loosened not tightened. This was ultimately due to an error in the call to `list.files()` in `combineruns()` which did not make the `series` string first in the pattern, and included a few files that had been created generating the particle gif of `S2b.0027` melting. The file names were of the form "gs.S2b.0027", and were actually duplicative of existing files (I re-ran some steps to get the gif animation). This problem was fixed (on 12/23/2024, Merry Christmas!) in the `MD2RP` package, and will not appear in future runs of this `qmd` file.
+
+So some of the runs ended up with substantially shorter steps in the average (`steps.avg`). These were runs that were not declared valid previously, but under the new, laxer criteria, the second two thirds are "valid".
+
+```{r}
+all(MD2DF.C$run == MD2DF.B$run) # runs order same in both data tables
+sum( abs( MD2DF.C$total.steps - MD2DF.B$total.steps)) # Same total steps.
+savgdel <- MD2DF.C$steps.avg - MD2DF.B$steps.avg # The delta length of runs.
+savgdel[ !(bruns %in% cruns)] # The new runs are full length
+bc <-  abs(savgdel) > 200000 # big changes
+MD2DF.B[ bc, .(run, total.steps, steps.avg, TE.mean.rs, Fpvalue)]
+MD2DF.C[ bc, .(run, total.steps, steps.avg, TE.mean.rs, Fval)]
+MD2DF.C$steps.avg[ bc] / MD2DF.B$steps.avg[ bc] # The shorter runs are 2/3s
+```
+
+# Transition Region
+
+The following code will define the points needed for fits of the solid and liquid phases and the transition region. Note that the weights previously applied were incorrect - they were simply the variance of the points, but should have been the variance divided by the number of points (i.e, the data values are means). The low energy end of the transition region itself is somewhat arbitrarily declared as the energy of run `S2.0029` which also functions as the highest energy of the solid region.
+
+```{r}
+#| label: tregz3
+minpe <-  0.127373 # Theoretical minimum PE
+maxte <- max( MD2DF.C[ Fval < 1.0, TE.mean.rs]) # yep, max TE
+temin <- MD2DF.C[ run=="S2.0029", TE.mean.rs]
+#temin <- S2.0029["TE.mean.rs"] # Transition Region TE min
+#kemin <- S2.0029["ke.mean.rs"] # Transition Region KE min estimate.
+vs <- MD2DF.C[TE.mean.rs <= temin & Fval < 1.0, # valid solid
+              .(run, ke.mean.rs, TE.mean.rs, ke.sd.rs, nr)]
+setkey(vs, TE.mean.rs)
+swlm2 <- lm( ke.mean.rs ~ I(TE.mean.rs - minpe) - 1, data=vs, 
+             weights = vs[,nr]/(vs[,ke.sd.rs])^2) # Solid weighted lm with minpe
+summary(swlm2)
+slinex <- c(minpe, temin) # TE endpoints for solid line.
+sliney <- predict( swlm2, data.frame( TE.mean.rs = slinex)) # solid line ke's
+vf3 <- MD2DF.C[ TE.mean.rs > 0.157, .(run, ke.mean.rs, TE.mean.rs, ke.sd.rs, nr)]
+# ALL points above 0.157
+setkey(vf3, TE.mean.rs)
+fwlm3 <- lm( ke.mean.rs ~ TE.mean.rs, data=vf3, 
+             weights = vf3[,nr]/(vf3[,ke.sd.rs])^2)
+# fluid wtd. lm of all points.
+summary( fwlm3)
+cfwlm3  <- coef( fwlm3) # coefficients of fluid lm of all points.
+tlinex3 <- c( temin, (sliney[2] - cfwlm3[1]) / cfwlm3[ 2])
+# the right endpoint needs to be updated.
+flinex3 <- c( tlinex3[2], maxte)
+fliney3 <- predict( fwlm3, data.frame( TE.mean.rs = flinex3))
+tliney <- c( sliney[2],  sliney[2]) # trans. line y endpoints
+
+```
+
+The transition region starts at total energy of $0.15352\epsilon$. This has a small standard deviation of `{r} MD2DF.C[ run=="S2.0029", TE.sd.rs]` (a mere `{r} 100*MD2DF.C[ run=="S2.0029", TE.sd.rs]/tlinex3[1]`%). The two heat lines appear straight (but the fluid line is not straight), and regressions are performed on them. The solid line assumes a minimum energy of $0.127373\epsilon$, which is the potential energy of the particles in their minimum energy positions. (Note that this is about 3.7% high, as the calculation has the potential step at the skin range of $3.5\sigma$, an addition which shows up int the potential energy calculation, but is ignored in the force calculations.) The solid line regression on 30 points estimates only the slope, as the the zero temperature point occurs at the minimum energy.
+
+The fluid line is defined as by *all* points (declared valid or not) above total energy of $0.157 \epsilon$, a value chosen because it lies between points we want to exclude and those we want to include. The fit is to 79 points.
+
+The right side of the transition region is defined by the intersection of the fluid regression line with the prediction of the solid line at the total energy of `S2.0029`, thus, not the measured temperature of `{r} MD2DF.C[ run=="S2.0029", ke.mean.rs]`, but the predicted (`{r} predict( swlm2, new = MD2DF.C[ run=="S2.0029", .(ke.mean.rs, TE.mean.rs)])`).
+
+```{r}
+#| label: fig-tregz3
+#| warning: false
+#| fig-cap: 'Close-up of the transition region, clearly showing where adding energy does not change the temperature. Thick black lines are weighted regressions of the solid region (valid points below 0.1535), and the fluid region (*all*  points above 0.157), and the red line is the transition region drawn between (intersecting) the two regression lines. $1\sigma$ confidence intervals of measurements are plotted as light blue region along with the regression lines, as well as gray region showing the maximum - minimum range for each measurement. Points are shown as black circles and red triangles (valid and not valid points, respectively). 95\% confidence intervals on the regression predictions are shown in thin blue lines.'
+
+"%within%" <- function( vector, range) # define convenience function.
+   (vector > range[ 1]) & (vector < range[ 2])
+
+plotconfMD2( y="ke", df = MD2DF.C[ TE.mean.rs %within% c(0.145, 0.17),], 
+             linethresh = 200, xlab = "Total Energy per Particle", 
+             ylab = "Kinetic Energy per Particle") # sets up plot
+grid() # replot grid so it sits in foreground of range area
+lines( slinex, sliney, lwd = 2) # Solid line
+lines( tlinex3, tliney, lwd = 2, col = 'red') # transition line
+lines( flinex3, fliney3, lwd = 2) # fluid line All pnts
+pred.s.plim <- predict( swlm2, interval = "prediction") # solid prediction
+matlines(vs$TE.mean.rs, pred.s.plim[,-1], lty = c(1,1), lwd = c(1,1), 
+        col = c('blue','blue'), type = "l")
+pred.f.plim <- predict( fwlm3, interval = "prediction")
+matlines(vf3$TE.mean.rs, pred.f.plim[,-1], lty = c(1,1), lwd = c(1,1), 
+        col = c('blue','blue'), type = "l")
+text( x = tlinex3, y = tliney, labels = format( tlinex3, trim=TRUE, digits=4), 
+      pos = c( 3, 1), cex = 0.8)
+pl <- recordPlot()
+png("tregz3.png", width = 600, height = 300)
+replayPlot(pl)
+dev.off()
+```
+
+The lower part of the fluid fit looks consistently low. A plot of the residuals confirms this.
+
+```{r}
+#| label: fig-fres
+#| warning: false
+#| fig-cap: 'Residuals from the fluid region fit.  The three most extreme points are labled by the point number.'
+plot(fwlm3, which = 1, panel.first = grid())
+pl <- recordPlot()
+png("fres.png", width = 600, height = 300)
+replayPlot(pl)
+dev.off()
+```
+
+Point 78 in @fig-fres is `S2.0099` at total energy of $0.231 \epsilon$. This would be a candidate for extending the the run. While the solid phase looks better (and its statistics are marginally better -- both are excellent though), it also shows a strong dependence on the data.
+
+```{r}
+#| label: fig-sres
+#| warning: false
+#| fig-cap: 'Residuals from the solid region fit.  The three most extreme points are labled by the point number. Point 30 is `S2.0029`.'
+
+plot(swlm2, which = 1, panel.first = grid())
+```
+
+Experience with weighted values indicates that care should be used when doing weighted fits. We used weighted fits because the variance definately climbs as the temperature climbs.
+
+```{r}
+#| label: fig-kesd
+#| warning: false
+#| fig-cap: 'Kinetic energy standard deviation vs. Total Energy.'
+plot(ke.sd.rs/sqrt(nr) ~ TE.mean.rs, data = MD2DF.C, xlab = "Total Energy per Particle",
+     ylab = "Estimated Std. Dev of KE mean")
+grid()
+```
+
+While this may be reasonable for the solid line, the variance of the variance is quite large for the fluid phase, and this may give undue weight to those points with a randomly low variance. This is likely due to not making very long runs there. Therefore, let's look at the fits without weights.
+
+```{r}
+#| label: treg4
+slm <- lm( ke.mean.rs ~ I(TE.mean.rs - minpe) - 1, data=vs) # Solid weighted lm with minpe
+summary(slm)
+sliney2 <- predict( slm, data.frame( TE.mean.rs = slinex)) # solid line ke's
+flm <- lm( ke.mean.rs ~ TE.mean.rs, data=vf3)
+summary( flm)
+cflm  <- coef( flm) # coefficients of fluid lm of all points.
+tlinex4 <- c( temin, (sliney2[2] - cflm[1]) / cflm[ 2])
+# the right endpoint needs to be updated.
+flinex4 <- c( tlinex4[2], maxte)
+fliney4 <- predict( flm, data.frame( TE.mean.rs = flinex4))
+tliney2 <- c( sliney2[2],  sliney2[2]) # trans. line y endpoints
+```
+
+```{r}
+#| label: fig-tregz4
+#| warning: false
+#| fig-cap: 'Unweighted regressions like @fig-tregz3.'
+
+plotconfMD2( y="ke", df = MD2DF.C[ TE.mean.rs %within% c(0.145, 0.17),], 
+             linethresh = 200, xlab = "Total Energy per Particle", 
+             ylab = "Kinetic Energy per Particle") # sets up plot
+grid() # replot grid so it sits in foreground of range area
+lines( slinex, sliney2, lwd = 2) # Solid line
+lines( tlinex4, tliney2, lwd = 2, col = 'red') # transition line
+lines( flinex4, fliney4, lwd = 2) # fluid line All pnts
+pred.s.plim <- predict( slm, interval = "prediction") # solid prediction
+matlines(vs$TE.mean.rs, pred.s.plim[,-1], lty = c(1,1), lwd = c(1,1), 
+        col = c('blue','blue'), type = "l")
+pred.f.plim <- predict( flm, interval = "prediction")
+matlines(vf3$TE.mean.rs, pred.f.plim[,-1], lty = c(1,1), lwd = c(1,1), 
+        col = c('blue','blue'), type = "l")
+text( x = tlinex4, y = tliney2, labels = format( tlinex3, trim=TRUE, digits=4), 
+      pos = c( 3, 1), cex = 0.8)
+pl <- recordPlot()
+png("tregz4.png", width = 600, height = 300)
+replayPlot(pl)
+dev.off()
+```
+
+```{r}
+#| label: fig-fres2
+#| warning: false
+#| fig-cap: 'Residuals from the fluid region unweighted fit.'
+plot(flm, which = 1, panel.first = grid())
+pl <- recordPlot()
+png("fres.png", width = 600, height = 300)
+replayPlot(pl)
+dev.off()
+```
+
+```{r}
+#| label: fig-sres2
+#| warning: false
+#| fig-cap: 'Residuals from the solid region unweighted fit.'
+plot(slm, which = 1, panel.first = grid())
+```
+
+The pressure vs. KE plot is interesting.
+
+```{r}
+#| label: fig-pvske
+#| warning: false
+#| fig-cap: 'Pressure vs. kinetic energy.'
+plotconfMD2( y = "Pressure", x = "ke.mean.rs", 
+             df = MD2DF.C[ TE.mean.rs %within% c(0.145, 0.17),], 
+             linethresh = 200, xlab = "Kinetic Energy per Particle", 
+             ylab = " Pressure") # sets up plot
+pl <- recordPlot()
+png("pvske.png", width=600, height=300)
+replayPlot(pl)
+dev.off()
+```
+
+```{r}
+#| label: fig-psi
+#| warning: false
+#| fig-cap: '$| \langle \psi \rangle |$ (solid symbols) and $\langle | \psi | \rangle$ (open symbols). Valid points are dark blue circles and not valid points are dark red triangles. The colder solid points overlap.'
+with( MD2DF.C,{
+  valid <- Fval < 1
+  pch <- rep_len( 16, length.out = nrow( MD2DF.C)) # solid symbols
+  pch[ !valid] <- 17
+  col = rep_len( "darkblue", length.out = nrow( MD2DF.C))
+  col[ !valid] <- 'darkred'
+  plot( x = TE.mean.rs, y = 1000 * psiavg, col = col, pch = pch,
+        xlab = "Total Energy", ylab = expression(1000 * psi), log="y", 
+        panel.first = grid())
+  pch <- pch - 15 # This will switch to open symbols
+  points( x = TE.mean.rs, y = 1000 * psiabs.mean.rs, col = col, pch = pch)
+})
+pl <- recordPlot()
+png("psiboth.png", width=600, height=300)
+replayPlot(pl)
+dev.off()
+```
+
+```{r}
+#| label: fig-psiz
+#| warning: false
+#| fig-cap: 'Zoom into @fig-psi : $| \langle \psi \rangle |$ (solid symbols) and $\langle | \psi | \rangle$ open symbols. Valid points are dark blue circles and not valid dark red triangles.'
+with( MD2DF.C[ TE.mean.rs %within% c(0.15, 0.17)],{
+  valid <- Fval < 1
+  pch <- rep_len( 16, length.out = nrow( MD2DF.C)) # solid symbols
+  pch[ !valid] <- 17
+  col = rep_len( "darkblue", length.out = nrow( MD2DF.C))
+  col[ !valid] <- 'darkred'
+  plot( x = TE.mean.rs, y = 1000 * psiavg, col = col, pch = pch,
+        xlab = "Total Energy", ylab = expression(1000 * psi), log="y", 
+        panel.first = grid())
+  pch <- pch - 15 # This will switch to open symbols
+  points( x = TE.mean.rs, y = 1000 * psiabs.mean.rs, col = col, pch = pch)
+})
+pl <- recordPlot()
+png("bothpsiz.png", width=600, height=300)
+replayPlot(pl)
+dev.off()
+
+```
+
+There are two outliers here: There is a pair of points that are much bigger than their neighbors (third point above 0.165) and the very next point is still not considered valid. The code below will pinpoint them.
+
+```{r}
+MD2DF.C[ TE.mean.rs %within% c(0.165, 0.17), 
+         .(run, total.steps, steps.avg, TE.mean.rs, psiavg, psiabs.mean.rs, psiabs.sd.rs, 
+           Fval)][order(TE.mean.rs),]
+```
+
+`S2.0043` is a short sample (11k steps is the shortest run), and the next higher energy sample `S2.0039` was run almost six times longer but was not in equilibrium. For some reason, this run did not get extended farther than 60k steps (it is the only run less than 2M step not considered valid).
+
+The run `S2.0043` may be an indication of the hexatic phase. The two ways we use to measure this, $| \langle \psi \rangle |$ and $\langle | \psi | \rangle$ (the absolute value of the average and the average of the absolute value) are two extremes. A midpoint would be to generate block averages of $\psi$, and compute the absolute value of each block average.
+
+## Looking for $\langle | \langle \psi \rangle_k | \rangle_m$
+
+```{r}
+#| label: xn043
+dir <- "H:/Data/DSP/MD/Data/1980"
+xn43 <- combineruns( dir, "S2","0043")$rundt
+```
+
+```{r}
+#| label: fig-xn43
+#| eval: true
+#| output: true
+#| fig-cap: 'Plots of the basic data in run `S2.0043` after skipping .'
+plotMD2( as.data.frame( tail( xn43, -200)), dt = 0.01)
+```
+
+Let's add a complex column., and create re-sampled averages.
+
+```{r}
+#| label: fig-Cpsixn43
+#| eval: true
+#| output: true
+#| fig-cap: '500 block avereages of $| \langle \psi \rangle_b |$'
+xn43$Cpsi <- complex( real = xn43$Rpsi, imaginary = xn43$Impsi)
+Cpsix43 <- Mod( rsmpavg( tail( xn43$Cpsi, -1000), 500))
+c( mean = mean(Cpsix43), sd = sd(Cpsix43))
+plot( Cpsix43, ylab = expression( abs( psi)), panel.first = grid())
+```
+
+This technique ( $\langle | \langle \psi \rangle_b | \rangle_k$: the average over $k$ blocks of length $b$ ) seems to be an *in-between* technique of the two extremes of $| \langle \psi \rangle_n |$ and $\langle | \psi | \rangle_n$. This modification will be considered in the next iteration of the processing.
+
+## Specific Heat
+
+Following [@Shea1980] the specific heat is
+
+$$
+C_v^* = \left( 1 - \frac{N \langle (\delta T)^2 \rangle}{(T^*)^2} \right)
+$${eq-cv}
+
+where $T^*$ is temperature, $\delta T$ is the standard deviation of the temperature, and $N$ is the number of particles.
+
+```{r}
+#| label: fig-cv
+#| eval: true
+#| output: true
+#| fig-cap: 'Specific heat from temperature variance.'
+with( MD2DF.C, {
+  cv = 1 - 256 * TE.sd.rs^2 / ke.mean.rs^2
+  plot( x = TE.mean.rs, y = cv, xlab = "Total Energy", ylab = "Specific Heat",
+        panel.first = grid())
+  })
+```
+
+Another way is to numerical differentiate the kinetic energy curve. The variance of the items gives just as chaotic an answer. If we skip a few points in between, we get a slightly better answer.
+
+```{r}
+#| label: fig-cvnd
+#| eval: true
+#| output: true
+#| fig-cap: 'Specific heat'
+with( MD2DF.C[order(TE.mean.rs),], {
+  delta <- 3
+  dte <- diff( TE.mean.rs, delta)
+  te2 <- head(TE.mean.rs, -delta) + dte / 2
+  # plot(  x = te2, y =dte)
+  dke <- diff( ke.mean.rs, delta)
+  # plot(  x = te2, y =dke)
+  cvnd <- dte / dke
+  plot( x = te2, y = cvnd, xlab = "Total Energy", ylab = "Specific Heat",
+        panel.first = grid())
+  })
+```
+
+## Thermodynamic Scaling
+
+The $r^{-n}$ potential allows us to create isobars (constant pressure) or isotherms (constant temperature) from our constant density simulations. The important thermodynamic variable is $\eta = \rho \sigma^2 \left( \epsilon / k T \right)^{2/n}$, where $\rho$ is the density, $T$ is the temperature, and $\sigma$, $\epsilon$ and $k$ are the distance unit, energy unit, and Boltzmann's constant respectively, and all are defined as one, which of course means that $\rho$ and $T$ are in scaled units[@Shea1980][@Novaco1982]. Also, the pressure and temperature scale such that $P_1 / \rho_1 T_1 = P_2 / \rho_2 T_2$ (this is the equivalent of the [Ideal Gas Law](https://en.wikipedia.org/wiki/Ideal_gas_law) in two dimensions). If we want to draw an isobar or isotherm curve, we need use the scaling to map the measurements to different scales. If we have measurement $T_1$ at pressure $P_1$ and density $\rho_1$, we can map to a new pressure $P_2$ via
+
+$$
+T_2 = \frac{\rho_1 T_1 P_2}{\rho_2 P_1}
+$$
+
+Then we use the fact that $\eta = \rho_1 / T_1^{2/n} = \rho_2 / T_2^{2/n}$ to replace $\rho_2$ in the above yielding
+
+\begin{align*}
+T_2 &= \frac{\rho_1 T_1 P_2}{P_1 \eta T_2^{2/n}} \\
+    &= \frac{\rho_1 T_1 P_2}{ P_1 \left(\rho_1 / T_1^{2/n}\right) T_2^{2/n}} \\
+T_2^{1 + 2/n} &= \frac{T_1^{1 + 2/n} P_2}{P_1} \\
+T_2 &= T_1 \left( P_2/P_1 \right)^{\left( 1 / (1 + 2/n) \right)}
+\end{align*}
+
+That's messy, but now that we have a $T_2$, and density $\rho_2 = \rho_1 P_2 T_1 / P_1 T_2$.
+
+```{r}
+#| label: fig-isobar
+#| eval: true
+#| output: true
+#| fig-cap: 'Isobar at $P=0.1175$, the pressure near the transition at $1/\pi$ density (see @fig-pvske).'
+with( MD2DF.C, {
+  n <- 5 # current potential exponent
+  P2 <- 0.1175 # near transition pressure at 1/pi density
+  T2 <- ke.mean.rs * (P2 / Pressure.mean.rs)^(1/(1+(2/n)))
+  den2 <- P2 * ke.mean.rs / (pi * Pressure.mean.rs * T2)
+  plotconf( x = (1/den2), y = T2, Fval = Fval, linethresh = 200, 
+            panel.first = grid(), xlab = "Area / Particle", 
+            ylab = "Temperature")
+  axis( side = 1, at = pi, labels = expression(pi))
+})
+pl <- recordPlot()
+png("isobar.png", width=600, height=300)
+replayPlot(pl)
+dev.off()
+```
+
+Similar algebra yields the following for a constant temperature (Isotherm):
+
+\begin{align*}
+P_2 &= \frac{P_1 \rho_2 T_2}{\rho_1 T_1} \\
+    &= \frac{P_1 \eta T_2^{1 + 2/n}}{\rho_1 T_1} \\
+    &= \frac{P_1 \left(\rho_1 / T_1^{n/2}\right)T_2^{1 + 2/n} }{\rho_1 T_1} \\
+    &= P_1 \left(\frac{T_2}{T_1}\right)^{1 + 2/n}
+\end{align*}
+
+The code below generates @fig-isotherm.
+
+```{r}
+#| label: fig-isotherm
+#| eval: true
+#| output: true
+#| fig-cap: 'Isotherm at $T=0.013$.'
+with( MD2DF.C, {
+  n <- 5 # current potential exponent
+  T2 <- 0.013 # near transition temp at 1/pi density
+  P2 <- Pressure.mean.rs * (T2 / ke.mean.rs)^(1+2/n)
+  den2 <- P2 * ke.mean.rs / (pi * Pressure.mean.rs * T2)
+  plotconf( x = (1/den2), y = P2, Fval = Fval, linethresh = Inf, 
+            panel.first = grid(), xlab = "Area / Particle", ylab = "Pressure")
+  axis( side = 1, at = pi, labels = expression(pi))
+})
+pl <- recordPlot()
+png("isotherm.png", width=600, height=300)
+replayPlot(pl)
+dev.off()
+```
+
+That plot is surprising, as the formerly very low temperature measurement ends up in the denominator, requires a very high pressure to maintain the configuration at the selected isotherm. We can zoom into the transition region and see the subtle change in pressure.
+
+```{r}
+#| label: fig-isotherm2
+#| eval: true
+#| output: true
+#| fig-cap: 'Zoom into transition region of Isotherm at $T=0.013$.'
+with( MD2DF.C, {
+  n <- 5 # current potential exponent
+  T2 <- 0.013 # near transition temp at 1/pi density
+  P2 <- Pressure.mean.rs * (T2 / ke.mean.rs)^(1+2/n)
+  den2 <- P2 * ke.mean.rs / (pi * Pressure.mean.rs * T2)
+  plotconf( x = (1/den2), y = P2, Fval = Fval, linethresh = Inf, 
+            panel.first = grid(), xlab = "Area / Particle", ylab = "Pressure",
+            xlim = c(2.9,3.9), ylim = c(0.06,0.15))
+  axis( side = 1, at = pi, labels = expression(pi))
+})
+pl <- recordPlot()
+png("isotherm2.png", width=600, height=300)
+replayPlot(pl)
+dev.off()
+```
+
+This is a very subtle change, and call into question the potential energy step. While not reflected in the force calculation. On average, and almost certainly in the transition region, there will be 12.25 (49/2) particles within the skin depth. In the next version of the MD2 program, we will compute this accurately, but we can estimate the effect here. At a skin depth of 3.5 (7/2), the average per particle increase is $s = (49/4)(7/2)^{-5}/2 = 4/343 = 0.0116618$. If we let the average potential energy be reduced by this, we can say $U'=\langle U_e \rangle - s$ we can recompute the pressure as
+
+\begin{align*}
+  P &= \rho \left( \langle k_e \rangle + \frac{ n U'}{2} \right) \\
+    &= \rho \left( \langle k_e \rangle + \frac{ n \left( \langle U_e\rangle - s \right)}{2} \right)
+\end{align*}
+
+where $n$ is the potential exponent (5 in our work), $\langle k_e \rangle$ is the average kinetic energy, and $\langle U_e \rangle$ is the potential energy.
+
+```{r}
+#| label: fig-Press2
+#| eval: true
+#| output: true
+#| fig-cap: 'Change in pressure (in percent) by uniform reduction in the potential energy (see text).'
+s <- 4 / 343
+Press2 <- with( MD2DF.C, (1 / pi) * ( ke.mean.rs + 5 * (pe.mean.rs - s)/2))
+with( MD2DF.C, {
+  plot( x = TE.mean.rs, y = 100*(Pressure.mean.rs - Press2)/Pressure.mean.rs, 
+        xlab = "Total Energy", ylab = expression( delta * P), 
+        panel.first = grid())
+})
+```
+
+There is not much structure there
+
+```{r}
+#| label: fig-isotherm3
+#| eval: true
+#| output: true
+#| fig-cap: 'Zoom into transition region of Isotherm at $T=0.013$ with the correction for the potential energy offfset (see text).'
+with( MD2DF.C, {
+  n <- 5 # current potential exponent
+  T2 <- 0.013 # near transition temp at 1/pi density
+  P2 <- Press2 * (T2 / ke.mean.rs)^(1+2/n)
+  den2 <- P2 * ke.mean.rs / (pi * Press2 * T2)
+  plotconf( x = (1/den2), y = P2, Fval = Fval, linethresh = Inf, 
+            panel.first = grid(), xlab = "Area / Particle", ylab = "Pressure",
+            xlim = c(2.9,3.9), ylim = c(0.06,0.15))
+  axis( side = 1, at = pi, labels = expression(pi))
+})
+```
+
+Not very different from @fig-isotherm2.
+
+## $\eta$
+
+Since it is the fundamental parameter, we plot $\eta$ as a function of total energy.
+
+```{r}
+#| label: fig-eta
+#| eval: true
+#| output: true
+#| fig-cap: '$\eta$ as a function of Total Energy'
+with( MD2DF.C, {
+  n <- 5 # current potential exponent
+  plotconf( x =TE.mean.rs, y = (ke.mean.rs^(2/n))/pi, Fval = Fval, 
+            linethresh = Inf,
+            panel.first = grid(), xlab = "Total Energy / Particle", 
+            ylab = expression(eta))
+})
+```

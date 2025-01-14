@@ -2,7 +2,9 @@
 title: "LabNotebook"
 author: "PhilShea"
 date: last-modified
-format: pdf
+format:
+  pdf:
+    fig-pos: 'h'
 mainfont: Cambria
 bibliography: ../references.bib
 link-citations: true
@@ -32,41 +34,41 @@ The first run of the system was on 18 July 2024. This series is documented in [D
 
 where `Temp` was the initialization temperature. Note that the total energy includes the potential energy at rest. The nearest neighbors are at a distance of $a = \sqrt{\pi / \sin(\pi / 3)} \approx 1.90463$. The second nearest neighbors are at a distance of $a \sqrt{3} \approx 3.2989$. So the initial potential energy is one half of the energy between each particle. $1 / a^5 \approx .039898$, and the second nearest neighbor energy is $1 / (a\sqrt{3})^5 \approx .0025594$. Summing these and multiplying by three (half of six) yields a per particle potential energy at rest of $0.127373$.
 
-The complete summary is below. Each item is a summary of the 10,000 steps following the 1,000 steps after initialization. The data is in `MD2DF.S1.Rdata`.
+The complete summary is below in @fig-allS1. Each item is a summary of the 10,000 steps following the 1,000 steps after initialization. The data is in `MD2DF.S1.Rdata`.
 
-![Summary of all S1 data.](S1AllSummary.PNG){#fig-allS1}
+![Summary of all S1 data.](images\S1AllSummary.PNG){#fig-allS1}
 
-The `r.squared` response identified an area of interest. A zoomed in plot of kinetic energy (i.e., temperature) versus total energy is below.
+The `r.squared` response identified an area of interest. A zoomed in plot of kinetic energy (i.e., temperature) versus total energy is below in fig-allS1z.
 
-![Kinetic Energy vs. mean Total Energy for series 1.](S1kevsTE.PNG){#fig-allS1z}
+![Kinetic Energy vs. mean Total Energy for series 1.](images/S1kevsTE.PNG){#fig-allS1z}
 
 It was also apparent that there were large gaps in the total energy even though the energies were initialized incrementally. This was suspected to be due to the random nature of the initialization, where the total energy was simply the variance of 512 (i.e., $256 * 2$) random normal deviates.
 
-The initial data ran some very hot runs, so a plot zoomed into the transition region is below.
+The initial data ran some very hot runs, so a plot zoomed into the transition region is below in @fig-S1summary.
 
-![Zoomed in summary of S1 data in @fig-allS1.](S1Summary.PNG)
+![Zoomed in summary of S1 data in @fig-allS1.](images/S1Summary.PNG){#fig-S1summary}
 
 It was also noted that this series did not zero the angular momentum at initialization. While angular momentum is not conserved by the periodic boundary conditions, no good can come of initializing a run with angular momentum.
 
 ## Series 2
 
-Correction for random angular momentum was added to the *Julia* code, and a new set of runs were created to span the transition region. The Nelson-Halperin order parameter [@Halperin1978] was also computed now. The new summary includes this, plus a plot of the standard error of the slope of the temperature plotted against the absolute value of the estimate itself. It took two tries (executed on 21 and 22 August 2024), but we eventually ended up with 100 runs spanning total energy per particles of just above 0.127 to almost 0.2. The summary plot is below. The complete overview of this step in the research is in [DataOverviewS2.pdf](file://C:\Users\phils\Documents\DSP\MD\MD2\DataOverviewS2.pdf). The summarized data is in `MD2DF.S2.Rdata`.
+Correction for random angular momentum was added to the *Julia* code, and a new set of runs were created to span the transition region. The Nelson-Halperin order parameter [@Halperin1978] was also computed now. The new summary includes this, plus a plot of the standard error of the slope of the temperature plotted against the absolute value of the estimate itself. It took two tries (executed on 21 and 22 August 2024), but we eventually ended up with 100 runs spanning total energy per particles of just above 0.127 to almost 0.2. The summary plot is below. The complete overview of this step in the research is in [DataOverviewS2.pdf](file://C:\Users\phils\Documents\DSP\MD\MD2\DataOverviewS2.pdf). The summarized data is in `MD2DF.S2.Rdata` and plotted in @fig-initS2.
 
-![Summary plot of initial S2 run.](S2%20Initial%20Result.PNG){#fig-initS2}
+![Summary plot of initial S2 run.](images/S2%20Initial%20Result.PNG){#fig-initS2}
 
 Some of these should be explained. `ke.sd` is the standard deviation of the kinetic energy. `rtv` is simply `(ke.sd/ke.mean)^2`. For each run, we would perform a linear regression of the temperature vs. step number. `r.squared` is the correlation coefficient of that regression (we are looking for no correlation). The `Estimate` item is the slope of the regression, and `Std.Error` is the standard deviation of that estimated slope (the odd names are assigned by R functions). The thinking here is that if the slope is less than the error, then there is no correlation.
 
-We did observe energy loss, but it was below 0.5%. The plot below shows that.
+We did observe energy loss, but it was below 0.5%. The plot @fig-Eloss below shows that.
 
-![Energy loss (black) and standard deviation (red) as a percent of the total energy. The energy loss exceeds the standard deviation of the energy by a significant amount.](S2%20Energy%20Loss.PNG){#fig-Eloss}
+![Energy loss (black) and standard deviation (red) as a percent of the total energy. The energy loss exceeds the standard deviation of the energy by a significant amount.](images/S2%20Energy%20Loss.PNG){#fig-Eloss}
 
-This can be seen in a plot of the of the combined runs. The `TE` quickly drops. Note also that the linear momentum, which should remain zero, bounces around a bit too. Note also that it remains less than $10^{-20}$.
+This can be seen in a plot of the of the combined runs (see @fig-S20036). The `TE` quickly drops. Note also that the linear momentum, which should remain zero, bounces around a bit too. Note also that it remains less than $10^{-20}$.
 
-![Combined runs of files S2.0036. The drop in total energy (`TE`) can be seen immediately after the start. Incidentally, the run S2.00036 had the worst correlation.](Combined%20runs%20S2%2036.PNG){#fig-S20036}
+![Combined runs of files S2.0036. The drop in total energy (`TE`) can be seen immediately after the start. Incidentally, the run S2.00036 had the worst correlation.](images/Combined%20runs%20S2%2036.PNG){#fig-S20036}
 
-The division between potential and kinetic energy was also examined. The plot below shows this.
+The division between potential and kinetic energy was also examined. The plot below (@fig-keloss) shows this.
 
-![Potential energy as a fraction of the kinetic energy, plotted against the mean kinetic energy. The transition region is quite sharp.](PE%20vs%20KE.PNG){#fig-keloss}
+![Potential energy as a fraction of the kinetic energy, plotted against the mean kinetic energy. The transition region is quite sharp.](images/PE%20vs%20KE.PNG){#fig-keloss}
 
 ### Spectral Processing
 
@@ -77,13 +79,13 @@ sx36 <- detrend( tail( x[, "ke"], -2000)) # remove mean and linear trend
 x36sdf <- qsdf(sx36, blocksize=4096, yrange=110, dt=0.01)
 ```
 
-As is evident, the first 2,000 points was skipped. The `qsdf` function will break the signal into overlapping blocks of `blocksize`, with 50% overlap being the default. The default is also to apply a Hanning window. With only 9,000 points (after skipping 2k), the spectrum is only 3 blocks long. Note that the plot in `Data Overview S2.pdf` appears to be incorrect; the correct plot is below:
+As is evident, the first 2,000 points was skipped. The `qsdf` function will break the signal into overlapping blocks of `blocksize`, with 50% overlap being the default. The default is also to apply a Hanning window. With only 9,000 points (after skipping 2k), the spectrum is only 3 blocks long. Note that the plot in `Data Overview S2.pdf` appears to be incorrect; the correct plot is @fig-S20036fspec below:
 
-![Full spectrum of run S2.0036 less the first 2k points.](x36spec.png){#fig-S20036fspec}
+![Full spectrum of run S2.0036 less the first 2k points.](images/x36spec.png){#fig-S20036fspec}
 
-Zooming in we can see the following:
+Zooming in (@fig-S20036fspecz) we can see the following:
 
-![The blue lines contain 99% of the signals power.](x36%20spec%20zoom.png){#fig-S20036fspecz}
+![The blue lines contain 99% of the signals power.](images/x36%20spec%20zoom.png){#fig-S20036fspecz}
 
 The blue lines are at $\pm 0.708/\tau$ for a main lobe width of $1.416/\tau$. Since the sample rate is $0.01\tau$, the spectral width is the equivalent of about 70 samples. To create a block average which will encompass that, it would have to be at least twice that wide (as the null-to-null bandwidth of main lobe of the average is twice the reciprocal of the block average size).
 
@@ -106,13 +108,13 @@ Experience from 1980 and the results reported in [@Novaco1982] indicates that we
 
 Below are the four auto-correlations. Note that they have not been de-trended, so `xno2` and `x36` are affected by trends.
 
-![Autocorrelations of the four series in @tbl-AutoCorr4tb.](four%20Autocorr.png){#fig-Autocorr4fig}
+![Autocorrelations of the four series in @tbl-AutoCorr4tb.](images/four%20Autocorr.png){#fig-Autocorr4fig}
 
 While 200 appears to be sufficient for the hot (`x100`) sample, the problematic transition samples near total energies of 0.16 per particle need a bit more, perhaps 400.
 
 Below is the last summary plot of the variables.
 
-![Final summary of the S2 initial runs. Note that this summary has the Nelson-Halperin order parameter $|\psi|$ plotted.](S2%20last%20summ.PNG){#fig-S2summ}
+![Final summary of the S2 initial runs. Note that this summary has the Nelson-Halperin order parameter $|\psi|$ plotted.](images/S2%20last%20summ.PNG){#fig-S2summ}
 
 ### Updating `runcombiner.r`
 
@@ -120,7 +122,7 @@ The *Julia* code produces step-by-step data in blocks of steps. This is for two 
 
 The re-sampled data with a regression on the last 2/3 of the data is represented in @fig-x33resamp below:
 
-![Fits to the re-sampled data, the red line is the fit to all of the data (red and blue circles), and the last two-thirds of truncated run S2-0033 (blue circles and line). Green lines indicate the mean (solid), and min & max (dashed) of the blue points. The black line is the regression line for the red points.](x33resamp.png){#fig-x33resamp}
+![Fits to the re-sampled data, the red line is the fit to all of the data (red and blue circles), and the last two-thirds of truncated run S2-0033 (blue circles and line). Green lines indicate the mean (solid), and min & max (dashed) of the blue points. The black line is the regression line for the red points.](images/x33resamp.png){#fig-x33resamp}
 
 The algorithm to determine if a run has reached equilibrium is below (in seven easy steps):
 
@@ -132,7 +134,7 @@ The algorithm to determine if a run has reached equilibrium is below (in seven e
 6.  Find the last point outside the min or max of the two-thirds data. If the second regression has a positive coefficient (i.e., the ke is rising), use the min, and use the max otherwise.
 7.  Perform a third regression on the new set of points. If the F-test fails, then resort to the original two-thirds data. If the use the F-test passes, use the expanded data set for the averages.
 
-The above has been encapsulated in the `findlmlen` function, and incorporated into the `createdf` function. A rather large amount of work went into extending the last two thirds back into the series, so an experiment was run on random data. The following R code was the experiment (displayed here because of its marvelous simplicity):
+The above has been encapsulated in the `findlmlen` function, and incorporated into the `createdf` function. A rather large amount of work went into extending the last two thirds back into the series, so an experiment was run on random data. The following R code was the experiment (displayed here because of its simplicity):
 
 ```{r}
 #| eval: false
@@ -156,13 +158,13 @@ This generated 10,000 length 50 series of random data and ran `findlmlen` on the
 
 : Results of `finlmlen` on random data. {#tbl-findlmtst}
 
-The first thing to notice: the expected number of full length passes is 50%, and this was observed. Of the 2,231 shortened passes, 82% were lengthened. The 1/3 length is given by `len3 <- floor( 50/3)` which is 16. The 2/3 length is 50 - 16 = 34. The average length of the shortened runs was 34.88, so it looks like most runs were only lengthened by 1 point. The maximum short pass was 38 (lengthened by 4). A plot of the result is below.
+The first thing to notice: the expected number of full length passes is 50%, and this was observed. Of the 2,231 shortened passes, 82% were lengthened. The 1/3 length is given by `len3 <- floor( 50/3)` which is 16. The 2/3 length is $50 - 16 = 34$. The average length of the shortened runs was 34.88, so it looks like most runs were only lengthened by 1 point. The maximum short pass was 38 (lengthened by 4). A plot of the result is below in @fig-regtest.
 
-![Absolute value of the estimate vs. the standard error for 10,000 trials of length 50 regressions. Black points are failures, green are full length passes, and blue are shortened passes. The red line shows equality (estimate equals the standard error).](findlmlentst.PNG){#fig-regtest}
+![Absolute value of the estimate vs. the standard error for 10,000 trials of length 50 regressions. Black points are failures, green are full length passes, and blue are shortened passes. The red line shows equality (estimate equals the standard error).](images/findlmlentst.PNG){#fig-regtest}
 
 There were two iterations, with the final summarization of the data performed with re-sampling block size of 500. The updated summary data is in `MD2DF.3.S2.Rdata`. The summary plot of the data is in @fig-MD2DF3S2 below:
 
-![Summary of data in MD2DF.3.S2.Rdata. The red triangles are data runs not considered valid.](MD2DF.3.S2.png){#fig-MD2DF3S2}
+![Summary of data in MD2DF.3.S2.Rdata. The red triangles are data runs not considered valid.](images/MD2DF.3.S2.png){#fig-MD2DF3S2}
 
 The runs note considered valid are as follows:
 
@@ -178,15 +180,15 @@ rerun$energy
 
 On 22 and 23 September 2024 (one month following the first S2 runs), the runs listed above were extended by 15k steps (more than doubling their length), and new runs were made in the transition region. The details are documented in [ExtendRuns1.pdf](file:///C:/Users/phils/Documents/DSP/MD/MD2/ExtendRuns1.pdf). As noted in the pdf, an error had been spotted in the procedure `procMD2DF` and so the entire suite of files had to be reprocessed. The reprocessed data was saved in `MD2DF.4.S2.Rdata`. Note that I reorganized some files, and this file was missing, but as the run data was still available, it was re-created (and saved) on 12 October 2024. The state of the main scalars is shown below in @fig-MSER1.
 
-![Eight key parameters, the first six (counting top-to-bottom, left-to-right) plotted against the mean total energy per particle. They are 1) the standard deviation of the kinetic energy, 2) the pressure, 3) the correlation coefficient, 4) the average of the modulus of the Nelson-Halperin order parameter, 5) the kinetic energy, and 6) the relative variance of the kinetic energy (i.e., the standard deviation divided by the mean). Then the total energy vs. the initialization total, and last the standard error of the slope estimate vs. the absolute value of the slope (with a a line showing where they are equal). Black circles indicate data declared valid and red triangles are data whose regression had too much significance (F-test p-value \< 0.5).](Mainscalars%20ER1.png){#fig-MSER1 width="650"}
+![Eight key parameters, the first six (counting top-to-bottom, left-to-right) plotted against the mean total energy per particle. They are 1) the standard deviation of the kinetic energy, 2) the pressure, 3) the correlation coefficient, 4) the average of the modulus of the Nelson-Halperin order parameter, 5) the kinetic energy, and 6) the relative variance of the kinetic energy (i.e., the standard deviation divided by the mean). Then the total energy vs. the initialization total, and last the standard error of the slope estimate vs. the absolute value of the slope (with a a line showing where they are equal). Black circles indicate data declared valid and red triangles are data whose regression had too much significance (F-test p-value \< 0.5).](images/Mainscalars%20ER1.png){#fig-MSER1 width="650"}
 
 The Nelson-Halperin order parameter $\psi = \frac{1}{2(N-1)}\sum_{i \ne j} e^{i6\theta_{i j}}$, where $\theta_{i j}$ is the angle with the $x$-axis of the vector from particle $i$ to $j$ (the factor of 2 because in the above, each particle is counted twice). This is very sensitive to the transition. @fig-NHOPER1 below shows the current state with $\pm\sigma$ error band.
 
-![The Nelson-Halperin order parameter versus TE (energy in scaled units). Red triangles denote points not considered valid.](NHOPER1.png){#fig-NHOPER1 width="700"}
+![The Nelson-Halperin order parameter versus TE (energy in scaled units). Red triangles denote points not considered valid.](images/NHOPER1.png){#fig-NHOPER1 width="700"}
 
 We assume that the runs below $0.155\epsilon$ belong to the frozen (solid phase) systems, and the valid runs above $0.165\epsilon$ belong to the fluid phase. Linear fits to the two regions result in the lines in @fig-LinFitsphaseER1:
 
-![Linear fits to solid (black) and fluid (blue) phases.](LinFitphaseER1.png){#fig-LinFitsphaseER1}
+![Linear fits to solid (black) and fluid (blue) phases.](images/LinFitphaseER1.png){#fig-LinFitsphaseER1}
 
 ### Update Initialization Code
 
@@ -208,35 +210,35 @@ As can be seen, the random numbers are generated first, and then they are scaled
 
 ### Melting!
 
-Over 13 & 14 October 2024, extended a few runs to over one million steps. There where a few runs which stood out: one which had not reached equilibrium when the runs at energies above and below it did, and one which reached equilibrium when the runs above and below it did not. On 21 October, this caused me to look at the `S2B.0027` run in detail. This first revealed that the `combineruns` routine had an error, in which the sort by `file.time` was silently failing, and the runs were jumbled. The entire notebook `ExtendRuns2.qmd` is invalid now, although a re-run may give odd results. It will be re-run and archived.
+Over 13 & 14 October 2024, extended a few runs to over one million steps. There where a few runs which stood out: one which had not reached equilibrium when the runs at energies above and below it did, and one which reached equilibrium when the runs above and below it did not. On 21 October, this caused me to look at the `S2b.0027` run in detail. This first revealed that the `combineruns` routine had an error, in which the sort by `file.time` was silently failing, and the runs were jumbled. The entire notebook `ExtendRuns2.qmd` is invalid now, although a re-run may give odd results. It will be re-run and archived.
 
-Nevertheless, in this process, run `S2b.0027` was examined and the following was the result.
+Nevertheless, in this process, run `S2b.0027` was examined and @fig-S2b0027 was the result.
 
-![Run S2B.0027 after one million steps. Melting is most obvious in the imaginary component of the Nelson-Halperin order parameter (\`Impsi\`) after time $6,000\tau$ (600k steps).](Mainscalarsx271M.png){#fig-S2b0027 width="600"}
+![Run S2b.0027 after one million steps. Melting is most obvious in the imaginary component of the Nelson-Halperin order parameter (Impsi) after time $6,000\tau$ (600k steps).](images/Mainscalarsx271M.png){#fig-S2b0027 width="600"}
 
 We can see that the total energy is decreasing, which might be concerning. The reduction is 0.8%. This is likely due to particles slipping out of the `rskn` range of the potential. Note that simultaneously, the potential energy (`pe`) is increasing and the kinetic energy (`ke`) is decreasing.
 
 ## Confused Executions
 
-The collision of file names caused a lot of confused executions noticed on 23 October 2024. This resulted in re-processing everything from the last known good run (that is, ending in at most a capital letter). In the process, the melting observed above did not recur, at least not like it did previously.
+The collision of file names caused a lot of confused executions noticed on 23 October 2024. This resulted in re-processing everything from the last known good run (that is, ending in at most a capital letter). In the process, the melting observed above did not recur, at least not like it did previously (@fig-xn27).
 
-![Re-run of S2b.0027 to over 2M steps. Melting appears to occur, but it it also re-freezes.](xn272M.png){#fig-xn27}
+![Re-run of S2b.0027 to over 2M steps. Melting appears to occur, but it it also re-freezes.](images/xn272M.png){#fig-xn27}
 
-Backed off the data analysis for a while, and started fixing `createdf` to allow updating records. This caused me to put all the `R` code into a formal package. I got it to pass `R CMD check` on 7 November. I re-created `MD2DF.9` (which has the `run` and the last filetime columns) on 8 November.
+Backed off the data analysis for a while, and started fixing `createdf` to allow updating records. This caused me to put all the `R` code into a formal package. I got it to pass `R CMD check` on 7 November. I re-created `MD2DF.9` (which has the `run` and the last file time columns) on 8 November.
 
 # Semi-Final Runs
 
-We now (18 November 2024) have a set of consistent runs and a pretty full complement of very long runs. While some of the very long runs are recorded as valid, they are likely not.
+We now (18 November 2024) have a set of consistent runs and a pretty full complement of very long runs. While some of the very long runs are recorded as valid, they are likely not (@fig-MD2DFB).
 
-![The main scalars as of 18November 2024.](MD2DF.B.png){#fig-MD2DFB}
+![The main scalars as of 18November 2024.](images/MD2DF.B.png){#fig-MD2DFB}
 
-The lengths of the runs vary, with very long runs centered around the transition region.
+The lengths of the runs vary, with very long runs centered around the transition region. This is visualized in @fig-stepsvTE.
 
-![The number of runs vs. total energy as of 18 November 2024. Plotted on a log scale. There are 72 runs with 11k steps, 17 with between 26K and 31K, one with 61k, and 23 with between 2M and 2.25M steps.](runs241118.png){#fig-stepsvTE}
+![The number of runs vs. total energy as of 18 November 2024. Plotted on a log scale. There are 72 runs with 11k steps, 17 with between 26K and 31K, one with 61k, and 23 with between 2M and 2.25M steps.](images/runs241118.png){#fig-stepsvTE}
 
-The hottest solid run had a total energy of $0.1535\epsilon$ per particle, and the Nelson-Halperin parameter was 0.63. We also plotted the parameter as a polar plot:
+The hottest solid run had a total energy of $0.1535\epsilon$ per particle, and the Nelson-Halperin parameter was 0.63. We also plotted the parameter as a polar plot in @fig-S20029polar
 
-![Polar plot of S2.0029 $\langle \psi \rangle_s$. The blue circle shows full magnitude. This is consistent with the solid state.](xn292polar.png){#fig-S20029polar}
+![Polar plot of S2.0029 $\langle \psi \rangle_s$. The blue circle shows full magnitude. This is consistent with the solid state.](images/xn292polar.png){#fig-S20029polar}
 
 ## Nelson-Halperin Order Parameter
 
@@ -248,11 +250,11 @@ $$
 
 where $s$ is the step number, $N_p$ are the number of particles, $k \ near\ j$ means the particles "near" particle $j$ such that $k > j$ (and near is simply defined as less than 3/2 of the mean inter-particle distance, a constant in the calculation), and $\theta_{j,k}$ is the angle between the x-axis and the vector between particles $j$ and $k$. $N_q$ is the count of those particles that met the $k\ near\ j$ criteria. $\psi_s$ is a complex quantity whose magnitude indicates the average alignment of the particles (and is the fourier coefficient of 6-fold spacing). Since we have the step-by-step value of $\psi_s$, we can perform the average two ways. Perhaps the obvious is to compute the magnitude of $\psi_s$ and then average that. This is $\langle |\psi_s| \rangle$, where the magnitude is computed at each step (and that is what is plotted step-by-step in `plotMD2`). The analogy to Fourier estimation is supported by this technique, in which multiple spectrums taken at different times are averaged in magnitude. The other value we can compute is the magnitude of the average, or $|\langle \psi_s \rangle|$. The spectral analogy is of the magnitude of a single high resolution Fourier coefficient They are both plotted in @fig-bothpsi below.
 
-![Plots of $\langle |\psi_s| \rangle$ (red open symbols) and $|\langle \psi_s \rangle|$ (blue closed symbols). The triangles are those points not considered valid.](bothpsi.png){#fig-bothpsi}
+![Plots of $\langle |\psi_s| \rangle$ (red open symbols) and $|\langle \psi_s \rangle|$ (blue closed symbols). The triangles are those points not considered valid.](images/bothpsi.png){#fig-bothpsi}
 
 There is little doubt that $\theta$ is rotating. We actually saw this in run `S2b.0027`. @fig-xn27anglez2 below is a plot of the angle and magnitude of $\langle \psi \rangle_{N_q}$, there the notation is to indicate that each point is an average over the $N_q$ particles.
 
-![Plot of the angle and magnitude of a small portion of the Sb.0027 run. The angle is $(30/\pi) Arg(\psi)$, so we can see an approximate angle of $\theta$. The steps above are divided by 1,000, and the time index is $0.01\tau$ per step, so times may be determined by multiplying by 10 (13,050 to 13,300$\tau$).](xn27anglez2.png){#fig-xn27anglez2}
+![Plot of the angle and magnitude of a small portion of the Sb.0027 run. The angle is $(30/\pi) Arg(\psi)$, so we can see an approximate angle of $\theta$. The steps above are divided by 1,000, and the time index is $0.01\tau$ per step, so times may be determined by multiplying by 10 (13,050 to 13,300$\tau$).](images/xn27anglez2.png){#fig-xn27anglez2}
 
 Finally, we were able to go back and re-execute some of the steps and plot them in a gif file.
 
@@ -260,13 +262,13 @@ Finally, we were able to go back and re-execute some of the steps and plot them 
 
 # Transition Region as of 26 November 2024
 
-Assuming that most of the runs are in equilibrium, the transition region can be discerned by performing regression fits to the solid and fluid regions.
+Assuming that most of the runs are in equilibrium, the transition region can be discerned by performing regression fits to the solid and fluid regions (@fig-treg).
 
-![Drawing of the transition region, clearly showing where adding energy does not change the temperature. The black line is the solid region, the blue line the fluid region, and the red line the transition region. Confidence intervals are plotted along with the regression lines, and points are shown in black circles and red triangles showing valid and not valid points.](wreg.png){#fig-treg width="600"}
+![Drawing of the transition region, clearly showing where adding energy does not change the temperature. The black line is the solid region regression, the blue line the fluid region regression, and the red line the transition region. Confidence intervals are plotted along with the regression lines, and points are shown in black circles and red triangles showing valid and not valid points respectively. The regressions were weighted by the variance of data estimated for each point.](images/wreg.png){#fig-treg width="600"}
 
-Zooming into the region shows important detail .
+Zooming into the region shows important detail (@fig-tregz).
 
-![Close-up of transition region from @fig-treg.](wregz.png){#fig-tregz}
+![Close-up of transition region from @fig-treg.](images/wregz.png){#fig-tregz}
 
 Below is the regression for the fluid region:
 
@@ -331,9 +333,9 @@ F-statistic: 1.6e+05 on 1 and 27 DF,  p-value: <2e-16
 
 Looking at the specifics of the data, it is obvious that some of the "not valid" points would be declared valid, so a regression on the fluid region including all points above $0.157\epsilon$, regardless of the point's status. This is plotted in @fig-tregz3.
 
-![Close‑up of transition region with regression on fluid region including *all* points above total energy of 0.157𝜖. 95% confidence intervals on the regression predictions are shown in thick dotted blue lines.](images/fig-tregz3-1.png){#fig-tregz3}
+![Close‑up of transition region with regression on fluid region including *all* points above total energy of 0.157𝜖. 95% confidence intervals on the regression predictions are shown in thick dotted blue lines. As before, the black line is the solid region regression, the blue line the fluid region regression, and the red line the transition region. Confidence intervals are plotted along with the regression lines, and points are shown in black circles and red triangles showing valid and not valid points respectively. The regressions were weighted by the variance of data estimated for each point.](images/fig-tregz3-1.png){#fig-tregz3}
 
-Created a function (not yet incorporated into the `MD2RP` package) that lists most of the 59 columns of all scalars. See @fig-MD2DFBAll for the plot and explanations.
+Created a function (not yet incorporated into the `MD2RP` package) that plots, one way or another, most of the 59 columns of all scalars. See @fig-MD2DFBAll for the plot and explanations.
 
 ![All (or most) of the 59 columns represented one way or another below. The first nine plots are simply `plotScalars` output. These are followed by (left to right, top to bottom) TE Range (`TE.max.raw - TE.min.raw` in open symbols, and `TE.sd.rs` in closed symbols, plotted logrithmically), Momentum squared (with standard deviation and range), Maximum of momentum squared vs. total steps, spectral width (in units of 1/𝜏), 𝜓 delta ‑ the difference berween `psiabs` and `psiavg`, and total steps.](images/fig-MD2DF.Ball-1.png){#fig-MD2DFBAll}
 
@@ -341,7 +343,7 @@ Created a function (not yet incorporated into the `MD2RP` package) that lists mo
 
 The previous definition was using any $F_p > 0.5$ as indication of validity. The reason being that if perfectly random data had greater than a 50% chance of causing that observation, any trend was likely spurious. However, we see that when millions of steps are run, regression will report that the slope is minuscule with high significance (thus, very small $F_p$). These cases are just as valid. So the new criteria will combine the two: $F_p > 0.5$ or the estimated slope is *small* with with significance (say, 95%). We define *small* as an error of less than 20% of the standard deviation of the temperature. Unfortunately, we must re-run all of the files through `procMD2DF` to accomplish this. We could probably just run the invalid files, but is is possible, although unlikely, that the regression length will change with the expanded criteria. (it is unlikely because of the required small slope estimate will not likely be significant without many points.)
 
-The code snippet below shows that all but 4 would be valid.
+The code snippet below shows that all but four would be valid.
 
 ``` r
 nv <- !with( MD2DF.B[ MD2DF.B$Fpvalue < 0.5,], 
@@ -351,15 +353,129 @@ MD2DF.B[ MD2DF.B$Fpvalue < 0.5,][nv,
 ```
 
 | Run | Mean Total Energy | Slope Estimate | Fp Value | ke standard deviation | Steps in Averages |
-|----|----|----|----|----|----|
-| S2b.0026 | 0.15246 | 1.1643e-08 | 0.00075 | 0.00026185 | 2,050,000 |
-| S2b.0032 | 0.15834 | -3.5342e-09 | 0.4517 | 0.00038216 | 2,150,000 |
-| S2.0033 | 0.16146 | 5.1504e-09 | 0.2348 | 0.00033092 | 2,060,000 |
-| S2.0039 | 0.16786 | 1.3377e-06 | 0.1996 | 0.00039460 | 60,000 |
+|----------|---------|-------------|---------|------------|------------|
+| S2b.0026 | 0.15246 | 1.1643e-08  | 0.00075 | 0.00026185 | 2,050,000  |
+| S2b.0032 | 0.15834 | -3.5342e-09 | 0.4517  | 0.00038216 | 2,150,000  |
+| S2.0033  | 0.16146 | 5.1504e-09  | 0.2348  | 0.00033092 | 2,060,000  |
+| S2.0039  | 0.16786 | 1.3377e-06  | 0.1996  | 0.00039460 | 60,000     |
 
 : Runs remaining not-valid under new criteria with current averages.
 
 The next step here is to upgrade `procMD2DF`, and update the plotting algorithms to deal with a `valid` tag vs. simply filtering on `Fpvalue`.
+
+## New Definitions Applied
+
+Unexpectedly, the procedure outlined above produced the pathological result that only the *steepest* sloped lines were significant enough to be declared valid. @fig-estfail is an example of a simulation of 10,000 length 4,000 normally distributed random numbers. In that figure, it is evident that the steepest lines are accepted.
+
+![Absolute value of the estimate vs. the standard error. Black points are failures, green are full length passes, blue are shortened passes, and the red points are those added where the regression line ends 20% or less than the standard deviation. The red line shows equality (estimate equals the standard error).](images/estvstderrflm2.png){#fig-estfail}
+
+So this procedure is considered a failure, and the final resolution was to drop back to that used in [@Shea1980], where the slope had to be less than the standard error of the slope (the equivalent of the red line in @fig-estfail. This is the equivalent of the $F$-test value being less than one and will happen anywhere from 68.8% to 68.3% of normally distributed data as the number of samples (i.e., the $F$ distribution second degree-of-freedom parameter) ranges from 50 to 4,000.
+
+# Transition
+
+The low energy end of the transition region itself is somewhat arbitrarily declared as the total energy of run `S2.0029` (which also functions as the highest energy of the solid region). We therefore define the transition region to start at total energy of $0.15352\epsilon$.  The 18 data points that make up this mean total energy have a small standard deviation of $3.84 \times 10^{-5} \epsilon$ (a mere 0.025%). The two regression lines appear straight (but the fluid line is not straight), and properly weighted regressions are performed on them (weighted regressions performed above ignored the number of points used in the averages; regressions performed below used weights defined as $N/\sigma^2$, where N is the number of points in the average, and $\sigma$ is the standarad deviation of the 500-point resampled avereages).  The solid line assumes a minimum energy of $0.127373\epsilon$, which is the potential energy of the particles in their minimum energy positions. (Note that this is about 3.7% high, as the calculation has the potential step at the skin range of $3.5\sigma$, an addition which shows up int the potential energy calculation, but is ignored in the force calculations.) The solid line regression estimates only the slope, as the the zero temperature point occurs at the minimum energy.
+
+The fluid line is defined as by *all* points (declared valid or not) above total energy of $0.157 \epsilon$, a value chosen because it lies between points we want to exclude and those we want to include. The fit is to 79 points. 
+
+The right side of the transition region is defined by the intersection of the fluid regression line with the prediction of the solid line at the total energy of `S2.0029`, thus, not the measured temperature of $0.013152 \epsilon$, but the predicted ($0.013563 \epsilon$).
+
+![Close-up of the transition region, clearly showing where adding energy does not change the temperature. Thick black lines are regressions of the solid region (30 valid points below 0.1535), and the fluid region (*all* 79 points above 0.157), and the red line is the transition region drawn between (intersecting) the two regression lines. $1\sigma$ confidence intervals of measurements are plotted as light blue region along with the regression lines, as well as gray region showing the maximum - minimum range for each measurement. Points are shown as black circles and red triangles (valid and not valid points, respectively). Regressions were weighted with $\sigma^2/N$, where $N$ is the number of points forming the mean temperature. 95% confidence intervals on the regression predictions are shown in thin blue lines.](images/tregz3.png){#fig-tregz3}
+
+The lower part of the fluid fit looks consistently low. A plot of the residuals confirms this.
+
+![Residuals from the fluid region fit. The three most extreme points are labled by the point number.](images/fres.png){#fig-fres}
+
+Point 78 in @fig-fres is `S2.0099` at total energy of $0.231 \epsilon$.  This would be a candidate for extending the the run. While the solid phase looks better (and its statistics are marginally better -- both are excellent though), it also shows a strong dependence on the data.
+
+Finally, the tranistion is classically shown by a pressure versus temperature plot (@fig-pvske).
+
+![Pressure vs. kinetic energy.](images\pvske.png){#fig-pvske}
+
+## Thermodynamic Scaling
+
+The $r^{-n}$ potential allows us to create isobars (constant pressure) or isotherms (constant temperature) from our constant density simulations. The important thermodynamic variable is $\eta = \rho \sigma^2 \left( \epsilon / k T \right)^{2/n}$, where $\rho$ is the density, $T$ is the temperature, and $\sigma$, $\epsilon$ and $k$ are the distance unit, energy unit, and Boltzmann's constant respectively, and all are defined as one, which of course means that $\rho$ and $T$ are in scaled units [@Shea1980; @Novaco1982]. Also, the pressure and temperature scale such that $P_1 / \rho_1 T_1 = P_2 / \rho_2 T_2$ (this is the equivalent of the [Ideal Gas Law](https://en.wikipedia.org/wiki/Ideal_gas_law) in two dimensions). If we want to draw an isobar or isotherm curve, we need use the scaling to map the measurements to different scales. If we have measurement $T_1$ at pressure $P_1$ and density $\rho_1$, we can map to a new pressure $P_2$ via
+
+$$
+T_2 = \frac{\rho_1 T_1 P_2}{\rho_2 P_1}
+$$
+
+Then we use the fact that $\eta = \rho_1 / T_1^{2/n} = \rho_2 / T_2^{2/n}$ to replace $\rho_2$ in the above yielding
+
+\begin{align*}
+T_2 &= \frac{\rho_1 T_1 P_2}{P_1 \eta T_2^{2/n}} \\
+    &= \frac{\rho_1 T_1 P_2}{ P_1 \left(\rho_1 / T_1^{2/n}\right) T_2^{2/n}} \\
+T_2^{1 + 2/n} &= \frac{T_1^{1 + 2/n} P_2}{P_1} \\
+T_2 &= T_1 \left( P_2/P_1 \right)^{\left( 1 / (1 + 2/n) \right)} 
+\end{align*}
+
+That's messy, but now that we have a $T_2$, and density $\rho_2 = \rho_1 P_2 T_1 / P_1 T_2$.  The following code executes that plot (@fig-isobar).
+
+```{r}
+#| label: fig-isobar
+#| eval: false
+#| output: true
+with( MD2DF.C, {
+  n <- 5 # current potential exponent
+  P2 <- 0.1175 # near transition pressure at 1/pi density
+  T2 <- ke.mean.rs * (P2 / Pressure.mean.rs)^( 1 / (1 + (2 / n)))
+  den2 <- P2 * ke.mean.rs / (pi * Pressure.mean.rs * T2)
+  plotconf( x = (1/den2), y = T2, Fval = Fval, linethresh = 200, 
+            panel.first = grid(), xlab = "Area / Particle", 
+            ylab = "Temperature")
+  axis( side = 1, at = pi, labels = expression(pi))
+})
+```
+
+![Isobar at $P=0.1175$, the pressure near the transition at $1/\pi$ density (see @fig-pvske).](images/isobar.png){#fig-isobar}
+
+Similar algebra yields the following for a constant temperature (Isotherm):
+
+\begin{align*}
+P_2 &= \frac{P_1 \rho_2 T_2}{\rho_1 T_1} \\
+    &= \frac{P_1 \eta T_2^{1 + 2/n}}{\rho_1 T_1} \\
+    &= \frac{P_1 \left(\rho_1 / T_1^{n/2}\right)T_2^{1 + 2/n} }{\rho_1 T_1} \\
+P_2 &= P_1 \left(\frac{T_2}{T_1}\right)^{1 + 2/n} \label{eq-isotherm}
+\end{align*}
+
+The equations above are implemented in the code below to plot @fig-isotherm.
+
+```{r}
+#| label: fig-isotherm
+#| eval: false
+#| output: true
+with( MD2DF.C, {
+  n <- 5 # current potential exponent
+  T2 <- 0.013 # near transition temp at 1/pi density
+  P2 <- Pressure.mean.rs * (T2 / ke.mean.rs)^(1+2/n)
+  den2 <- P2 * ke.mean.rs / (pi * Pressure.mean.rs * T2)
+  plotconf( x = (1/den2), y = P2, Fval = Fval, linethresh = Inf, 
+            panel.first = grid(), xlab = "Area / Particle", ylab = "Pressure")
+  axis( side = 1, at = pi, labels = expression(pi))
+})
+```
+
+![Isotherm at $T=0.013$.](images\isotherm.png){#fig-isotherm}
+
+That plot is surprising, as the formerly very low temperature measurement ends up in the denominator, requires a very high pressure to maintain the configuration at the selected temperature of the isotherm. We can zoom into the transition region and see the subtle change in pressure (@fig-isotherm2).
+
+![Zoom into transition region of Isotherm at $T=0.013$.](images/isotherm2.png){#fig-isotherm2}
+
+# Plans for Next Runs
+
+While all this data is valid, there are enough difficulties to suggest re-running it all. The *Julia* `MD2` code needs to be upgraded with the following changes.
+
+1. Remove potential step (count the number of particles interacting and subtract step for PE calculation).
+1. Report the number of particles interacting.
+1. Report stats in correlation calculation.
+1. Add diffusion calculation and report.
+1. Add heating/cooling.
+
+The runs themselves need to be better organized.
+
+a) Come up with a plan for the distribution of initial energies.
+a) Make the run length dependent on energy, so the temperature variance remains the same.
+a) make uniform 4M point runs through the transition region.
+
 
 {{< pagebreak >}}
 
