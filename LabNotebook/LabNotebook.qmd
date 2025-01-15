@@ -460,6 +460,28 @@ That plot is surprising, as the formerly very low temperature measurement ends u
 
 ![Zoom into transition region of Isotherm at $T=0.013$.](images/isotherm2.png){#fig-isotherm2}
 
+## Specific Heat
+
+Numerically differentiating the temperature with respect to total energy allows us to estimate the specific heat.  The following code produced @fig-cv.
+
+```{r}
+#| label: fig-Cv
+#| eval: false
+#| output: true
+setkey( MD2DF.C, TE.mean.rs) # Sets sort key.
+with( MD2DF.C[valid==1,], {
++     delta <- 2
++     dte <- diff( TE.mean.rs, delta)
++     te2 <- head(TE.mean.rs, -delta) + dte / 2
++     dke <- diff( ke.mean.rs, delta)
++     cvnd <- dte / dke
++     plot( x = te2, y = cvnd, xlab = "Total Energy", ylab = "Specific Heat",
++           panel.first = grid(),xlim= c(0.15,0.165))
++ })
+```
+
+![Specific heat estimated by taking the difference betwen every other *valid* point.  There is a lot of variance in the data, and two points in the transition region show up as negative as the temperatures decreased in (perhaps randomly) in the region.](images\Cv.png){#fig-cv}
+
 # Plans for Next Runs
 
 While all this data is valid, there are enough difficulties to suggest re-running it all. The *Julia* `MD2` code needs to be upgraded with the following changes.
@@ -472,7 +494,7 @@ While all this data is valid, there are enough difficulties to suggest re-runnin
 
 The runs themselves need to be better organized.
 
-a) Come up with a plan for the distribution of initial energies.
+a) Come up with a plan for the distribution of initial energies, taking specific heat calculations into consideration,
 a) Make the run length dependent on energy, so the temperature variance remains the same.
 a) make uniform 4M point runs through the transition region.
 
