@@ -1,0 +1,76 @@
+---
+title: "MD2 Dashboard"
+author: "Phil Shea"
+format: html
+server: shiny
+---
+
+```{r}
+#| label: init
+#| include: false
+#
+# NOTE: if the package has changed, it must be installed locally via:
+#
+# devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+#
+# or
+#
+# devtools::install("/home/phil/MD/MD2RP")
+#
+# You probably have to re-start R after this.
+#
+# *****************************************************
+require( MD2RP)
+require( shiny)
+require( parallel)
+require( pracma)
+require( data.table)
+require( knitr)
+require( kableExtra)
+num_cores <- detectCores() - 1
+options(digits=5)
+"%within%" <- function( vector, range) # define convenience function.
+   (vector > range[ 1]) & (vector < range[ 2])
+
+td <- "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+MD2DF <- readRDS( "MD2DF.R4.RDS") # read in current data for analysis 
+setorder( MD2DF, series, ke.mean.rs)
+```
+
+
+# Current Database
+
+The current database is hard-coded as MD2DF.R4.
+
+```{r}
+knitr::kable( MD2DF[, .( Runs = .N, KSteps = sum( total.steps), 
+                            MinT = min(ke.mean.rs), MaxT = max( ke.mean.rs),
+                            DiffRuns = sum( !is.na(nrd))), 
+                       by = series],
+              format.args = list(big.mark = ",")) %>%
+  kable_styling( font_size = 15, full_width = F, position = "left",
+    bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+
+# Inputs and Outputs
+
+You can embed Shiny inputs and outputs in your document. Outputs are automatically updated whenever inputs change. This demonstrates how a standard R plot can be made interactive:
+
+```{r}
+#| context: UI
+selectInput( "Series", "Select series below:", unique(MD2DF$series))
+plotOutput( "plot")
+```
+
+```{r}
+#| context: server
+
+output$plot <- renderPlot( {
+   df <- reactive( MD2DF[ series == input$Series,])
+   MD2RP::plotconfMD2( df(), y = "Pressure", xlab = "T")
+   })
+
+
+```

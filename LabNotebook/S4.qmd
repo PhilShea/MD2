@@ -1,0 +1,230 @@
+---
+title: "S4"
+author: "Phil Shea"
+date: last-modified
+format:
+  pdf:
+    fig-pos: 'H'
+#mainfont: "Times New Roman"
+bibliography: ../references.bib
+link-citations: true
+monofont: "Courier 10 Pitch"
+monofontoptions: 'Scale=0.8'
+execute:
+   freeze: auto
+editor_options:
+  markdown:
+    wrap: 72
+    references: 
+      location: block
+    canonical: true
+---
+
+```{r}
+#| label: init
+#| include: false
+#
+# NOTE: if the package has changed, it must be installed locally via:
+#
+# devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+#
+# or
+#
+# devtools::install("/home/phil/MD/MD2RP")
+#
+# You probably have to re-start R after this.
+#
+# *****************************************************
+require( MD2RP)
+require( parallel)
+require( pracma)
+require( data.table)
+require( knitr)
+require( lattice)
+num_cores <- detectCores() - 1
+options(digits=5)
+"%within%" <- function( vector, range) # define convenience function.
+   (vector > range[ 1]) & (vector < range[ 2])
+
+td <- "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+MD2DF.P <- readRDS( "../MD2DF.P.RDS") # read in data current for analysis start.
+```
+
+# Comparing Initializations
+
+The `S3` and `S3b` series only differed in how much energy was placed
+into kinetic energy (KE) (the `b` version generated $2N$ random numbers
+and then multiplied them by a factor to set the KE to the requested
+target). The potential energy (PE) was always at its minimum. This
+appears valid, as even in the transition region (`S3.00295` was
+diffusing; see @fig-S3.295all).
+
+```{r}
+#| label: fig-S3.295all
+#| fig-cap: "Plot of first execution of `S3.00295`. The KE and PE can be seen to settle down quickly."
+S3.00295.0000 <- readplot( paste(td, "S3.00295.0000.scalars.csv", sep="/"))
+```
+
+The KE quickly (200 steps) gives up its initial value of 0.0264 to
+settle around 0.013022, while it rings for a short while, by the end of
+the first 1,000 steps it has settled down.
+
+```{r}
+#| label: fig-S3.295z
+#| fig-cap: "Zoom into @fig-S3.295all.  The solid line is the final average of the run computed over 4,0999k steps (only the first 1k steps were skipped)."
+plot(S3.00295.0000$ke[1:1000], typ="l", xlab="step", ylab="ke", 
+     panel.first=grid())
+abline(h=MD2DF.P[run=="S3.00295",ke.mean.rs])
+```
+
+## PE of a Single Particle
+
+```{r}
+#| include: false
+ x<-MD2DF.P[run=="S3.00295",.(ke.mean.rs, steps.avg, total.steps, TE.mean.rs, TE.sd.rs, TE.min.raw, TE.max.raw, pe.mean.rs)]
+terng <- (x$TE.max.raw-x$TE.min.raw)/x$TE.mean.rs
+```
+
+Run `S3.00295` had a total per particle TE range (min to max) of
+`r 100*terng`%. The average excess PE per particle (that is, the PE
+above the minimum PE) is `r (pepp <- x$pe.mean.rs - 0.1159487884)` and
+this is `r pepp/(terng*x$TE.mean.rs)` times the total TE range over 4M
+steps. So while they are of the same order of magnitude, the per
+particle share of that range is very small. The total available energy
+is given by the KE of step zero, in which all of the added energy is
+kinetic. This must be read from the text log, as the first step recorded
+is the KE after the step. For this run, the value is 7.487, so the per
+particle initialization KE is `r 7.487108031861905/256`, very close to
+the desired initialization temperature of 0.0295 (which forms part of
+the file name). The average excess PE of a single particle is therefore
+`r 100 * pepp / (7.487108031861905 - pepp)`% of the total excess energy.
+
+## Initializing PE
+
+Version 1.3.4 of `MD2` added initialization ofthe PE, details recorded
+in the Lab Notebook. The first official test run is below.
+
+```{julia}
+#| eval: false
+julia> td = abspath( @__DIR__, "..", "testdata")
+"/media/phil/Original/Users/phils/Documents/DSP/MD/dev/testdata"
+
+julia> @time MD2.runn( td, 10, "T4.", 1000, 5000, 5)
+temp = 0.01
+basename = "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/testdata/T4.0010"
+Linear Momentum: [0.0013166651512060395, -0.003636111212929541]
+Corrected Linear Momentum: [-2.9815559743351372e-18, 1.7889335846010823e-18]
+Angular Momentum: -19.460386787764655
+Moment of Inertia: 2786.8074511813747
+Corrected Angular Momentum: -4.440892098500626e-16
+Final Linear Momentum: [-2.439454888092385e-18, -2.168404344971009e-19]
+---- initPE!: Temp = 0.01, a = 1.9046256137279147
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/dev/testdata/T4.0010.0000.jld2 at 2025-09-29T10:16:34.227
+Current Steps: 0
+Maximum Speed: 0.4050077976811742)
+  6.668616 seconds (4.28 M allocations: 262.409 MiB, 0.89% gc time, 21.22% compilation time)
+```
+
+The code below creates @fig-T410 (the data is in a test directory which
+gets cleaned out occasionally).
+
+```{r}
+#| label: T410
+#| eval: false
+#| echo: true
+td2 <- "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/testdata"
+t4.0010.0000 <- readplot( paste(td2, "T4.0010.0000.scalars.csv", sep="/"))
+pl <- recordPlot()
+png("T410.png", width=600, height=300)
+replayPlot(pl)
+invisible(dev.off())
+```
+
+![Plot of first execution of `T4.0010`. The KE and PE can be seen to
+settle down quickly.](T410.png){#fig-T410}
+
+@fig-T410all below shows the full run.
+
+```{r}
+#| label: T410all
+#| eval: false
+#| echo: true
+t4.0010 <- combineruns( td2, "T4", "0010", verbose=TRUE)
+plot(t4.0010$rundt$ke, typ='l', panel.first = grid(), xlab="Step", 
+     ylab="Energy / particle", main=" Kinetic and Excess Potential Energy")
+lines(t4.0010$rundt$pe-0.1159487884, typ = 'l', col = 'red')
+legend( 'topright', legend = c('KE', 'PE'), col = c( 'black', 'red'),
+        lty=c(1, 1))
+pl <- recordPlot()
+png("T410all.png", width=600, height=300)
+replayPlot(pl)
+invisible(dev.off())
+```
+
+![Plot of all KE & excess PE points of `T4.0010`. The excess PE is a bit
+higher than the KE in the fluid region.](T410all.png){#fig-T410all}
+
+@fig-T410 shows the PE was clearly too high for the chosen temperature,
+likely due to ignoring the positions of the particles when placing them:
+particles randomly placed too close to each other will generate very
+high energies. A "fudge factor" was introduced in version 1.3.5 which
+altered the requested temperature for PE initialization. Using 0.5
+(lowering the temperature by a factor of two) generated the following
+results.
+
+```{julia}
+#| eval: false
+julia> @time MD2.runn( td, 10, "T4b.", 1000, 5000, 5)
+temp = 0.01
+basename = "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/testdata/T4b.0010"
+Linear Momentum: [0.0013166651512060395, -0.003636111212929541]
+Corrected Linear Momentum: [-2.9815559743351372e-18, 1.7889335846010823e-18]
+Angular Momentum: -19.460386787764655
+Moment of Inertia: 2786.8074511813747
+Corrected Angular Momentum: -4.440892098500626e-16
+Final Linear Momentum: [-2.439454888092385e-18, -2.168404344971009e-19]
+---- initPE!: Temp = 0.005, a = 1.9046256137279147
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/dev/testdata/T4b.0010.0000.jld2 at 2025-09-29T14:43:50.732
+Current Steps: 0
+Maximum Speed: 0.4050077976811742)
+  6.114213 seconds (4.28 M allocations: 262.380 MiB, 3.93% gc time, 26.85% compilation time)
+```
+
+```{r}
+#| label: T4b10
+#| eval: false
+td2 <- "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/testdata"
+t4b.0010.0000 <- readplot( paste(td2, "T4b.0010.0000.scalars.csv", sep="/"))
+pl <- recordPlot()
+png("T4b10.png", width=600, height=300)
+replayPlot(pl)
+invisible(dev.off())
+```
+
+![Plot of first execution of `T4b.0010`. The KE and PE start near the
+values to which they can be seen to quickly
+settle.](T4b10.png){#fig-T4b10}
+
+```{r}
+#| label: T4b10all
+#| eval: false
+t4b.0010 <- combineruns( td2, "T4b", "0010", verbose=TRUE)
+plot(t4b.0010$rundt$ke, typ='l', panel.first = grid(), xlab="Step", 
+     ylab="Energy / particle", main=" Kinetic and Excess Potential Energy")
+lines(t4b.0010$rundt$pe-0.1159487884, typ = 'l', col = 'red')
+legend( 'topright', legend = c('KE', 'PE'), col = c( 'black', 'red'),
+        lty=c(1, 1))
+pl <- recordPlot()
+png("T4b10all.png", width=600, height=300)
+replayPlot(pl)
+invisible(dev.off())
+```
+
+![Plot of all KE & PE points of `T4b.0010`. The lower initial PE caused
+the temperature to be closer to the requested initialization temperature
+of 0.01, so the excess substance is in the solid region and the PE and
+KE are essentially mirror images of each other.](T4b10all.png)
+

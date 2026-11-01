@@ -1,0 +1,1345 @@
+---
+title: "S4"
+author: "Phil Shea"
+date: last-modified
+format:
+  pdf:
+    fig-pos: 'H'
+#mainfont: "Times New Roman"
+bibliography: ../references.bib
+link-citations: true
+monofont: "Courier 10 Pitch"
+monofontoptions: 'Scale=0.8'
+execute:
+   freeze: auto
+editor_options:
+  markdown:
+    wrap: 72
+    references: 
+      location: block
+    canonical: true
+---
+
+```{r}
+#| label: init
+#| include: false
+#
+# NOTE: if the package has changed, it must be installed locally via:
+#
+# devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+#
+# or
+#
+# devtools::install("/home/phil/MD/MD2RP")
+#
+# You probably have to re-start R after this.
+#
+# *****************************************************
+require( MD2RP)
+require( parallel)
+require( pracma)
+require( data.table)
+require( knitr)
+require( lattice)
+require( JuliaCall)
+num_cores <- detectCores() - 1
+options(digits=5)
+"%within%" <- function( vector, range) # define convenience function.
+   (vector > range[ 1]) & (vector < range[ 2])
+
+td <- "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+MD2DF.P <- readRDS( "../MD2DF.P.RDS") # read in data current for analysis start.
+```
+
+# Comparing Initializations
+
+The `S3` and `S3b` series only differed in how much energy was placed
+into kinetic energy (KE) (the `b` version generated $2N$ random numbers
+and then multiplied them by a factor to set the KE to the requested
+target). The potential energy (PE) was always at its minimum. This
+appears valid, as even in the transition region (`S3.00295` was
+diffusing; see @fig-S3.295all).
+
+```{r}
+#| label: fig-S3.295all
+#| fig-cap: "Plot of first execution of `S3.00295`. The KE and PE can be seen to settle down quickly."
+S3.00295.0000 <- readplot( paste(td, "S3.00295.0000.scalars.csv", sep="/"))
+```
+
+The KE quickly (200 steps) gives up its initial value of 0.0264 to
+settle around 0.013022, while it rings for a short while, by the end of
+the first 1,000 steps it has settled down.
+
+```{r}
+#| label: fig-S3.295z
+#| fig-cap: "Zoom into @fig-S3.295all.  The solid line is the final average of the run computed over 4,0999k steps (only the first 1k steps were skipped)."
+plot(S3.00295.0000$ke[1:1000], typ="l", xlab="step", ylab="ke", 
+     panel.first=grid())
+abline(h=MD2DF.P[run=="S3.00295",ke.mean.rs])
+```
+
+## PE of a Single Particle
+
+```{r}
+#| include: false
+ x<-MD2DF.P[run=="S3.00295", .(ke.mean.rs, steps.avg, total.steps, TE.mean.rs,
+                               TE.sd.rs, TE.min.raw, TE.max.raw, pe.mean.rs)]
+terng <- (x$TE.max.raw-x$TE.min.raw)/x$TE.mean.rs
+```
+
+Run `S3.00295` had a total per particle TE range (min to max) of
+`r 100*terng`%. The average excess PE per particle (that is, the PE
+above the minimum PE) is `r (pepp <- x$pe.mean.rs - 0.1159487884)` and
+this is `r pepp/(terng*x$TE.mean.rs)` times the total TE range over 4M
+steps. So while they are of the same order of magnitude, the per
+particle share of that range is very small. The total available energy
+is given by the KE of step zero, in which all of the added energy is
+kinetic. This must be read from the text log, as the first step recorded
+is the KE after the step. For this run, the value is 7.487, so the per
+particle initialization KE is `r 7.487108031861905/256`, very close to
+the desired initialization temperature of 0.0295 (which forms part of
+the file name). The average excess PE of a single particle is therefore
+`r 100 * pepp / (7.487108031861905 - pepp)`% of the total excess energy.
+
+## Initializing PE
+
+Version 1.3.4 of `MD2` added initialization of the PE, details recorded
+in the Lab Notebook. The first official test run is below.
+
+```{julia}
+#| eval: false
+julia> td = abspath( @__DIR__, "..", "testdata")
+"/media/phil/Original/Users/phils/Documents/DSP/MD/dev/testdata"
+
+julia> @time MD2.runn( td, 10, "T4.", 1000, 5000, 5)
+temp = 0.01
+basename = "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/testdata/T4.0010"
+Linear Momentum: [0.0013166651512060395, -0.003636111212929541]
+Corrected Linear Momentum: [-2.9815559743351372e-18, 1.7889335846010823e-18]
+Angular Momentum: -19.460386787764655
+Moment of Inertia: 2786.8074511813747
+Corrected Angular Momentum: -4.440892098500626e-16
+Final Linear Momentum: [-2.439454888092385e-18, -2.168404344971009e-19]
+---- initPE!: Temp = 0.01, a = 1.9046256137279147
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/dev/
+  testdata/T4.0010.0000.jld2 at 2025-09-29T10:16:34.227
+Current Steps: 0
+Maximum Speed: 0.4050077976811742)
+  6.668616 seconds (4.28 M allocations: 262.409 MiB, 0.89% gc time, 
+                    21.22% compilation time)
+```
+
+The code below creates @fig-T410 (the data is in a test directory which
+gets cleaned out occasionally).
+
+```{r}
+#| label: T410
+#| eval: false
+#| echo: true
+td2 <- "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/testdata"
+t4.0010.0000 <- readplot( paste(td2, "T4.0010.0000.scalars.csv", sep="/"))
+pl <- recordPlot()
+png("T410.png", width=600, height=300)
+replayPlot(pl)
+invisible(dev.off())
+```
+
+![Plot of first execution of `T4.0010`. The KE and PE can be seen to
+settle down quickly.](T410.png){#fig-T410}
+
+@fig-T410all below shows the full run.
+
+```{r}
+#| label: T410all
+#| eval: false
+#| echo: true
+t4.0010 <- combineruns( td2, "T4", "0010", verbose=TRUE)
+plot(t4.0010$rundt$ke, typ='l', panel.first = grid(), xlab="Step", 
+     ylab="Energy / particle", main=" Kinetic and Excess Potential Energy")
+lines(t4.0010$rundt$pe-0.1159487884, typ = 'l', col = 'red')
+legend( 'topright', legend = c('KE', 'PE'), col = c( 'black', 'red'),
+        lty=c(1, 1))
+pl <- recordPlot()
+png("T410all.png", width=600, height=300)
+replayPlot(pl)
+invisible(dev.off())
+```
+
+![Plot of all KE & excess PE points of `T4.0010`. The excess PE is a bit
+higher than the KE in the fluid region.](T410all.png){#fig-T410all}
+
+@fig-T410 shows the PE was clearly too high for the chosen temperature,
+likely due to ignoring the positions of the particles when placing them:
+particles randomly placed too close to each other will generate very
+high energies. A "fudge factor" was introduced in version 1.3.5 which
+altered the requested temperature for PE initialization. Using 0.5
+(lowering the temperature by a factor of two) generated the following
+results.
+
+```{julia}
+#| eval: false
+julia> @time MD2.runn( td, 10, "T4b.", 1000, 5000, 5)
+temp = 0.01
+basename = "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/testdata/T4b.0010"
+Linear Momentum: [0.0013166651512060395, -0.003636111212929541]
+Corrected Linear Momentum: [-2.9815559743351372e-18, 1.7889335846010823e-18]
+Angular Momentum: -19.460386787764655
+Moment of Inertia: 2786.8074511813747
+Corrected Angular Momentum: -4.440892098500626e-16
+Final Linear Momentum: [-2.439454888092385e-18, -2.168404344971009e-19]
+---- initPE!: Temp = 0.005, a = 1.9046256137279147
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/dev/
+  testdata/T4b.0010.0000.jld2 at 2025-09-29T14:43:50.732
+Current Steps: 0
+Maximum Speed: 0.4050077976811742)
+  6.114213 seconds (4.28 M allocations: 262.380 MiB, 3.93% gc time, 
+                    26.85% compilation time)
+```
+
+```{r}
+#| label: T4b10
+#| eval: false
+td2 <- "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/testdata"
+t4b.0010.0000 <- readplot( paste(td2, "T4b.0010.0000.scalars.csv", sep="/"))
+pl <- recordPlot()
+png("T4b10.png", width=600, height=300)
+replayPlot(pl)
+invisible(dev.off())
+```
+
+![Plot of first execution of `T4b.0010`. The KE and PE start near the
+values to which they can be seen to quickly
+settle.](T4b10.png){#fig-T4b10}
+
+The current speed of the program is defined by the following:
+
+```{julia}
+#| eval: false
+julia> include("./test/BaselineSpeed.jl")
+
+18.664092 seconds (20.18 M allocations: 1.578 GiB, 1.92% gc time, 156 lock conflicts)
+
+```
+
+That's 0.0552s per 1k steps.
+
+# Single Precision and Old Time Step
+
+Series four will focus on the single precision (`Float32`) data and time
+step of $\tau = 0.0177737$, which is close to what was used in 1979 (it
+was somewhere between 0.0178315 and the above). The first step is to do
+a `revtest()` with `Float32` and the higher time step. We choose to
+initialize at a temperature of $T=0.03$ as it is hotter than we plan to
+run.
+
+```{julia}
+#| eval: false
+julia> julia> MD2.revtest( td, 30, "F320177.", 1000, T=Float32, tau=0.0177737)
+temp = 0.03
+basename = "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/testdata/
+            F320177.0030"
+---- initPE!: Temp = 0.015, a = 1.9046257
+Linear Momentum: Float32[-0.024302304, 0.0051562395]
+Corrected Linear Momentum: Float32[-3.434252f-9, 1.1641532f-10]
+Angular Momentum: -11.559397
+Moment of Inertia: 2786.8574
+Corrected Angular Momentum: -5.722046e-6
+Final Linear Momentum: Float32[2.6366324f-6, -3.6406913f-5]
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/dev/
+testdata/F320177.0030.0000.jld2 at 2025-10-02T11:06:18.658
+Current Steps: 0
+Maximum Speed: 0.58966744)
+RMS Particle Distance is 0.19545364, 
+ 10.262050577817634% of lattice spacing of 1.9046256137279147 
+ 
+            Maximum delta was 0.7719284 on particle 211.
+
+```
+
+The final number is the sum of squared position errors. The RMS particle
+error `r sqrt(12.138896/256)`, 11.4% of inter-particle distance, is
+given by $\sqrt{\delta_i^2/N}$, where $\delta_i$ is the difference
+between particle $i$'s position before and after moving 1,000 steps
+forward and reverse, and $N$ is the number of particles. Here are some
+example returns. @tbl-revtest shows the results.
+
+| Name     | 64/32 | $\tau$    | RMS Dist. | \% Lattice | Max Part. |
+|:---------|:-----:|:----------|:----------|:-----------|:----------|
+| F64      |  64   | 0.01      | 0.0142    | 0.749      | 0.04169   |
+| F64013   |  64   | 0.013     | 0.0366448 | 1.92       | 0.176     |
+| F640177  |  64   | 0.0177737 | 0.14517   | 7.6218     | 0.37303   |
+| F640177b |  64   | 0.0177737 | 0.14485   | 7.605      | 0.43965   |
+| F640177c |  64   | 0.0177737 | 0.2774    | 14.5665    | 1.163     |
+| F32      |  32   | 0.01      | 0.0170    | 0.89277    | 0.1067    |
+| F32013   |  32   | 0.013     | 0.08027   | 4.215      | 0.2677    |
+| F320177  |  32   | 0.0177737 | 0.19545   | 10.26      | 0.7719    |
+
+: `revtest()` results for `Float64` and `Float32` and three different
+time steps. Note that different runs can have different results. All
+runs had an initialization temperature of $T=0.03$. {#tbl-revtest}
+
+It is evident that the error is not sensitive to the precision, but very
+sensitive to the time step. We also point out that a run with the larger
+time step but an initialization temperature of $T=0.2$ had an RMS error
+of 0.0357 which is 1.876% of the lattice spacing (less than a quarter of
+that at the higher temperature).
+
+# New Runs Duplication 1979
+
+The following was run on 8 October 2025.
+
+```{julia}
+#| eval: false
+
+julia> cd("/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J")
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> td = "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+julia> tlist = [ i for i in 1:21]
+21-element Vector{Int64}:
+  1
+  2
+  . 
+  .
+  .
+
+julia> @time MD2.newruns( td, tlist, "S4.", 1000, 5000, 4, T=Float32, 
+                          tau=0.0177737)
+
+ 29.572633 seconds (54.73 M allocations: 3.044 GiB, 2.83% gc time, 
+                    142 lock conflicts, 143.88% compilation time: 3% of which 
+                    was recompilation)
+```
+
+21 temperatures, 21k steps each, for 441k steps (plus 21
+initializations) in 29.57s is 0.067s/1k steps (unsure what 144%
+compilation time means). The data can be added to the database via the
+following:
+
+```{r}
+#| label: MD2DFQ
+system.time( MD2DF.Q <- MD2DFfile( "../MD2DF.Q.RDS", td, "S4.*.scalars.csv",
+                                   df = MD2DF.P))
+```
+
+```         
+105  files found.
+   user  system elapsed 
+  0.142   0.028   3.013 
+```
+
+And plotted via the following (@fig-MDQ).
+
+```{r}
+#| label: fig-MDQ
+#| fig-cap: Plot of all the new S4 series scalars.
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2( MD2DF.Q[ series == "S4"], linethresh = 200)
+```
+
+@tbl-tableQ shows some details.
+
+```{r}
+#| label: tbl-tableQ
+#| tbl-cap: Some key parameters from the new runs. `tedelta` is the diffenrece between `TE.mean.rs` and `TE.init`. As a reminder, `TE.init` is the total energy of the first step.
+knitr::kable( MD2DF.Q[ series == "S4", 
+                       .(run, Steps = total.steps, TE.mean.rs, ke.mean.rs,
+                         pe.mean.rs, M.2.mean.rs, valid)],
+              digits = 4, format.args = list( big.mark = ","))
+```
+
+@fig-S421all shows the highest temperature run.
+
+```{r}
+#| label: fig-S421all
+#| fig-cap: Run `S4.0021` has a temperature of 0.0219. The PE and KE are mirror images.The excess PE is computed by subtracting the minimum PE of the crystal (0.11595) from the measured PE.
+#| eval: true
+S4.0021 <- combineruns( td, "S4", "0021", verbose=TRUE)
+plot( S4.0021$rundt$ke, typ='l', panel.first = grid(), xlab="Step", 
+      ylab="Energy / particle", main=" Kinetic and Excess Potential Energy")
+lines( S4.0021$rundt$pe-0.1159487884, typ = 'l', col = 'red')
+legend( 'topright', legend = c('KE', 'PE'), col = c( 'black', 'red'),
+        lty=c(1, 1))
+```
+
+The following runs were not yet valid. This is a form easily copied into
+*Julia* to extend the runs.
+
+```{r}
+MD2DF.Q[!valid & series=="S4", run]
+```
+
+Running on 9 October 2025.
+
+```{julia}
+#| eval: false
+julia> td = "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+julia> runs = vec(["S4.0007" "S4.0011" "S4.0013" "S4.0014" "S4.0015" "S4.0016"])
+6-element Vector{String}:
+ "S4.0007"
+ "S4.0011"
+ "S4.0013"
+ "S4.0014"
+ "S4.0015"
+ "S4.0016"
+
+
+julia> @time MD2.filerun_floop( td, runs, 5, 10000, 100)
+205.404173 seconds (352.94 M allocations: 18.709 GiB, 1.35% gc time, 
+                    141 lock conflicts)
+ 
+```
+
+Six runs, each extended by 1M steps in 205.4s, is 0.0342s/1k steps.
+
+```{r}
+#| label: MD2DFQ2
+system.time( MD2DF.Q2 <- MD2DFfile( "../MD2DF.Q2.RDS", td, "S4.*.scalars.csv",
+                                   df = MD2DF.Q))
+```
+
+This above reads in already converted data. Below was the original,
+which used about 50% of CPU time.
+
+```         
+705  files found.
+   user  system elapsed 
+  0.158   0.071  36.450 
+```
+
+@fig-MDS shows the new averages.
+
+```{r}
+#| label: fig-MDS
+#| fig-cap: Plot of all the new S4 series scalars.
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2( MD2DF.Q2[ series == "S4"], linethresh = 200)
+```
+
+And again, those not yet considered valid.
+
+```{r}
+MD2DF.Q2[!valid & series=="S4", run]
+```
+
+`S4.0007` is oddly not valid at a temperature of 0.0079. Let's take a
+closer look. We'll read it in separately and then plot it in @fig-S407.
+
+```{r}
+#| label: S407
+S4.0007 <- combineruns( td, "S4","0007")
+```
+
+@fig-S407 is the plot of the current data.
+
+```{r}
+#| label: fig-S407
+#| fig-cap: HP plot of full series.  As of 9 October 2025, the series was not considered validly in equilibrium. The red line is the mean ke.
+with( S4.0007$rundt, {HPplot( x=step*0.0177737, y=ke, typ="l", xlab="time", 
+                              ylab="KE",panel.first=grid())})
+abline( h = MD2DF.Q2[run=="S4.0007",ke.mean.rs],col='red')
+```
+
+```{r}
+#| include: false
+rm( S4.0007, S3.00295.0000, t4.0010.0000, t4.0010, t4b.0010.0000)
+```
+
+We will run more steps (so as this document is `knit`ted later it will
+show a longer segment), but the estimate as of 10/9/25 is
+$1.606\times10^{-8}$ (in units of the block average length of
+`r with( MD2DF.Q2[run=="S4.0007"], steps.avg/nr)`), which over the full
+length of the 1020k steps in the estimate (first 1k steps are skipped),
+the temperature would rise only `r 1.606e-8 * 2040`.
+
+Note that with a time step of 0.0177737, the `S3` series limit of 4M
+steps at $\delta t = 0.01\tau$ (for a time of $t = 40,000\tau$) is the
+equivalent of `2,250,516` steps (exactly), so we only need about 1.2M
+more steps. In 50k step runs, We also need many more samples between
+$T=0.010$ and 0.020.
+
+```{r}
+#| label: fig-pvskeS
+#| fig-cap: Pressure vs temperature of series 4 in `MD2DF.Q2`.
+plotconfMD2( MD2DF.Q2[series=="S4"], x="ke.mean.rs", y="Pressure", 
+             xlab="temperature", ylab="pressure")
+```
+
+Since this will be necessary repeatedly, I changed the `runn()` code to
+take an integer temperature that will be divided by 10,000 to make the
+init temperature. Thus an input of 101 will init the temperature to
+0.0101.
+
+```{julia}
+#| eval: false
+
+phil@phil-XPS-8920:$ julia -t8,1
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.12.0 (2025-10-07)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org release
+|__/                   |
+
+julia> Threads.nthreads()
+
+8
+
+julia> include("./src/MD2.jl")
+
+julia> td = "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+julia> tlist = [i for i in 100:211]
+100
+101
+ .
+ .
+ .
+
+julia> @time MD2.newruns( td, tlist, "S4.", 1000, 50000, 4, T=Float32, 
+                                 tau=0.0177737)
+
+576.866176 seconds (1.69 G allocations: 88.064 GiB, 2.50% gc time, 
+223 lock conflicts, 16.15% compilation time: 11% of which was recompilation)
+
+julia> runs = vec([ "S4.0007" "S4.0011" "S4.0016"])
+3-element Vector{String}:
+ "S4.0007"
+ "S4.0011"
+ "S4.0016"
+
+julia> @time MD2.filerun_floop( td, runs, 106, 50000, 26)
+161.421179 seconds (285.27 M allocations: 14.765 GiB, 1.60% gc time, 
+                    9 lock conflicts, 0.12% compilation time)
+
+```
+
+22,512 1K runs in 576.87s is 0.0256s per 1k step run. This is the
+fastest time yet, even though it included the compilation. The second
+set extending the three runs is 26 50k runs each for 3,900k steps in
+161.4212s, for 0.0414s per 1k run (slower, because only three threads
+could be used).
+
+```{r}
+#| label: MD2DFQ3
+system.time( MD2DF.Q3 <- MD2DFfile( "../MD2DF.Q3.RDS", td, "S4.*.scalars.csv",
+                                   df = MD2DF.Q2))
+```
+
+```         
+1421  files found.
+   user  system elapsed 
+  0.243   0.082  43.357 
+```
+
+```{r}
+#| label: fig-MDQ3
+#| fig-cap: Plot of all the new S4 series scalars.
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2( MD2DF.Q3[ series == "S4"], linethresh = 200)
+```
+
+```{r}
+#| label: fig-pvskeT
+#| fig-cap: Pressure vs temperature of series 4 in `MD2DF.Q4`.
+plotconfMD2( MD2DF.Q3[series=="S4"], x="ke.mean.rs", y="Pressure", 
+             xlab="temperature", ylab="pressure", linethresh=200)
+```
+
+```{r}
+MD2DF.Q3[!valid & series=="S4", run]
+```
+
+`S4.0007`, `S4.0011`, and `S4.0016` each have 2,371k steps, which is
+equivalent to 4,214.1k steps with the time step of 0.01, so these do not
+need to be extended. The rest have 201k steps, so 2,049,516 more steps
+are needed. At 50k steps per execution, that is 41 more.
+
+```{julia}
+#| eval: false
+
+phil@phil-XPS-8920:~$ julia -t8,1
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.12.0 (2025-10-07)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org release
+|__/                   |
+
+julia> cd("/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J")
+
+julia> using OhMyREPL
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> include("./test/BaselineSpeed.jl")
+
+ 13.035929 seconds (24.92 M allocations: 1.941 GiB, 3.17% gc time, 211 lock conflicts)
+
+julia> runs = vec(["S4.00102" "S4.00107" "S4.00111" "S4.00114" "S4.00115" 
+                   "S4.00117" "S4.00118" "S4.00119" "S4.00121" "S4.00122" 
+                   "S4.00123" "S4.00126" "S4.00127" "S4.00128" "S4.00129" 
+                   "S4.00131" "S4.00132" "S4.00134" "S4.00136" "S4.00138" 
+                   "S4.00139" "S4.00140" "S4.00141" "S4.00142" "S4.00145" 
+                   "S4.00148" "S4.00151" "S4.00152" "S4.00156" "S4.00159" 
+                   "S4.00160" "S4.00164" "S4.00167" "S4.00168" "S4.00180" 
+                   "S4.00182" "S4.00186" "S4.00191" "S4.00198" "S4.00201" 
+                   "S4.00204" "S4.00210" ])
+42-element Vector{String}:
+"S4.00102"
+ ⋮
+ "S4.00210"
+
+julia> td = "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+julia> @time MD2.filerun_floop( td, runs, 5, 50000, 41)
+2243.605917 seconds (6.29 G allocations: 325.689 GiB, 2.39% gc time, 
+                     183 lock conflicts, 0.78% compilation time)
+
+```
+
+42 runs each extended by 41 51k step executions in 2,243.61s (37m 24s),
+for 86,100k total steps, is 0.0261s per 1k steps.
+
+```{r}
+#| label: MD2DFQ4
+system.time( MD2DF.Q4 <- MD2DFfile( "../MD2DF.Q4.RDS", td, "S4.*.scalars.csv",
+                                   df = MD2DF.Q3))
+```
+
+```         
+3068  files found.
+   user  system elapsed 
+  1.433   0.735 498.567 
+```
+
+So that took over 8m to process (the first time).
+
+```{r}
+#| label: fig-MDQ4
+#| fig-cap: Plot of all the new S4 series scalars.
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2( MD2DF.Q4[ series == "S4"], linethresh = 200)
+```
+
+```{r}
+#| label: fig-pvskeU
+#| fig-cap: Pressure vs temperature of series 4 in `MD2DF.Q4`.
+plotconfMD2( MD2DF.Q4[series=="S4"], x="ke.mean.rs", y="Pressure", 
+             xlab="temperature", ylab="pressure", linethresh=200)
+```
+
+There remains a lot higher temperature runs not considered validly in
+equilibrium. The `S3` series was fluid above 0.014, and only a few runs
+were not valid. The difference here is the number of runs. @fig-csU
+below shows the distribution of runs for both series.
+
+```{r}
+#| label: fig-csU
+#| fig-cap: Cumulative number of runs by tenperature for the `S3` (circles) and `S4` (triangles) series.  Runs not considered valid are in red
+
+setkey( MD2DF.Q4, ke.mean.rs)
+with( MD2DF.Q4[ grepl( "S3", series) & ke.mean.rs < 0.02,], {
+   c3 <- cumsum( valid|!valid)
+   # print( c3[length(c3)])
+   cl3 <- ifelse(valid, 'black', 'red')
+   plot(ke.mean.rs, c3, col = cl3, panel.first=grid(), xlab='temperature',
+        ylab = 'Cumulative Count', main = 'Cumulative Count by Series')})
+
+with( MD2DF.Q4[ series=="S4" & ke.mean.rs < 0.02,], {
+   c4 <- cumsum( valid|!valid)
+   cl4 <- ifelse( valid, 'black', 'red')
+  points(ke.mean.rs, c4, col = cl4, pch=2)})
+```
+
+I want to add runs between 0.008 and 0.010. Since we init on TE, we need
+to plot ke vs TE.
+
+```{r}
+plotconfMD2( MD2DF.Q4[ series == 'S4' & TE.mean.rs < 0.15,], y = "ke", 
+             linethresh = 200)
+abline( h = 0.008)
+abline( h = 0.010)
+```
+
+```{julia}
+#| eval: false
+phil@phil-XPS-8920:~$ julia -t8,1
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.12.0 (2025-10-07)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org release
+|__/                   |
+
+julia> cd("/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J")
+
+julia> using OhMyREPL
+
+julia> td = "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> tlist = [i for i in 70:99]
+30-element Vector{Int64}:
+ 70
+  ⋮
+ 99
+
+julia> using .MD2
+
+julia> @time MD2.newruns( td, tlist, "S4.", 1000, 50000, 4, T=Float32, 
+                                 tau=0.0177737)
+
+156.593431 seconds (489.28 M allocations: 25.426 GiB, 2.84% gc time, 
+                    260 lock conflicts, 59.21% compilation time: 9% of which 
+                    was recompilation)
+```
+
+30 runs of 201k steps each in 156.59s is 0.026s per 1k steps.
+
+```{r}
+#| label: MD2DFQ5
+system.time( MD2DF.Q5 <- MD2DFfile( "../MD2DF.Q5.RDS", td, "S4.*.scalars.csv",
+                                   df = MD2DF.Q4))
+```
+
+```         
+3218  files found.
+   user  system elapsed 
+  0.375   0.137  87.979 
+```
+
+Here are the `Q5` scalars
+
+```{r}
+#| label: fig-MDV
+#| fig-cap: Plot of all the `Q5` S4 series scalars.
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2( MD2DF.Q5[ series == "S4"], linethresh = 200)
+```
+
+Isobar of `Q5`:
+
+```{r}
+#| label: fig-pvskeV
+#| fig-cap: Pressure vs temperature of series 4 in `MD2DF.Q5`.
+plotconfMD2( MD2DF.Q5[series=="S4"], x="ke.mean.rs", y="Pressure", 
+             xlab="temperature", ylab="pressure", linethresh=200)
+```
+
+And here is a plot of the total steps by total energy.
+
+```{r}
+#| label: fig-Q5step
+#| fig-cap: Total steps by energy. That all of the non-valid runs are a around 2M steps is expected, but the higher energy runs ought to have become valid.
+with( MD2DF.Q5[series == 'S4',], 
+      plotconf( x = TE.mean.rs, y = total.steps, Fval = Fval, linethresh = 200,
+                log='y', xlab = "Total Energy", ylab = "Total Steps"))
+```
+
+Finding runs not valid:
+
+```{r}
+MD2DF.Q5[series == 'S4' & total.steps < 2e6 & !valid, run]
+```
+
+```{julia}
+#| eval: false
+
+julia> runs = vec(["S4.00071" "S4.00072" "S4.00075" "S4.00076" "S4.00079" 
+                   "S4.00084" "S4.00085" "S4.00086" "S4.00087" "S4.00089" 
+                   "S4.00097" "S4.00098" ])
+12-element Vector{String}:
+ "S4.00071"
+ "S4.00072"
+ "S4.00075"
+ "S4.00076"
+ "S4.00079"
+ "S4.00084"
+ "S4.00085"
+ "S4.00086"
+ "S4.00087"
+ "S4.00089"
+ "S4.00097"
+ "S4.00098"
+
+julia> @time MD2.filerun_floop( td, runs, 5, 50000, 41)
+639.706175 seconds (1.80 G allocations: 93.005 GiB, 2.41% gc time, 
+                    70 lock conflicts, 0.03% compilation time)
+```
+
+12 runs extended by $41 \times 50k$ steps is 24,600k steps in 639.71s is
+0.026s per 1k run.
+
+```{r}
+#| label: MD2DFQ6
+system.time( MD2DF.Q6 <- MD2DFfile( "../MD2DF.Q6.RDS", td, "S4.*.scalars.csv",
+                                   df = MD2DF.Q5))
+```
+
+```         
+3710  files found.
+   user  system elapsed 
+  0.464   0.134  59.534 
+```
+
+```{r}
+#| label: fig-MDQ6
+#| fig-cap: Plot of all the new S4 series scalars.
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2( MD2DF.Q6[ series == "S4"], linethresh = 200)
+```
+
+The `TE Range%` graph has a surprising feature. Let's look at it closer.
+
+```{r}
+#| label: fig-TErngS4
+with( MD2DF.Q6[ series == "S4",], 
+      plotconf( x = TE.mean.rs, 
+                y = 100 * (TE.max.raw - TE.min.raw) / TE.mean.rs,
+                Fval = Fval, linethresh = 400, xlab = "Total Energy",
+                ylab = "Energy Range (%)", main = "Series 4 Energy Range"))
+```
+
+The ranges above 0.1% are disturbing, but all of the larger ranges are
+not-valid runs. Let's look at series 3.
+
+```{r}
+#| label: fig-TErngS3
+with( MD2DF.Q6[ grepl( "S3", series),], 
+      plotconf( x = TE.mean.rs, 
+                y = 100 * (TE.max.raw - TE.min.raw) / TE.mean.rs,
+                Fval = Fval, linethresh = 400, xlab = "Total Energy",
+                ylab = "Energy Range (%)", main = "Series 3 Energy Range"))
+```
+
+While there are a lot of not-valid points with a larger energy range,
+there are also a lot that do not have a large energy range. Note that
+the largest range is only around 0.03%.
+
+```{r}
+#| label: fig-pvskeQ6
+#| fig-cap: Pressure vs temperature of series 4 in `MD2DF.Q6`.
+plotconfMD2( MD2DF.Q6[series=="S4"], x="ke.mean.rs", y="Pressure", 
+             xlab="temperature", ylab="pressure", linethresh=200)
+```
+
+Here is a list of the `S4` runs not considered valid.
+
+```{r}
+#| label: tbl-S$nv
+#| tbl-cap: Series 4 runs not considered valid.
+knitr::kable( MD2DF.Q6[ series == 'S4'& !valid, 
+              .(run, temp = ke.mean.rs, Estimate, nr, steps.avg, 
+              rsblk = steps.avg / nr)])
+```
+
+# Validity, Total Mometum, and Total Energy
+
+There are a lot of colder runs not considered valid. We'll look at
+`S4.00071`, which is initialized a scooch above `S4.0007` (also not
+valid).
+
+```{r}
+#| label: S4071
+S4.00071 <- combineruns( td, "S4","00071")
+```
+
+@fig-S4071 is the plot of the current data.
+
+```{r}
+#| label: fig-S4071
+#| fig-cap: Plot of TE of the full run of `S4.00071`.  As of 14 October 2025, the series was not considered validly in equilibrium. The red line is the mean TE, and the blue line the initialized TE.
+with( S4.00071$rundt, {HPplot( x=step, y=TE, typ="l", xlab="time", 
+                              ylab="TE",panel.first=grid())})
+abline( h = MD2DF.Q6[ run=="S4.00071", TE.mean.rs],col='red')
+abline( h = MD2DF.Q6[ run=="S4.00071", TE.init],col='darkblue')
+```
+
+@fig-TEM2Q6 plots the Maximum observed linear momentum squared ($M^2$)
+plotted against the resampled TE variance (both of which which ought to
+be small). The plot shows that for series 4 (black and red) all of the
+non-valid points have higher TE standard deviation than the valid ones,
+and most have a higher the usual maximum linear momentum. The series 3
+have a scattering of of generally small values, but there is a cluster
+of higher standard deviation TEs in series 3 that are all not valid.
+This is concerning, as TE and momentum growth is a symptom of the
+simulation not obeying two basic conservation laws (i.e., the simulation
+is broken).
+
+```{r}
+#| include: false
+rm( S4.00071)
+```
+
+```{r}
+#| label: fig-TEM2Q6
+#| fig-cap: Maximum of the momentum squared vs. TE standard deviation. Green squares and magenta inverted triangles are valid and not-valid Series 3, black circles and red triangles are series 4. 
+plotconfMD2( MD2DF.Q6[series=="S4"], y="M.2.max.raw", x="TE.sd.rs", 
+             xlab="TE SD", ylab="Max M^2", linethresh=200, log = 'xy', 
+             xlim = c(2e-7,3e-4), ylim = c(1e-9, 1))
+with( MD2DF.Q6[grepl( "S3", series)], {
+      col = ifelse( valid, 'darkgreen', 'magenta')
+      pch = ifelse( valid, 0, 6)
+      points( x = TE.sd.rs, y = M.2.max.raw, col = col, pch = pch)
+      })
+```
+
+The absolute growth of the TE (the maximum observed TE across all steps
+minus the initialized TE) should be most sensitive to things going
+amiss.
+
+```{r}
+#| label: fig-TEMTESDQ6
+#| fig-cap: Growth of TE (i.e., `TE.max.raw - TE.init`) vs. the TE standard deviation. Green squares and magenta inverted triangles are valid and not-valid Series 3, black circles and red triangles are series 4. 
+with( MD2DF.Q6[series=="S4"], {
+      col = ifelse( valid, 'black', 'darkred')
+      pch = ifelse( valid, 1, 2)
+      plot( y=TE.max.raw - TE.init, x=TE.sd.rs, pch = pch, col = col,
+            xlab="TE SD", ylab="Energy", log = 'xy', panel.first = grid(),
+            xlim = c(2e-7,3e-4), ylim = c(1e-8, 0.001), 
+            main = "Growth of TE vs TE sd")
+      })
+with( MD2DF.Q6[grepl( "S3", series)], {
+      col = ifelse( valid, 'darkgreen', 'magenta')
+      pch = ifelse( valid, 0, 6)
+      points( y=TE.max.raw - TE.init, x=TE.sd.rs, col = col, pch = pch)
+      })
+```
+
+It is possible that this is simply related to the mean TE.
+
+```{r}
+#| label: fig-TEgTEmQ6
+#| fig-cap: Growth of TE (i.e., `TE.max.raw - TE.init`) vs. the mean TE. Green squares and magenta inverted triangles are valid and not-valid Series 3, black circles and red triangles are series 4.
+with( MD2DF.Q6[series=="S4"], {
+      col = ifelse( valid, 'black', 'darkred')
+      pch = ifelse( valid, 1, 2)
+      plot( y=TE.max.raw - TE.init, x=TE.mean.rs, pch = pch, col = col,
+            xlab="Mean TE", ylab="Energy",  panel.first = grid(),
+            xlim = c(0.12, 0.22), 
+            ylim = c(1e-8, 1e-3), 
+            log = 'xy',
+            main = "Growth of TE vs Mean TE")
+      })
+with( MD2DF.Q6[grepl( "S3", series)], {
+      col = ifelse( valid, 'darkgreen', 'magenta')
+      pch = ifelse( valid, 0, 6)
+      points( y=TE.max.raw - TE.init, x=TE.mean.rs, col = col, pch = pch)
+      })
+```
+
+We tend to run more steps in the transition region (the region were
+equilibrium is difficult to reach), so there could be a correlation
+between not-valid runs, long runs, and TE growth. @fig-TEMstepQ6 show
+this.
+
+```{r}
+#| label: fig-TEMstepQ6
+#| fig-cap: Growth of TE (i.e., `TE.max.raw - TE.init`) vs. the number of steps. Green squares and magenta inverted triangles are valid and not-valid Series 3, black circles and red triangles are series 4. Both axis plotted logarithmicly.
+with( MD2DF.Q6[series=="S4"], {
+      col = ifelse( valid, 'black', 'darkred')
+      pch = ifelse( valid, 1, 2)
+      plot( y=TE.max.raw - TE.init, x=steps.avg, pch = pch, col = col,
+            xlab="Steps", ylab="Energy",  panel.first = grid(),
+            xlim = c(1e4, 5e6), 
+            ylim = c(1e-7, 1e-3), 
+            log = 'xy',
+            main = "Growth of TE vs steps")
+      })
+with( MD2DF.Q6[grepl( "S3", series)], {
+      col = ifelse( valid, 'darkgreen', 'magenta')
+      pch = ifelse( valid, 0, 6)
+      points( y=TE.max.raw - TE.init,  x=steps.avg, col = col, pch = pch)
+      })
+```
+
+@fig-TEMkeQ6 shows the distribution of growth in temperature.
+
+```{r}
+#| label: fig-TEMkeQ6
+#| fig-cap: Growth of TE (i.e., `TE.max.raw - TE.init`) vs. the number of steps. Green squares and magenta inverted triangles are valid and not-valid Series 3, black circles and red triangles are series 4. Both axis plotted logarithmicly.
+with( MD2DF.Q6[series=="S4"], {
+      col = ifelse( valid, 'black', 'darkred')
+      pch = ifelse( valid, 1, 2)
+      plot( y=TE.max.raw - TE.init, x=ke.mean.rs, pch = pch, col = col,
+            xlab="Steps", ylab="Energy",  panel.first = grid(),
+            #xlim = c(1e4, 5e6), 
+            ylim = c(1e-7, 1e-3),  
+            log = 'y',
+            main = "Growth of TE vs steps")
+      })
+with( MD2DF.Q6[grepl( "S3", series)], {
+      col = ifelse( valid, 'darkgreen', 'magenta')
+      pch = ifelse( valid, 0, 6)
+      points( y=TE.max.raw - TE.init,  x=ke.mean.rs, col = col, pch = pch)
+      })
+```
+
+Since most of the not-valid samples are very long runs, it is not
+immediately worrying that there is energy growth, but let's examine it
+in more detail.
+
+## Validity Regressions
+
+We can look for correlations systematically. Below we create a series
+item labeled `s2` from the first two characters of the `series` column
+(thus `S3b` is grouped with `S3`), lp for the log of the total momentum
+squared, and one labeled `TEd` that is the logarithm of the maximum
+energy delta. We'll create a copy of the `Q6` database with just the
+data in which we are interested.
+
+```{r}
+#| label: Q6lm
+Q6lm <- copy( MD2DF.Q6[ grepl( "S[34]", series), 
+                     .(valid, TE.mean.rs, TE.sd.rs, lts = log( total.steps),
+                       TEd = {TEd0 = TE.max.raw - TE.init;
+                                     ifelse( TEd0 <= 0, 1e-11,  log( TEd0))},
+                       lp = log( M.2.max.raw), s2 = substr( series, 1, 2))])
+```
+
+We've looked at correlations with KE, `psiavg`, and `psiabs`, and found
+none. So below we look at all combinations of series, valid, total
+momentum squared, and log of total steps. We purposely leave out the TE
+standard deviation as we already know it has a linear relationship to
+energy growth (see @fig-TEMTESDQ6).
+
+```{r}
+#| label: TElm
+TElm <- lm( TEd ~ valid * s2 * lts * lp, data = Q6lm)
+summary( TElm)
+```
+
+Lots of significance (F-statistic p-value \< $2\times 10^{-16}$), but
+difficult to interpret. The `model.matrix( TElm)` function can help to
+understand what each term means. @fig-TEMTESDQ6 shows that series 4 has
+a much higher energy growth than series 3. Since large numbers of steps
+are due to being in the transition region and thus the system not being
+in stable equilibrium, we drop `lts`, and look at `valid` and `s2` only.
+
+```{r}
+#| label: TElm2
+TElm2 <- lm( TEd ~  valid * s2 , data = Q6lm)
+summary( TElm2)
+```
+
+The four coefficients in order are $\alpha_i$ for $i$ in {0, 1, 2, 3}
+for the following equation:
+$y = \alpha_0 + v \alpha_1 + S_4 \alpha_2 + v S_4 \alpha_3$, where $v$
+is one if valid and $S_4$ is a one if it is series 4 (both zero
+otherwise). For not valid series 3, $v$ and $S_4$ are both zero, and
+only the intercept ($\alpha_0$) is left. The variance of this intercept
+is based on the whole data set though, and since the series 4 data
+energy growth is over 20 times the series 3, that dominates the
+variance. Valid series 3 data has $v=1$, but since $S_4=0$, the valid
+series 3 energy growth is estimated to be $\alpha_0 + \alpha_1$, and
+this is the expected small number ($\ln(\delta E) \approx -13$, so
+$\delta E \approx. 2.3 \times 10^{-6}$. $\alpha_2$ estimates the
+not-valid series 4 growth. Below are the predictions for the four cases.
+
+```{r}
+(pTElm2 <- predict( TElm2, newdata = data.frame( 
+                                     row.names = c("!vS3","!vS4","vS3","vS4"),
+                                     valid = c(0, 0, 1, 1),
+                                     s2 = c("S3","S4","S3","S4"))))
+```
+
+Basically, the not-valid series 3 energy growth is pretty small. The
+estimate for not-valid series 4 is $\alpha_0 +\alpha_2$. Valid series 4
+is almost significant at the 5% level, and the estimate is the sum of
+all four coefficients..
+
+Below we look at series 3 alone, and we can see that the not-valid data
+has a significantly different energy growth, but that total steps is
+very significant.
+
+```{r}
+#| label: TElm3
+TElm3 <- lm( TEd ~  valid * lts,  data = Q6lm[  grepl( "S3", s2),])
+summary( TElm3)
+```
+
+The low $r^2$ indicates that it doe not explain the results. The `lts`
+coefficient is significant at the 5% level, but there is no significance
+to the `valid:lts` pair, meaning that there really isn't extra growth
+with validity (or non-validity). Below are the coefficients for the
+various conditions.
+
+```{r}
+(pTElm3 <- predict( TElm3, newdata = data.frame( 
+                                     row.names = c("!vS3","!vS4","vS3","vS4"),
+                                     valid = c(0, 0, 1, 1),
+                                     s2 = c("S3","S4","S3","S4"),
+                                     lts = rep.int(0,4))))
+```
+
+We can look at a simpler example of `valid`, `s2`, and `lts` for the
+whoe dataset:
+
+```{r}
+#| label: TElm4
+TElm4 <- lm( TEd ~  valid + s2 + lts, data = Q6lm)
+summary( TElm4)
+```
+
+Here, log of steps are significant. The equation for this model is
+$y = \alpha_0 + v \alpha_1, + S_4 \alpha_2 + \alpha_3 \ln(n)$ (where $n$
+is steps). $\alpha_{0-2}$ define intercepts for the varias cases of
+valid and series.Vvalid series 3 intercept is $\alpha_0 + \alpha_1$,
+not-valid series 4 is $\alpha_0 + \alpha_2$, and valid series 4 the sum
+of all three coefficients. Below we see that the valid series 3
+intercept shows a negative energy growth (`lts` $= 0$ is the equivalent
+of `total.steps` $\approx 3$).
+
+```{r}
+(pTElm4 <- predict(TElm4, newdata = data.frame( 
+                                     row.names = c("!vS3","!vS4","vS3","vS4"),
+                                     valid = c(0, 0, 1, 1),
+                                     s2 = c("S3","S4","S3","S4"),
+                                     lts = rep.int(0,4))))
+```
+
+Below we try valid and valid:series 4:
+
+```{r}
+#| label: TElm5
+TElm5 <- lm( TEd ~  valid/s2, data = Q6lm)
+summary( TElm5)
+```
+
+Everything is significant, but $r^2$ is small. The model here is
+$y = \alpha_0 + v \alpha_1 + v S_4 \alpha_3$. So, the intercept
+($\alpha_0$) is the `!valid` case and covers both `S3` and `S4`. Valid
+series 3 is $\alpha_0 + \alpha_1$. Below are predictions from the above
+for the four cases of `!valid` / `valid` and `S3` / `S4`.
+
+```{r}
+(pTElm5 <- predict(TElm5, newdata = data.frame( 
+                                     row.names = c("!vS3","!vS4","vS3","vS4"),
+                                     valid = c(0, 0, 1, 1),
+                                     s2 = c("S3","S4","S3","S4"))))
+```
+
+Adding in log of maximum of total momentum squared to the regressions
+(see @fig-TEM2Q6):
+
+```{r}
+#| label: TElm6
+TElm6 <- lm( TEd ~ valid + s2 + lp, data = Q6lm)
+summary( TElm6)
+```
+
+The model is
+$y = \alpha_0 + v \alpha_1 + S_4 \alpha_2 + \alpha_3 \ln (p^2)$ (where
+$p$ is the total momentum). So momentum is a useless predictor of energy
+growth. As before, the intercept alone is the intercept for not-valid
+series 3. Valid series 3 intercept is $\alpha_0 + \alpha_1$ (and
+negative), not-valid series 4 intercept is $\alpha_0 + \alpha_2$, and
+valid series 4 intercept is $\alpha_0 + \alpha_1 + \alpha_2$.
+
+```{r}
+(pTElm6 <- predict(TElm6, newdata = data.frame( 
+                                     row.names = c("!vS3","!vS4","vS3","vS4"),
+                                     valid = c(0, 0, 1, 1),
+                                     s2 = c("S3","S4","S3","S4"),
+                                     lp = rep(0, 4))))
+```
+
+Let's add total steps and TE mean back in.
+
+```{r}
+#| label: TElm7
+TElm7 <- lm( TEd ~ valid + s2 + TE.mean.rs + lts + lp, data = Q6lm)
+summary( TElm7)
+```
+
+Another low $r^2$, and momentum, mean TE and valid state show no
+significance next to series and the log of total steps.
+
+The following will remove the intercept, and estimate a coefficient for
+the log of total steps.
+
+```{r}
+#| label: TElm8
+TElm8 <- lm( TEd ~ valid:s2 + lts:s2 - 1, data = Q6lm)
+summary( TElm8)
+```
+
+A high $r^2$. We basically estimate separate intercepts for each series,
+but, while each is significant, they are not significantly different
+from each other. The model formula is
+$y = (\alpha_{0,S3}v + \alpha_{1,S3} \ln(n))S_3 + (\alpha_{0,S4}v + \alpha_{1,S4} \ln(n))S_4$,
+essentially an equation for each series. The below will show the four
+possibilities at 2M total steps, along with th 95% confidence interval
+for those predictions.
+
+```{r}
+(pTElm8 <- predict(TElm6, newdata = data.frame( 
+                                     row.names = c("!vS3","!vS4","vS3","vS4"),
+                                     valid = c(0, 0, 1, 1),
+                                     s2 = c("S3","S4","S3","S4"),
+                                     lp = rep(log(2e6), 4)), 
+                   interval = "confidence"))
+```
+
+We can see that the series 3 predictions overlap, perhaps barely, but
+definitely.
+
+A similar regression with the formula `TEd ~ valid + lts:s2 - 1` gives
+essentially the same answer, but with a zero intercept for With eight
+models, let's complete our decent into `lm` hell using `step()`:
+
+```{r}
+#| label: TElm9
+TElm9 <- lm( TEd ~ valid + lts:s2 - 1, data = Q6lm)
+summary( TElm8)
+```
+
+```{r}
+(pTElm9 <- predict(TElm6, newdata = data.frame( 
+                                     row.names = c("!vS3","!vS4","vS3","vS4"),
+                                     valid = c(0, 0, 1, 1),
+                                     s2 = c("S3","S4","S3","S4"),
+                                     lp = rep(log(2e6), 4)), 
+                   interval = "confidence"))
+```
+
+```{r}
+#| label: TElmstep
+TElm10 <- step( TElm7, trace = 0)
+TElm11 <- step( TElm, trace = 0) 
+```
+
+We'll look at the AIC's to see which fit was best.
+
+```{r}
+#| label: tbl-TElmAIC
+#| tbl-cap: AIC results for all previous linear models across both series 3 and 4.
+knitr::kable( AIC( TElm, TElm2, TElm4, TElm5, TElm6, TElm7, TElm8, TElm9, 
+                   TElm10, TElm11))
+```
+
+`TElm10` is the best:
+
+```{r}
+summary( TElm10)
+```
+
+This "best" estimate has a low $r^2$ and shows significance for total
+energy and steps.
+
+What did we learn? There is no compelling case that there is energy
+growth for not-valid runs. Energy growth does depend on number of steps
+and total energy, but this is expected. The series 4 growth is
+concerning though, and we will have to look at improvements in the
+*Julia* code.
+
+## Validity Change with Diffusion Calculation
+
+It is also evident that a lot of the heating and cooling groups had been
+considered valid, then diffusion runs were made, and were no longer
+considered valid. @tbl-S3nv shows a list of `S#` runs that were once
+valid, but became not-valid after the diffusion runs.
+
+```{r}
+#| label: tbl-S3nv
+#| tbl-cap: The `S3` runs with less than 1M steps and no longer valid.  Since all runs under 4M steps were valid before diffusion runs, these runs became invalid after thier diffusion runs.
+
+knitr::kable(MD2DF.Q6[ grepl( "S3", series) & !valid & steps.avg < 1e6, 
+          .(run, ke.mean.rs, steps.avg, total.steps)])
+```
+
+Here is one of the higher energy runs.
+
+```{r}
+#| label: S309h17
+#| fig-cap: Run `S3.0009h17` kinestic energy with resampled points overplotted. Note that the `HPplot()` plotting function resamples the data differently than `rsmpavg()`, so the overlay is imperfect.
+
+S3.0009h17 <- combineruns( td, "S3","0009h17")
+HPplot( S3.0009h17$rundt$ke, typ='l', panel.first = grid())
+abline( h = MD2DF.Q6[ run=="S3.0009h17",ke.mean.rs], col='red')
+S3.0009h17rske <- rsmpavg( S3.0009h17$rundt$ke, 500)
+points( x = 500 * seq_along( S3.0009h17rske), y = S3.0009h17rske,
+        col='green')
+```
+
+That sort of looks like bad luck. There were
+`r (ns3d <- MD2DF.Q6[ grepl( "S3", series) & steps.avg < 1e6 & !is.na(nrd), .N])`
+runs with less than 1M steps made
+`r (ns3dv <- MD2DF.Q6[ grepl( "S3", series) & valid & steps.avg < 1e6 & !is.na(nrd), .N])`
+remained valid and
+`r (ns3nv <- MD2DF.Q6[ grepl( "S3", series) & !valid & steps.avg < 1e6, .N])`
+switched to not-valid. This is a ratio of `r 100 * ns3nv / ns3d`%;
+compare this to the empirically derived 14.4% estimated from 10,000
+50-sample normally distributed sequences.
+
+```{r}
+#| include: false
+rm( S3.0009h17, S3.0009h17rske)
+```
+
+# Pressure
+
+The pressure is given by the equation:
+
+$$
+\langle P \rangle = \rho \left( T + \frac{n \left< U \right>}{2N}\right)
+$$
+
+where $\rho$ is the density, $T$ is the temperature, $n$ is the exponent
+of the potential energy, $N$ is the number of particles, $U$ is the
+total potential energy, and the brackets indicate averages. This can be
+simplified to
+$\langle P \rangle = \rho (T + \frac{1}{2}n\left< u \right>$ where we
+let $u$ be the per particle potential energy. The assertion is that
+thermal energy will be shared equally among all accessible states, and
+thus the excess potential energy (that is, the per-particle potential
+energy less the minimum per-particle potential energy) will roughly
+equal the kinetic energy. The minimum PE is 0.1159487884. @fig-Press
+below shows how the actual pressure compares to that predicted by equal
+excess potential energy.
+
+```{r}
+#| label: fig-Press
+#| fig-cap: Pressure versus temperature for series 3 and 4. Blue line is the pressure that one would expect if the excess potential energy per particle were equal to the kinetic energy.
+with( MD2DF.Q6[ !grepl( "S2", series) & ke.mean.rs < 0.021,], {
+      plotconf( y = Pressure.mean.rs, x = ke.mean.rs, Fval = Fval, 
+                panel.first = grid(), linethresh = 400,
+                xlab = "T", ylab = "P")
+      eppe <- ke.mean.rs + 0.1159487884 # accessible states PE
+      peppe <- (1/pi) * ( ke.mean.rs + 5 * eppe / 2)
+      lines( x = ke.mean.rs, y = peppe, typ='l', col = 'blue')
+      
+      })
+```

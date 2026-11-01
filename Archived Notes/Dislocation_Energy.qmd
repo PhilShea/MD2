@@ -1,0 +1,517 @@
+---
+title: "Dislocation Energy"
+author: "Phil Shea"
+date: last-modified
+number-sections: true
+pdf-engine: xelatex
+format:
+  pdf:
+    fig-pos: 'H'
+    toc: true
+    toc-depth: 2
+#mainfont: cambria
+execute:
+  sanitize: false
+  freeze: auto
+crossref:
+  fig-title: '**Figure**'
+  fig-labels: arabic
+  title-delim: "**.**"
+    #cite-method: biblatex
+#mainfont: "Latin Modern Roman"
+bibliography: "../Melting in Two D.bib"
+link-citations: true
+monofont: "Courier"
+monofontoptions: 'Scale=0.8'
+editor_options:
+  markdown:
+    wrap: 72
+    references: 
+      location: block
+    canonical: true
+---
+
+```{r}
+#| label: init
+#| include: false
+#
+# NOTE: if the package has changed, it must be installed locally via:
+#
+# devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+# (for Windows)
+# or
+#
+# devtools::install("/home/phil/MD/MD2RP")
+# (for linux)
+#
+# You probably have to re-start R after this.
+#
+# *****************************************************
+require( MD2RP)
+require( parallel)
+require( pracma)
+require( data.table)
+require( knitr)
+require( lattice)
+require( JuliaCall)
+num_cores <- detectCores() - 1
+options(digits=5)
+"%within%" <- function( vector, range) # define convenience function.
+   (vector > range[ 1]) & (vector < range[ 2])
+
+td <- "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+MD2.B <- readRDS( "../MD2DT.B.RDS") # read in current data for analysis 
+pe12o = 0.115949 # ground state energy at 1/pi density.
+```
+
+# From Chat GPT (on 7/7/26)
+
+Asked the following:
+
+> What is the dislocation energy of a single pair of dislocations in a
+> two dimensional hexagonal grid of $N$ $1/r^n$ potential particles with
+> periodic boundary conditions?
+
+For a **2D hexagonal crystal** whose particles interact via a central
+inverse-power potential
+
+$$V(r)=\frac{A}{r^n}$$
+
+the energy of a single dislocation pair is governed primarily by
+**continuum elasticity**, not by the detailed form of the potential. The
+potential enters only through the elastic constants (shear modulus and
+Poisson ratio).
+
+### General expression
+
+Suppose two edge dislocations of opposite Burgers vector $\pm\mathbf{b}$
+are separated by a distance $R$. Under periodic boundary conditions, the
+energy can be written as
+
+$$E(R) = 2E_{\mathrm{core}} + \frac{K_A b^2}{2 \pi} \ln\left(\frac{R}{r_c}\right) +
+   E_{\mathrm{image}}(R,L),$$
+
+where
+
+- $E_{\mathrm{core}}$ is the core energy of one dislocation,
+
+- $r_c$ is a core radius (typically on the order of one lattice
+  spacing),
+
+- $L$ is the periodic box size,
+
+- $E_{rm image}$ accounts for the infinite lattice of periodic images,
+
+- $K_A$ is the appropriate elastic constant.
+
+For isotropic elasticity,
+
+$$K_A = \frac{\mu}{1-\nu},$$
+
+where
+
+- $\mu$ is the shear modulus,
+
+- $\nu$ is the Poisson ratio.
+
+Thus,
+
+$$\boxed{ E(R) = 2E_{\mathrm{core}} + \frac{\mu b^2}{2 \pi(1-\nu)} \ln\left(\frac{R}{r_c}\right) + E_{\mathrm{image}}}.$$
+
+------------------------------------------------------------------------
+
+## Dependence on the $1/r^n$ interaction
+
+For a hexagonal lattice with
+
+$$V(r)=\frac{A}{r^n},$$
+
+the elastic constants scale as
+
+$$\mu \propto A a^{-(n+2)},$$
+
+where $a$ is the lattice spacing.
+
+More explicitly,
+
+$$\mu = C_n \frac{A}{a^{n+2}},$$
+
+where (C_n) is a dimensionless lattice sum depending only on (n).
+
+Therefore,
+
+$$ 
+\boxed{ E(R) = 2E_{\mathrm{core}} + \frac{C_n A b^2}{2 \pi(1-\nu)a^{n+2}}\
+   \ln\left(\frac{R}{r_c}\right) + E_{\mathrm{image}}.}$$
+
+------------------------------------------------------------------------
+
+## Periodic boundary conditions
+
+With periodic boundaries, the logarithm is replaced by the periodic
+Green's function of the elastic equations.
+
+For a square box,
+
+$$\ln R \rightarrow G_{\mathrm{PBC}}(\mathbf{R})$$
+
+where
+
+$$G_{\mathrm{PBC}} = -\ln \left| \frac{\theta_1\left(\pi(z_1 - z_2)/L, q\right)}
+   {\theta_1'(0,q)}\
+   \right| + \frac{\pi y^2}{L^2}\
++\text{constant},$$
+
+with $\theta_1$ the Jacobi theta function. This is the elastic analogue
+of an Ewald summation and accounts for interactions with all periodic
+images. In the limit $R \ll L$,
+
+$$ 
+G_{\mathrm{PBC}}(R) = \ln R + O\left(\frac{R^2}{L^2}\right),$$
+
+so the familiar logarithmic interaction is recovered.
+
+------------------------------------------------------------------------
+
+## Special case: nearest-neighbor Burgers vector
+
+For a hexagonal lattice, $b = a$, giving
+
+$$E(R) = 2E_{\mathrm{core}} + \frac{C_n A}{2\pi(1-\nu)a^{,n}} 
+   \ln\left(\frac{R}{a}\right) + E_{\mathrm{image}}.$$
+
+------------------------------------------------------------------------
+
+### Summary
+
+The dislocation-pair energy in a 2D hexagonal lattice of particles
+interacting through a $1/r^n$ potential has the universal form
+
+$$\boxed{ 
+E_{\mathrm{pair}}(R) = 2E_{\mathrm{core}} + \frac{\mu b^2}{2\pi(1-\nu)}\
+   \ln\left(\frac{R}{r_c}\right) + E_{\mathrm{image}}(L).}
+   $$
+
+The exponent $n$ affects the result only through the elastic constants
+($\mu$, $\nu$, and the core energy), while the logarithmic dependence on
+separation is a universal consequence of two-dimensional elasticity.
+Under periodic boundary conditions, the logarithm is replaced by the
+corresponding periodic elastic Green's function, which reduces to the
+logarithm for separations much smaller than the system size.
+
+There was also an extensive list of references given.
+
+# Making a Dislocation in `MD2`
+
+Created the following simple code to allow the movement of a particle by
+hand:
+
+```{julia}
+#| eval: false
+function dislocation( filename::AbstractString, pnum::Integer, 
+                      newspot::Tuple{Real, Real}; plotparts::Bool = true)
+    ss = readMDRecord( filename)
+    @show ss
+    ss.p[pnum] = SVector{2, typeof(ss.p[1][1])}(newspot)
+    if plotparts
+        PlotMDRecord( ss; margin = 1.2, vecs = false, show = true, 
+                           virtual = true, markersize = 2)
+        scatter!( newspot; markersize = 2, color = :green, show = true)
+    end
+    savename = filename[(end-4):end] != ".jld2" ? filename * ".ds" : 
+                filename[1:(end-5)] * ".ds"
+    saveMDRecord( savename, ss)
+end
+```
+
+## One Big Move
+
+Then created a small system via the following script (100 particles is
+the smallest *square* system that `MD2` can simulate with `shell = 5`;
+there must always be an even number of rows, and a 64 particle system's
+dimensions violates the `FastCorr` dimension conditions):
+
+```{julia}
+#| eval: false
+julia> testdir
+"/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testtemp"
+
+julia> MD2.InitSystem( joinpath(testdir, "t100"), N=100, temp=0.0)
+
+```
+
+This resulted in the system in @fig-t100.
+
+![100 particle system at zero
+temperature.](2026-07-11%2010-44-23.png){#fig-t100}
+
+The code below moved one particle (number 46) to be between and a little
+above particles 55 and 56. The particles x-position was copied into the
+`dislocation()` call.
+
+```{julia}
+#| eval: false
+julia> ss.p[55:56]
+2-element Vector{SVector{2, Float64}}:
+ [-0.47615640343197985, 0.8247270830934514]
+ [1.428469210295935, 0.8247270830934514]
+
+julia> ss.p[46]
+2-element SVector{2, Float64} with indices SOneTo(2):
+  0.47615640343197896
+ -0.8247270830934506
+
+julia> MD2.dislocation( joinpath( testdir, "t100"), 46, 
+                        (0.47615640343197896, 0.83))
+-----ReadMDRecord(), Current MD2 Version 1.7.9
+Restoring system on 2026-07-11T11:08:20.547
+System State restored from /media/phil/Original/Users/phils/Documents/DSP/MD/
+   dev/MD2J/test/testtemp/
+   t100.jld2, timestamp: 2026-07-11T10:40:15.926, 
+Restored from MD2 Version: 1.7.9
+Current total steps: 0
+Total Kinetic Energy: 0.0, T = 0.0
+Type of MDRecord: Main.MD2.MDRecordVV{Float64}
+Per Particle Linear Momentum: [0.0, 0.0]
+Angular Momentum: 0.0
+ss = Main.MD2.MDRecordVV{Float64} with parameters:
+ N: 100
+ n: 5
+ total steps: 0
+ tau: 0.01
+ shell: 5.0
+ rskn: 3.5
+ skip: 50
+ bx: 9.523128068639574
+ by: 8.247270830934507
+ Calculated Density: 0.3183098861837907
+ Hexagonal grid spacing: 1.9046256137279147
+ NHOPr: 2.601766973050859
+
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/dev/
+   MD2J/test/testtemp/t100.ds.jld2 at 2026-07-11T11:08:21.001
+Current Steps: 0
+Maximum Speed: 0.0
+
+julia>  MD2.RunSystem( joinpath( testdir, "t100.ds.jld2"), 
+                       joinpath( testdir, "t100.ds.01.jld2"), 
+                       1000, animate = true)
+-----ReadMDRecord(), Current MD2 Version 1.7.9
+Restoring system on 2026-07-11T11:12:16.807
+System State restored from /media/phil/Original/Users/phils/Documents/DSP/MD/dev/
+   MD2J/test/testtemp/
+   t100.ds.jld2, timestamp: 2026-07-11T11:08:21.001, Restored from MD2 Version: 1.7.9
+Current total steps: 0
+Total Kinetic Energy: 0.0, T = 0.0
+Type of MDRecord: Main.MD2.MDRecordVV{Float64}
+Per Particle Linear Momentum: [0.0, 0.0]
+Angular Momentum: 0.0
+RunSystem: Running 1000 steps with Beta = 0.0, diffFlag = false, deltat = 10.
+----MD2State initializing with type: Float64
+Density: 0.3183098861837907, Shell: 5.0, NHOPr: 2.601766973050859
+Mean # in shell: 25.0, Min Mmax: 2500.0, Mmax: 3800
+PE Offset: 0.0019039685845183554
+stebskip: 20, Beta = 0.0
+Max number of interactions: 1194
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/dev
+/MD2J/test/testtemp/t100.ds.01.jld2.jld2 at 2026-07-11T11:13:39.940
+Current Steps: 1000
+Maximum Speed: 0.4240409641859918
+[ Info: Saved animation to /media/phil/Original/Users/phils/Documents/DSP/MD/dev/
+      MD2J/test/testtemp
+   /t100.ds.jld2.gif
+Scalars saved in /media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test
+/testtemp/t100.ds.jld2.scalars.csv
+```
+
+This resulted in @fig-t100ds and a gif animation file.
+
+![Moved particle in green.](2026-07-11%2011-09-25.png){#fig-t100ds}
+
+The resulting `.gif` animation was amusing, but little else. The
+particles in the sixth row recoiled from the newly displaced particle,
+the recoil bounced back from the boundaries, and then started some
+vertical movement. @fig-t100dspng shows the parameter trajectories.
+
+```{r}
+#| eval: false
+# code below created the plot, but it is displayed from the png file.
+testdir <- 
+   "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testtemp"
+t100d <- readplot( paste0( testdir, "/t100.ds.jld2.scalars.csv"))
+
+rpl <- recordPlot()
+png("t100.ds.csv.png", width = 6.5, height = 4, units = "in", res = 100)
+replayPlot(rpl)
+invisible( dev.off())
+```
+
+![Metrics from the first dislocation
+attempt.](t100.ds.csv.png){#fig-t100dspng}
+
+Reading quantities from those plots is difficult, but the total momentum
+was around $6.6\times 10^{-15}$ (so very small), the TE bounced in a
+very small range (less than 0.01% total range) and is 0.14033 (an
+increase of `r 0.14033 - pe12o`), and the last kinetic energy
+(temperature) is 0.01256 (which would sit on the temperature--energy
+line). That means that placing that single particle in the middle of two
+other particles added over half the energy needed to melt.
+
+Incidentally, the *Mathematica* MD4 notebook has a way of computing,
+rather exactly, the potential energy of such a movement, and it resulted
+in 0.01335 so about 6% higher than the *Julia* `MD2` saw.
+
+I made a mistake by adding the `.jld2` to the `readfile` parameter of
+`RunSystem()`, so there is an extra `.jld2` in the csv file name.
+
+Another movement possible would be to move as in @fig-pip1 below.
+
+![Movement of particle labeled `2c` to edge of `NHOPr` range of
+particles labeled `p4c` and
+`p5c`.](Screenshot%20from%202026-07-20%2012-47-14.png){#fig-pip1}
+
+## Move Two Particles
+
+We can move particle 46 up just a little, and move particle 66 down a
+little, such that they are within their `NHOPr`. The row height is
+$a\sqrt{3}/2$. The particles are two rows apart. As computed in the MD4
+*Mathematica* notebook, we need to move one particle down half the way
+to the `NHOPr` circle of the particle directly below it, and move that
+particle the same distance up. We'll work with particles 46 (again) and
+66. The *Julia* script below shows computing the distance `d2` to move
+the particles, and then calling `dislocation()` to move them.
+
+```{julia}
+#| eval: false
+julia> d2 = ((ss.p[66] - ss.p[46])[2] - 2.601766973050859)/2
+0.34857067966147204
+
+julia> n66 = ss.p[66] - [0, d2]
+2-element SVector{2, Float64} with indices SOneTo(2):
+ 0.47615640343197896
+ 2.1256105696188805
+
+julia> n46 = ss.p[46] + [0, d2]
+2-element SVector{2, Float64} with indices SOneTo(2):
+  0.47615640343197896
+ -0.4761564034319785
+
+julia> MD2.dislocation( joinpath( testdir, "t100b"), [46, 66], 
+                        [(n46[1],n46[2]), (n66[1],n66[2])])
+-----readMDRecord(), Current MD2 Version 1.7.9
+Restoring system on 2026-07-30T13:12:59.604
+System State restored from /media/phil/Original/Users/phils/Documents/DSP/MD/dev/
+   MD2J/test/testtemp/t100b.jld2, timestamp: 2026-07-11T10:40:15.926, 
+Restored from MD2 Version: 1.7.9
+Current total steps: 0
+Total Kinetic Energy: 0.0, T = 0.0
+Type of MDRecord: Main.MD2.MDRecordVV{Float64}
+Per Particle Linear Momentum: [0.0, 0.0]
+Angular Momentum: 0.0
+(i, pnum[i], newspot[i]) = (1, 46, (0.47615640343197896, -0.4761564034319785))
+(i, pnum[i], newspot[i]) = (2, 66, (0.47615640343197896, 2.1256105696188805))
+savename = "/media/phil/Original/Users/phils/Documents/DSP/MD/dev
+/MD2J/test/testtemp/t100b.ds"
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/dev/
+   MD2J/test/testtemp/t100b.ds.jld2 at 2026-07-30T13:12:59.756
+Current Steps: 0
+Maximum Speed: 0.0
+
+
+julia> @time MD2.RunSystem( joinpath( testdir, "t100b.ds"), 
+                            joinpath( testdir, "t100b.ds.01"), 1000, 
+                            animate = true)
+-----readMDRecord(), Current MD2 Version 1.7.9
+Restoring system on 2026-07-30T14:02:42.334
+System State restored from /media/phil/Original/Users/phils/Documents/DSP/MD/dev
+/MD2J/test/testtemp/t100b.ds.jld2, timestamp: 2026-07-30T13:12:59.756, 
+Restored from MD2 Version: 1.7.9
+Current total steps: 0
+Total Kinetic Energy: 0.0, T = 0.0
+Type of MDRecord: Main.MD2.MDRecordVV{Float64}
+Per Particle Linear Momentum: [0.0, 0.0]
+Angular Momentum: 0.0
+RunSystem: Running 1000 steps with Beta = 0.0, diffFlag = false, deltat = 10.
+----MD2State initializing with type: Float64
+Density: 0.3183098861837907, Shell: 5.0, NHOPr: 2.601766973050859
+Mean # in shell: 25.0, Min Mmax: 2500.0, Mmax: 3800
+PE Offset: 0.0019039685845183554
+stebskip: 20, Beta = 0.0
+Max number of interactions: 974
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/dev/
+   MD2J/test/testtemp/t100b.ds.01.jld2 at 2026-07-30T14:03:58.261
+Current Steps: 1000
+Maximum Speed: 0.08091188719396201
+[ Info: Saved animation to /media/phil/Original/Users/phils/Documents/DSP/MD/dev
+   /MD2J/test/testtemp/t100b.ds.gif
+Scalars saved in /media/phil/Original/Users/phils/Documents/DSP/MD/dev
+   /MD2J/test/testtemp/t100b.ds.scalars.csv
+ 81.906281 seconds (18.75 M allocations: 846.545 MiB, 0.21% gc time)
+
+```
+
+![Second moved particle (66) in green. The first moved particle is
+directly below
+it.](Screenshot%20from%202026-07-30%2013-19-36.png){#fig-t100bds}
+
+```{r}
+#| eval: false
+# code below created the plot, but it is displayed from the png file.
+testdir <- 
+   "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testtemp"
+t100bd <- readplot( paste0( testdir, "/t100b.ds.scalars.csv"))
+
+rpl <- recordPlot()
+png("t100b.ds.csv.png", width = 6.5, height = 4, units = "in", res = 100)
+replayPlot(rpl)
+invisible( dev.off())
+```
+
+![Metrics from the second dislocation attempt. The three discontinuities
+in the Total Energy are quite small, but
+concerning.](t100b.ds.csv.png){#fig-t100bdspng}
+
+We could find the specific location of the discontinuities with
+`which( abs( diff( t100bd$TE)) > 1e-9)` which yields `[1] 96 210 413`.
+This works because most of the steps were $\pm 10^{-10}$ or less. Point
+97 was $4.45 \times 10^{-8}$ larger than point 96. The next two steps
+were $1.81 \times 10^{-8}$ and $-2.98 \times 10^{-8}$ respectively. The
+first thing to notice is that these steps are not on `skip` boundaries
+(where new particles might show up in `rskin` range). Further
+examination showed that the energy steps occurred both in the potential
+and the kinetic energy trajectories, but in opposite directions. As the
+plots cover a much larger range, the steps are not visible. Both slopes
+are changing, and at step 96, the slope change increases (or decreases)
+by about $10^{-7}$, and together they create the $4.46 \times 10^{-8}$
+step in `TE`.
+
+Those numbers are per-particle, and with only two particles really
+moving (and moving symmetrically), we can probably attribute the changes
+the changes to simply two particles. In this 100-particle system, that
+would mean that the slope and energy changes would be about 50 times
+greater (`r 50 * 4.46e-8`). Since all particles sit just outside the
+`skin` distance to other particles, it could be due to the two particles
+crossing the `skin` and *stepping up* in potential energy. The speed a
+particle would have to be moving to experience that change in a single
+step was worked out in `MD4`, and that speed was 0.0830. This
+calculation is $x^{-5} + R_s^{-5} = 2.23 \times 10^{-6}$ where $R_s$ is
+the `skin` of 3.5, which yields the *R* expression
+`(2.23e-6 + 3.5^-5)^(-1/5)` which evaluates to
+`r (2.23e-6 + 3.5^-5)^(-1/5)`. This quantity is different from $R_s$ by
+0.00819, divided by the time step and we get
+`(3.5-(2.23e-6 + 3.5^-5)^(-1/5))/0.01` which evaluated to
+`r (3.5-(2.23e-6 + 3.5^-5)^(-1/5))/0.01` (only a little different from
+*Mathematica*'s result). The file save operation records the maximum
+speed of 0.0809, so these steps are likely the two particles
+simultaneously crossing the `skin` and stepping up the energy.
+
+Getting back to the energy, *Mathematica* predicted an increase of
+0.04704, but the data shows something much smaller: only 0.001157. The
+`.gif` animation was rather subtle, as this is a pretty cold total
+energy.
+

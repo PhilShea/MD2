@@ -1,0 +1,932 @@
+---
+title: "Series 5 Final Analysis"
+date: last-modified
+number-sections: true
+bibliography: "Melting in Two D.bib"
+csl: american-physics-society
+language:
+   crossref-eq-prefix: "Eq."
+format: 
+   typst:
+    mainfont: "Latin Modern Roman"
+    fig-pos: 'H'
+    toc: true
+    toc-depth: 2
+    include-before-body:
+      - text: |
+          #show figure.caption: set text(font: "Latin Modern Sans", size: 9pt)
+execute:
+  sanitize: false
+  freeze: auto
+crossref:
+  fig-title: '**Figure**'
+  fig-labels: arabic
+  title-delim: "**.**"
+monofont: "Courier"
+monofontoptions: 'Scale=0.8'
+editor_options:
+  markdown:
+    wrap: 72
+    canonical: true
+---
+
+```{r}
+#| label: init
+#| include: false
+#
+# NOTE: if the package has changed, it must be installed locally via:
+#
+# devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+# (for Windows)
+# or
+#
+# devtools::install("/home/phil/MD/MD2RP")
+# (for linux)
+#
+# You probably have to re-start R after this.
+#
+# *****************************************************
+require( MD2RP)
+require( parallel)
+require( pracma)
+require( data.table)
+require( knitr)
+require( lattice)
+require( JuliaCall)
+require( latex2exp)
+num_cores <- detectCores() - 1
+options(digits=5)
+"%within%" <- function( vector, range) # define convenience function.
+   (vector > range[ 1]) & (vector < range[ 2])
+
+td <- "/mnt/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+MD2.F2 <- readRDS( "../MD2DT.F2.RDS") # read in current data for analysis 
+```
+
+# Analysis Start
+
+The last data table was the `MD2.F2`.
+
+## Nomenclature
+
+The following is the nomenclature of equations:
+
+- Fundamental units are mass $M$, length $\sigma$, and energy $\epsilon$
+- $T$ is generic temperature, in units of energy $\epsilon$
+- $H$ is total energy (this is a change from *S5 Finish.pdf*)
+- $E_k$ is kinetic energy
+- $\rho$ is density (almost always $\rho = 1/\pi$)
+- $U$ is potential energy, and $U_0$ is the potential energy of the
+  system in the rest position.
+- $\tau$ is the unit of time equal to $\sigma \sqrt{M / \epsilon}$.
+- $\Delta t$ is the time step (in units of $\tau$)
+
+## Data as of 6 October 2026
+
+Updated the operating system to Ubuntu "26.04.1 LTS (Resolute Raccoon)."
+Update appeared to go OK, but disks were mounted to different locations
+and *RStudio* seems to have difficulty finding files. In particular, the
+1TB hard disk that was mounted to `/media/phil/Original` is now, after
+some difficulty, mounted to `/mnt/Original`.
+
+We noticed that the `Init` runs do not have diffusion or $G_6$ data
+recorded for them. This was processed, but something must have happened.
+Also noticed a phantom column named `g6absz`. This was referenced once
+in *S5 Finish.pdf*, but was likely a typo later deleted. The code below
+will process the missing diffusion data creating `MD2.F3`.
+
+```{r}
+#| label: MD2.F3
+#| eval: false
+#| warning: false
+rm( difflist)
+system.time( difflist <- procdiffiles( td, 
+                           filepatt = "^S5b\\.[0-9]{5}\\.diff\\.txt$",
+                           MD2.F2)) # patt is S5b.*h0?.diff.txt where ? is 4-z
+MD2.F3 <- difflist$newMD2
+```
+
+Below the missing $G_6$ data is incorporated into `MD2.F3`.
+
+```{r}
+#| label: MD2.F4
+#| eval: false
+#rm( drn, g6dt, lfn)
+drn <-MD2.F3[ grepl( "^S5b\\.[0-9]{5}$", run) & is.na( g6absz), run]  
+# "\\." is R for literal ".", ".*" means any number of any char, and "h0[4-z]"  
+# means "h0?" where ? is 4-z.
+g6dt <- data.table()
+for( i in drn) {
+   g6data <- g6proc( td, MD2.F3, i, trifitter = trifit2, ft = 1.5)
+   g6dt <- rbind( g6dt, g6data$newrow)
+}
+setkey( MD2.F3, run)
+setkey( g6dt, run)
+MD2.F4 <- MD2.F3[ g6dt, (names( g6dt)) := mget( paste0( "i.", names( g6dt)))]
+MD2.F4[, g6absz := NULL]
+saveRDS( MD2.F4, "../MD2DT.F4.RDS")
+```
+
+```{r}
+#| include: false
+MD2.F4 <- readRDS( "../MD2DT.F4.RDS") 
+rm( MD2.F2)
+```
+
+As of the start, we have been tracking the following transition values,
+assigned by the `dsmean` value being an inflection point in run
+`S5b.00123`. These are nothing more than a guide.
+
+```{r}
+#| label: trans
+(temp <- MD2.F4[ run == 'S5b.00123', .( dsmean, TE.mean.rs, ke.mean.rs)])
+TEtr <- temp$TE.mean.rs[1]
+ketr <- temp$ke.mean.rs[1]
+dsmtr <- temp$dsmean[1]
+rm( temp)
+```
+
+### Getting a Better `plotxy()`
+
+When we finished reading in and processing the last Series 5b runs, we
+saw different needs for the `plotxy()` function previously created. It
+needed to create the specific heat from the observed temperature and
+energy data via differentiation, but the large number of data points
+amplified temperature noise (by small spacing between samples). First,
+we need the new `dydx()` function in which we can expand the number of
+points used in the regression.
+
+```{r}
+#| label: dydx
+
+dydx <- function( y, x, degree = 1, pad = degree + 1) {
+   # find derivative over lag + 1 points
+   # cat( "deg: ", degree, " pad: ", pad)
+   pad = round( pad) # needs to be integer
+   stopifnot( pad > 0)
+   lx <- length( x)
+   stopifnot( length( y) == lx)
+   dlen <- degree + pad # number of points in each regression
+   data <- data.table( x = x, y = y, keyby = 'x')
+   xm <- movavg( x, dlen)[dlen:lx]
+   dydxfit <- function( i) { # get dy/dx from points i:(i + dlen)
+      c <- coef( lm( y ~ poly( x, degree, raw = TRUE), # get poly coef
+                     data = data[ i:(i + dlen),]))
+      dpc <- (1:degree) * tail( c, -1) # derivative of poly coeff
+      dd <- polyval( rev(dpc), xm[i]) # eval poly at mean of data & return
+      #if (is.na( dd)) browser()
+      return(dd)
+   }
+   dd <- vapply( 1:(lx - dlen + 1), dydxfit, 1.0)
+   list( dd = dd, xm = xm)
+}
+```
+
+```{r}
+#| label: dydx_test
+#| eval: false
+#| include: false
+# test. Set include to true and run in RStudio
+tx <- 1:10
+ty <- tx^2
+dydx( ty, tx)
+dydx( ty, tx, degree = 3)
+(dd <- dydx( ty, tx, 2))
+dd$dd - 2 * dd$xm # y = x^2, y' = 2x. these all ought to be zero
+rm( tx, ty, dd) # remove these variables
+```
+
+Below is the new `plotxy()` function.
+
+```{r}
+#| label: plotxy
+plotxy <- function( data = NULL, xlim = c(0.0, 0.2), N = 256, rvline,
+                    main = "Key Statistics Around Transition", meltin = NULL,
+                    Cvd = FALSE, degree = 2, pad = 2, x, y, 
+                    xlab = "TE / Particle",  pchs = '.', 
+                    cols = c( "blue", "red",  'black')) {
+   # `data` is data.table, must have columns 'run', 'Series', 'type', & 'xvar'
+   # 'run' is unique key, 'Series' will set symbol, 'type' will set color
+   # "xvar" will be the x variable (printable name with xlab).
+   # xlim are the limits of xvar that will be plotted
+   # N is the number of particles (needed for Cv)
+   # rvline is the position of the red vertical dotted line on all graphs
+   # main is graph title
+   # meltin is the result of a previous plot
+   # degree is the polynomial degree for differentiation,
+   # pad is the number of points to pad the poly fit (degree + pad + 1)
+   # x and y are the variable in data to pass to dydx()
+   # pchs are the plot symbols for each series; vectors will be recycled
+   # cols are the colors to plot each series, also recycled
+   # invisibly returns melted data within xlim
+   id.var <- c( "run", "Series", "type", "xvar")
+   #browser()
+   if (is.null( meltin)) {
+      stopifnot( !is.null( data)) # both meltin and data cannot be null
+      Slist <- unique( data$Series) # get list of Series
+      subdat <- data[ xvar %within% xlim,]
+      melt1 <- melt( subdat, id.var = id.var, 
+            variable.name = 'variable', variable.factor = TRUE, 
+            value.name = 'value')
+         if (Cvd) for (i in Slist) { # only if staetment is for (i...)
+            sd <- subdat[ Series == i, .( yv = y, xv = x, type), 
+                        env = list( x = x, y = y)]
+            deriv <- dydx( sd$yv, sd$xv, degree = degree, pad = pad)
+            ddlen <- length( deriv$dd)
+            tbli <- data.table( run = rep( i, ddlen), Series = rep( i, ddlen),
+                                type = sd$type[1:ddlen], xvar = deriv$xm,
+                                variable = rep( "Cvd", ddlen), 
+                                value = 1 / deriv$dd) # Cv is the purpose
+            melt1 <- rbind( melt1, tbli)
+         } # end if (Cvd) for (i ...)
+      } else melt1 <- meltin[ xvar %within% xlim,] # end if (is.null...
+   # now each variable is its own table.
+   Slist <- unique( melt1$Series) # Rebuild list
+   gps  <- length( Slist) # number of series
+   pchv <- rep_len( pchs, length.out = gps)
+   colv <- rep( cols, each = gps)
+   plt <- xyplot( data = melt1, value ~ xvar | variable, 
+        groups = factor( Series), subscripts = TRUE, as.table = TRUE,
+        scales = list( y = list( relation = "free")), xlab = xlab, main = main, 
+        par.settings = list( superpose.symbol = list( pch = pchv,  
+                                                     cex = 1/2, col = 'black')),
+        auto.key = list( columns = min( gps, 3)),   # <-- legend appears
+        panel = function(x, y, subscripts, groups, ...) {
+           panel.grid( h = -1, v = -1)
+           panel.xyplot( x, y, col = unname(cols[ melt1$type[ subscripts]]),
+           pch = unname( pchs[ as.integer( factor( melt1$Series[ subscripts]))]),
+                                          cex = 1/2, ...) # panel.xyplot call
+           panel.abline( v = rvline, col = 'red', lty = 2)
+        } # end panel = function...
+   )# end of xyplot( ...
+   print( plt) # Since the plot is not the last function, it is not returned,
+               # thus, it must be printed.
+   invisible( melt1)
+} # end of plotxy()
+```
+
+```{r}
+#| label: test_plotxy
+#| eval: false
+#| include: false
+# Test for new plotxy. Set include = true above to run RStudio,
+slen <- 9
+tx <- c( 1:slen, 1:slen + 0.5)
+rx <- tx + 0.01
+lrx = length( rx)
+offset <- rep( c( 0, 1), length.out = lrx, each = slen)
+wye <- rx + offset
+itype <- rep( c("Init", "Cool", "Heat"), each = 3, length.out = lrx)
+q <- c( "Init" = 'black', "Cool" = 'blue', "Heat" = 'red')
+testdata = data.table( run = 1:lrx, xvar = rx, type = itype,
+                       Series = rep( c("one", "two"), length.out = lrx, 
+                                     each = slen),
+                       y1 = wye, y2 = -wye, y3 = log(wye + 2),
+                       y4 = wye^2, y5 = -wye^2 , y6 = sqrt(wye))
+testdata
+plotxy( data = testdata, xlim = c(0, 15), pchs =  0:3, cols = q, rvline = 5)
+rm( tx, rx, lrx, itype, q, testdata)
+```
+
+```{r}
+#| label: test_plotxy2
+#| eval: false
+#| include: false
+# Test for plotxy with Cvd. Set include = true above to run RStudio,
+slen <- 100
+tx <- c( 1:slen, 1:slen + 0.5)
+rx <- tx + 0.01
+lrx = length( rx)
+offset <- rep( c( 0, 1), length.out = lrx, each = slen)
+wye <- rx + offset
+itype <- rep( c("Init", "Cool", "Heat"), each = 3, length.out = lrx)
+q <- c( "Init" = 'black', "Cool" = 'blue', "Heat" = 'red')
+testdata = data.table( run = 1:lrx, xvar = rx, type = itype,
+                       Series = rep( c("one", "two"), length.out = lrx, 
+                                     each = slen),
+                       y1 = wye, y2 = -wye, y3 = log(wye + 2),
+                       y4 = wye^2, y5 = -wye^2 , y6 = sqrt(wye))
+testdata
+rm( rx, wye, tx, slen, lrx, offset, itype)
+plotxy( data = testdata, xlim = c(0, 15), pchs =  0:3, cols = q, rvline = 5, 
+        Cvd = TRUE, x = "xvar", y = "y4")
+rm( q, testdata)
+```
+
+From top to bottom, left to right, @fig-plotxy1 shows Temperature,
+Pressure, Diffusion, `Log10FpD` is the common logarithm of the diffusion
+F-statistic probability value (the probability that the regression
+occurs randomly; note that many values are smaller than $10^{-15}$, and
+these are mapped to $10^{-15}$; also, points with negative diffusion are
+mapped to unity), `Lpsiavg` is $\ln(|\langle \psi_6 \rangle|)$ (log of
+the magnitude of the complex average) and `Lpsiabs` is
+$\ln(\langle|\psi_6|\rangle)$ (log of the average of the magnitudes),
+`dsmean` is the mean number of dislocations (`S5b` points only), `Cv` is
+the specific heat computed as
+$C_v = 1 / \left( 1 - N  \sigma_T^2 / T^2 \right)$, where $N$ is the
+number of particles (256) and $\sigma_T^2 / T^2$ is the relative
+temperature variance (`rtv`), `LXi6` is the logarithm of $\xi_6$ (the
+estimate of the exponential coefficient in $G_6(r) \sim e^{-r/\xi_6}$),
+`LEta6` is the logarithm of the power-law decay estimate ($\eta_6$ in
+$G_6(r) \sim r^{-\eta_6}$), `LrseRatio` is the logarithm of the ratio of
+the $G_6$ power-law and exponential fits residual standard errors (the
+ratio being less than one or whose log is below zero, means that the
+power-law fit was better), and finally `Cvd` is the specific heat
+computed via a numerical derivative of total energy and temperature.
+
+```{r}
+#| label: fig-plotxy1
+#| fig-cap: Series 5 via the new `plotxy()`. Black points are initialization runs, red points are heated, and blue cooled. The low number `S5b` series (`00010` through `00025`) where all heated, while the high number series were cooled. Includes both `S5` and `S5b`. Note that all verticle scales are independantly scaled to include the full range of data, and the `Cvd` scale was dominiated by the `S5` data, which had large energy steps around the transition. The verticle dashed red line is the transition energy of 0.1441.
+#| fig-height: 8.5
+#| fig-width: 6.5
+#| warning: false
+setkey( MD2.F4, TE.mean.rs)
+pxydat <- MD2.F4[ grepl( "S5", series), 
+                      .( run, Series = newSeries, # Series re-name
+                  type = itype,
+                  xvar = TE.mean.rs,  
+                  # Values below are those plotted, in this order by row
+                  Temp = ke.mean.rs,
+                  Lpsiavg = log( psiavg), LXi6 = log( exf.Estimate),
+                  Pressure = Pressure.mean.rs, Lpsiabs = log( psiabs.mean.rs),
+                  LEta6 = log( pow.Estimate),
+                  D = Estimated / 4.0, dsmean, 
+                  LrseRatio = log( pow.rse / exf.rse),
+                  Log10FpD = log10( fifelse( Estimated > 0 ,
+                                         pmax( 1e-15, Fpvalued), 1)),
+                  Cv = 1 / (1 - 256 * rtv))]
+meltout <- plotxy( data = pxydat, Cvd = TRUE, x = "xvar", y = "Temp", 
+                   degree = 2, pad = 8,
+        cols = c( "Init" = 'black', "Cool" = 'blue', "Heat" = 'red'), 
+        pchs = c( "S5" = 0, "S5b" = 1, "S5b.00010" = 2, "S5b.00015" = 3,
+                  "S5b.00020" = 4, "S5b.00025" = 5, "S5b.00195" = 2, 
+                  "S5b.00200" = 3, "S5b.00205" = 4, "S5b.00210" = 5),
+        rvline = TEtr)
+
+```
+
+The `LrseRatio` panel, when plotted as a logarithm, was surprising.
+There us indeed an area where the ratio plummets. The log is always less
+than zero below the transition energy (and quite often when it is over
+it), but just above that energy, many of the samples plummet. This means
+that the power-law RSE is much less than the exponential. This may
+indeed be evidence of the K-T transition. Another mundane thing to
+notice is that the heated samples overachieved. While the hottest sample
+before heating was 0.0221 with a total energy of 0.1641. We heated well
+beyond that, hitting a temperature of 0.0325 at a total energy of
+0.18305, both in run `S5b.00020H0ih19`. @fig-plotxy2 shows a zoom into
+the region around the transition temperature.
+
+```{r}
+#| label: fig-plotxy2
+#| fig-cap: Zoom into @fig-plotxy1. Black points are initialization runs, red one are heated, and blue cooled. Both `S5` and `S5b` runs are included.
+#| fig-height: 9
+#| fig-width: 6.5
+#| warning: false
+#setkey( MD2.F4, TE.mean.rs)
+plotxy( meltin = meltout,
+        xlim = c( 0.135, 0.155),
+        cols = c( "Init" = 'black', "Cool" = 'blue', "Heat" = 'red'),
+        pchs = c( "S5" = 0, "S5b" = 1, "S5b.00010" = 2, "S5b.00015" = 3,
+                  "S5b.00020" = 4, "S5b.00025" = 5, "S5b.00195" = 2, 
+                  "S5b.00200" = 3, "S5b.00205" = 4, "S5b.00210" = 5),
+        rvline = TEtr)
+
+```
+
+Incidentally, updated *Julia* to v11.3.2 on 15 October, ran all tests
+successfully.
+
+## Analysis of RSE Ratio
+
+The plot `LrseRatio` shows uniform behavior up to the transition
+temperature. It is always less than one (zero in the log plot), but this
+is because the exponential drops rapidly even with modest coefficients,
+where the power-law need not., then there is a region
+
+```{r}
+#| label: fig-powlaw
+#| fig-cap: Close up of estimates of $\eta_6$ and the ratio of the power-law fit residual squared error (RSE) to the exponential fit  RSE, both plots with logrithmic verticle scales and plotted vs. temperature. The error bars in the upper plot show $\pm\sigma$ (the standard error of the fit).  When the RSE ratio is less than one, the power-law fit is better. The verticle red dashed line is the transition temperature of 0.01309. The horizontal red dashed line in the top graph is the critical value of $\eta_6 = 1/4$. The red dashed line in the lower graph is $e^{-1}$, a useful demarcation for the lower tier RSE ratios. The solid black line in the lower graph is unity (where the RSEs are equal).
+with( MD2.F4[ series == 'S5b' & TE.mean.rs %within% c( 0.14, 0.15),],{
+   nf <- layout( matrix(c(1, 2), nrow = 2), heights = c(1, 1.5))
+   #layout.show( nf)
+   graphics::par( mar = c(0, 4, 0.5, 1), mgp = c( 3, 1, 0) )
+   cols = c( Init = 'black', Cool = 'blue', Heat = 'red')
+   x = ke.mean.rs
+   plot( x = x, y = pow.Estimate, log = 'y', panel.first = grid(), 
+         xaxt = 'n', xlab = '', ylab = expression( eta[6]), col = cols[ itype])
+   arrows( x, pow.Estimate - pow.Std.Error, x, pow.Estimate + pow.Std.Error,
+           length = 0.05, angle = 90, code = 3, col = 'gray')
+   abline( h = 1/4, lty = 2, col = 'red')
+   abline( v =  ketr, lty = 2, col = 'red')
+   graphics::par( mar = c(5, 4, 0.5, 1), mgp = c( 3, 1, 0) )
+   plot( x = x, y = pow.rse / exf.rse, log = 'y', col = cols[ itype],
+         ylab = "RSE Ratio", xlab = "Temp", panel.first = grid())
+   abline( v =  ketr, lty = 2, col = 'red')
+   abline( h = 1)
+   abline( h = exp(-1), col = 'red', lty = 2)
+})
+```
+
+@fig-powlaw shows that the RSE ratio drops in some samples just before
+the transition temperature, but these overlap many samples that lie on
+what might be called the "solid response." This is a hot solid whose
+order decreases slowly (likely linearly) with $r$, and the power-law fit
+is better than the exponential fit. Other samples start to favor the
+exponential fit as long range order collapses. The values of $\eta_6$ do
+approach the critical value of 1/4, bt then blow by it.
+
+@fig-linrse compares the linear fits to the power-law, and finds that
+the power-law almost always wins belwo the transition temperature.
+
+```{r}
+#| label: fig-linrse
+#| fig-cap: Ratio of the power-law fit RSE to the linear fit RSE.  If the ratio is less than one, the power-law fit is better. The solid black horizontal line is unity, and the red-dashed line is $e^{-1}$ or $1/e$.
+with( MD2.F4[ series == 'S5b',],{
+   cols = c( Init = 'black', Cool = 'blue', Heat = 'red')
+   x = ke.mean.rs
+   plot( x = x, y = pow.rse / lin.rse, log = 'y', col = cols[ itype],
+         ylab = "RSE Ratio", xlab = "Temp", panel.first = grid())
+   abline( v =  ketr, lty = 2, col = 'red')
+   abline( h = 1)
+   abline( h = exp(-1), col = 'red', lty = 2)
+})
+
+```
+
+In order to compare some $G_6(r)$ plots, we need the coldest and hottest
+runs, the coldest run whose RSE ratio was "small," the hottest "small"
+RSE ratio, and the run with the largest RSE ratio. The below code
+elicits these runs for temperatures between 0.012 and 0.015.
+
+```{r}
+#| label: runs
+tmp <- MD2.F4[ series == 'S5b' & ke.mean.rs %within% c( 0.012, 0.015), 
+               .( run, rseRatio = pow.rse / exf.rse, Temp = ke.mean.rs, 
+                  TE = TE.mean.rs, eta6 = pow.Estimate, Xi6 = exf.Estimate)]
+setkey( tmp, Temp) # sort by temp
+(coldest <- tmp$run[ which.min( tmp$Temp)]) 
+(hottest <- tmp$run[ which.max( tmp$Temp)]) 
+(minpow <- tmp[ rseRatio < exp(-1), run][1]) # sorted by temp, so 1st is lowest
+(maxpow <- last( tmp[ rseRatio < 1, run])) # and here last is highest
+(maxrse <- tmp$run[ which.max( tmp$rseRatio)])
+(minrse <- tmp$run[ which.min( tmp$rseRatio)])
+collect <- c( coldest, hottest, minpow, maxpow, maxrse, minrse) # bundle them
+```
+
+@tbl-extrse below shows the values for each of those runs. The values
+for $\eta_6$ are plotted in the top of @fig-powlaw. The values of
+$\xi_6$ (listed as `Xi6`) and total energy (`TE`) are shown for
+informational purposes.
+
+```{r}
+#| label: tbl-extrse
+#| echo: false
+#| tbl-cap: Runs with extreme values from @fig-powlaw. The `LinRatio` column is the power-law RES to the linear RSE, and the `ExpRatio` column is the power-law RSE to the exponential RSE.
+knitr::kable( MD2.F4[ run %in% collect, 
+                      .(run, LinRatio = pow.rse / lin.rse, 
+                        ExpRatio = pow.rse / exf.rse, Temp = ke.mean.rs, 
+                        TE = TE.mean.rs, eta6 = pow.Estimate, 
+                        Xi6 = exf.Estimate)])
+rm( tmp)
+```
+
+Below we plot the $G_6(r)$ fits for all of the above runs. Note that the
+y axis is scaled linearly in these plots so that the effect on the RSE
+of each fit might be better understood.
+
+```{r}
+#| label: fig-coldest
+#| fig-cap: Coldest run. The black curve is the full $|G_6(r)|$. Black circles identify the detected peaks used to fit the three equations.  
+g6proc( td, MD2.F4, coldest, ft = 1.5, ylim = NULL,
+        trifitter = trifit2, pltlog = 'x', plotflag = TRUE)
+```
+
+In @fig-coldest, we noticed that the first peak at $r = a$, where $a$ is
+the lattice spacing, is often bigger than the following peaks, and this
+often sets up the power-law fit to win (as it did here).
+
+```{r}
+#| label: fig-hottest
+#| fig-cap: Hottest run. The horizontal dashed black line is $|\langle \psi_6 \rangle|$ (the absolute value of the mean).
+g6proc( td, MD2.F4, hottest, ft = 1.5, pltlog = 'x', ylim = NULL,
+        trifitter = trifit2, plotflag = TRUE)
+```
+
+@fig-hottest explains why the power-law tends to win some of these hot
+samples. The first peak is very low, and we are down into the noise at
+short ranges. This tends to flatten the curve, and with the weighted
+fits, the power-law sometimes wins (although not in this case).
+
+```{r}
+#| label: fig-minpow
+#| fig-cap: Min temperature power-law win.
+g6proc( td, MD2.F4, minpow, ft = 1.5, pltlog = 'x',
+        trifitter = trifit2, plotflag = TRUE, ylim = NULL)
+```
+
+@fig-minpow shows a classic power-law decay in this linear-log chart.
+
+```{r}
+#| label: fig-maxpow
+#| fig-cap: Max temperature power-law win.
+g6proc( td, MD2.F4, maxpow, ft = 1.5, pltlog = 'x',
+        trifitter = trifit2, plotflag = TRUE, ylim = NULL)
+```
+
+@fig-maxpow shows a power-law win driven by the first peak height. The
+exponential fit is pretty good here too, and the power-law barely wins.
+
+```{r}
+#| label: fig-maxrse
+#| fig-cap: Max RSE (best exponential win). Note that "best win" does not necessarily mean "best fit" -- it simplyu beat its alternative by the most.
+g6proc( td, MD2.F4, maxrse, ft = 1.5, pltlog = 'x',
+        trifitter = trifit2, plotflag = TRUE, ylim = NULL)
+```
+
+@fig-maxrse shows a big exponential win.
+
+```{r}
+#| label: fig-minrse
+#| fig-cap: Min RSE (best power-law win).
+g6proc( td, MD2.F4, minrse, ft = 1.5, pltlog = 'x',
+        trifitter = trifit2, plotflag = TRUE, ylim = NULL)
+```
+
+@fig-minrse shows the biggest power-law win, again decided by the first
+peak.
+
+## Specific Heat
+
+The specific heat in @fig-plotxy1 and @fig-plotxy2 deserves some
+attention. @fig-Cv below expands the graphs.
+
+```{r}
+#| label: fig-Cv
+#| fig-cap: The specific heat computed by temperature variance (`Cv`) and by numrical differentiaion (`Cvd`) near the transition energy of 0.1441. Only the heated and cooled sampels are included because the system had difficulty initializing near the transition energy, and so the large steps there caused `Cvd` to be very large (and sometimes negative) and therefore difficult to plot.  These are the only points visible in @fig-plotxy2.
+plotxy( meltin = meltout[ (variable %in% c( "Cv", "Cvd")) & 
+                             (grepl("S5b.0", Series)) ,], 
+        xlim = c( 0.135, 0.155),
+        cols = c( "Init" = 'black', "Cool" = 'blue', "Heat" = 'red'),
+        pchs = c( "S5" = 0, "S5b" = 1, "S5b.00010" = 2, "S5b.00015" = 3,
+                  "S5b.00020" = 4, "S5b.00025" = 5, "S5b.00195" = 2,
+                  "S5b.00200" = 3, "S5b.00205" = 4, "S5b.00210" = 5),
+        rvline = TEtr, main = "Specific Heat  Two Ways")
+
+```
+
+The `Cvd` item is computed by using a ten-point window of points pairs
+($H[i]$, $T[i]$), where $T$ is temperature, $H$ is energy per particle,
+to fit a quadratic $T[i] = aE[i]^2 + bH[i] + c$. The derivative is then
+$2a \langle H \rangle + b$ and recorded at $\langle H \rangle_i$, the
+mean of the ten points used to perform the fit. This yields $dT/de$, and
+so the reciprocal is recorded as `Cvd`. This form of the specific heat
+starts at two and returns to two after crossing the transition region,
+as predicted below. The broad hump in the transition region is much
+broader than ten samples.
+
+Following section 7.7 of @Reif1965 we can predict the specific heat of
+the solid form. In two dimensions, the sum in equation (7.7.1) would be
+over $2N_a$ instead of $3N_a$. At low enough temperatures there are
+small lattice vibrations which are approximately like simple springs.
+The molar specific heat is given by the following reasoning. The energy
+of the system is
+
+$$E = \sum_{i=1}^{2N_a} \left( \frac{p_i^2}{2m} + 
+            \frac{1}{2}\kappa_i q_i^2 \right)$$ {#eq-energy}
+
+where $N_a$ is Avogadro's number, $p_i$ is the momentum in the i'th
+particle dimension, $m$ is the particle mass, $\kappa_i$ is the elastic
+constant of the i'th particle dimension's spring, and $q_i$ is the
+displacement in the i'th particle dimension from its home position.
+Since both the potential and kinetic energies are quadratic quantities,
+the equipartition theorem applies to both, and
+$p_i^2 / 2m = \kappa_iq_i^2 / 2 = kT / 2$, so that
+$E = 2N_a(kT / 2)\times2 = 2N_akT$.
+
+In our system, $m=1$, $k=1$, and the energies we use are per particle,
+so the specific heat is per particle (this analysis first appears in
+[2026 Init.pdf](2026%20Init.pdf)).
+
+$$
+c_v = \left( \frac{\partial E}{\partial T} \right)_v = 2
+$$ {#eq-cv1}
+
+The specific heat computed by numerical differentiation hits this
+exactly. In my original paper [@Shea1980] the specific heat was reported
+as $C_v = 1 - N\langle \delta T^2\rangle / T^2$. This was an erroneous
+form from an original derivation by @Lebowitz1967, and is corrected in
+the current version of the paper stored in
+[Overleaf](https://www.overleaf.com/project). The correct equation is
+
+$$
+C_v = 1/ \left( 1-\frac{N\langle (\delta T)^2 \rangle}{T^2} \right)
+$$ {#eq-cvshea}
+
+where N is the number of particles, $T$ is temperature, and
+$\langle (\delta T)^2 \rangle$ is the variance of the temperature. The
+difficulty here will be how to calculate this. The temperature steps are
+not independent; the uncorrelated random process has been filtered by
+the physical simulation (essentially the by the mass of the particles).
+I tried to break the correlation by creating block averages, and the
+variance we have is the that of the block averages, and it is, of
+course, much less than the raw variance. @fig-relrng shows part of the
+problem.
+
+```{r}
+#| label: fig-relrng
+#| fig-cap: The range of the temperature (max - min) divided by the resampled variance. The red points are heated, blue are cooled, and black are initialized.  The red dashed verticle line is the transition temperature of 0.1309.
+cols = c( Init = 'black', Cool = 'blue', Heat = 'red')
+plot( (ke.max.raw - ke.min.raw) / ke.sd.rs ~ ke.mean.rs, 
+      data = MD2.F4[ series == 'S5b',], col = cols[itype],
+      xlab = "T", ylab = "Relative Range") 
+grid()
+abline( v = ketr, col = 'red', lty = 2)
+```
+
+So the range of the temperature is between 10 and 50 times the variance
+of the block averages. It is fascinating behavior around the transition,
+but this is caused by the re-sampled variance spiking (as we know it
+does), not by anything special happening in the range. We can calculate
+backward and determine that is the $C_v$ is to be two, the relative
+variance of the 256 particle system, would have to be about
+`r (1 - 1/2) / 256`, which is
+`r ((1 - 1/2) / 256) / mean(MD2.F4[ series == "S5b" & ke.mean.rs < 0.01, rtv])`
+times bigger than the observed value of
+`r mean(MD2.F4[ series == "S5b" & ke.mean.rs < 0.01, rtv])` (the mean of
+`rtv` data item in runs where $T < 0.01$). The re-sampling operation
+used 500 point samples (the default in `MD2DFfile()`), and this would
+cause the variance estimate to be lower by 500. This is clearly wrong,
+as that will yield negative specific heat estimates.
+
+At the beginning of the year, we looked at some kinetic and potential
+energy histograms in detail, and we have a record of their mean and
+variance. @tbl-means shows the raw standard deviations, the ratio
+between the raw and re-sampled standard deviations and the specific heat
+based on the raw standard deviation.
+
+```{r}
+#| label: tbl-means
+#| tbl-cap: Selected runs with raw standard deviations and specific heat computed from the raw data.
+cvdat <- cbindlist( list( 
+   MD2.F4[ run %in% c( "S5b.00025", "S5b.00071", "S5b.00190", "S5b.00123"), 
+           .( run, T = ke.mean.rs, ke.sd.rs, rtv, Cv = 1 / (1 - 256 * rtv))],
+   data.table( ke.sd.raw = c( 0.00012986, .00033805, 0.00090447, 0.00085864))))
+knitr::kable( cvdat[, .(run, T, ke.sd.rs, rtv, Cv, ke.sd.raw, 
+                        sdRat = ke.sd.raw/ke.sd.rs,
+                        NewCv = 1 / (1 - 256 * (ke.sd.raw / T)^2))])
+```
+
+The `sdRat` column shows that the relationship, which is very far from
+the white noise 500/1 expectation, varies with temperature. If we
+consider that the temperature trajectory is a filtered Wiener process,
+such that $T(t) = \int_{t-a}^tf(t)dW(t)$ is normally distributed with
+variance $\sigma_f^2 = \sigma^2 \int_{-a}^0f^2(t) dt$, where $\sigma^2$
+is hte Wiener process variance[@Hoel1972].
+
+```{r}
+#| label: fig-Cvupdate
+#| fig-cap: $C_v$ with correction for relative variance of block avereages. The red verticle dashed line is the transition temperature. The scale is zoomed in so that the low temperature result near two is discernable.
+setkey( MD2.F4, ke.mean.rs)
+plot( Cv ~ T, data = MD2.F4[ grepl( "S5", series) & ke.mean.rs < 0.017,
+                             .( T = ke.mean.rs, 
+                                Cv = 1 / (1 - 256 * 500 * rtv))],
+      typ = 'l')#, ylim = c( -2, 10))
+grid()
+abline( v = ketr, col = 'red', lty = 2)
+
+```
+
+The derivation is from Lebowitz equation (3.7), listed there as:
+
+$$
+\begin{align}
+\frac{1}{N} \langle (\delta K)^2 | E, \mathbf{M} = 0\rangle &= 
+   \frac{3}{2\beta^2} \left( 1 - \frac{3}{2C} \right) \\
+   &= \frac{1}{N} \langle (\delta \Phi)^2 | E, \mathbf{M} = 0 \rangle
+   \end{align}
+$$ {#eq-Lebo1}
+
+Where here $N$ is the number of particles,
+$\langle (\delta K)^2 | E, \mathbf{M} = 0\rangle$ is the variance of the
+total kinetic energy at constant total energy ($E$) and total momentum
+($M$) equal to zero, $\beta = 1/ k_B T$, and $C$ is the specific heat.
+The two factors of $3/2$ are different than in @eq-cvshea above, which
+has unity in in both places. This is clearly due to the equipartition
+theorem with $\frac{1}{2} k_b T$ energy in each of the three dimensions
+assumed by Lebowitz. The last expression is the variance of the
+potential energy ($\Phi$ in Lebowitz), and is equal to the kinetic
+energy variance since the total energy is fixed. This is part of
+Lebowitz Eq. (3.6), which is the intensive expression for the
+temperature variance (as a function of $\beta$ here), which transforms
+into the extensive expression of @eq-Lebo1 above. Recasting into our
+nomenclature, and replacing the factors of $3/2$ with $2/2 = 1$ the
+equation becomes:
+
+$$
+\frac{\langle (\delta K)^2 \rangle}{N} = 
+   \frac{1}{\beta^2} \left( 1 - \frac{1}{C_v} \right)
+$$ {#eq-Lebo2}
+
+Since $K = N k_bT$ (where $k_b$ is unity in our units), then
+$\langle (\delta T)^2 \rangle = \langle (\delta K)^2 \rangle / N^2$, and
+$\beta = 1/T$, simple algebra yields @eq-cvshea.
+
+```{r}
+#| include: false
+#| # clean up data structures no longer needed
+rm( pxydat)
+```
+
+# Comparison with Other Work
+
+## Solid Form of $G_6$
+
+@Strandburg1988 did a review of "Two Dimensional Melting" in 1988, and
+noted that the orientational correlation function will decay to a
+constant (see FIG. 33 in Strandburg). This is clearly what is behind the
+power-law wins in cold solids seen in @fig-powlaw. Strandburg was
+commenting on work by Bakker, et.al. [@Bakker1984], which was a hardware
+aided MD simulation of 10,864 Leonard-Jones particles (apparently a
+$97 \times 112$ array; 97 is prime). This does make me think that the
+linear fit should be an exponential decay to a constant. Something like
+$G_6(r) \sim a + b e^{-r/c}$ might work (@fig-expdec).
+
+```{r}
+#| label: fig-expdec
+#| fig-cap: Log-Log plot of simple example of an exponential decay.
+x = 1:100
+y <- 2+exp(-(1:100/2))+rnorm(100, 0,.01)
+(expdec <- nls( y ~ a + b*exp( -x/c), data = data.frame( x = x, y = y), 
+     start = list( a = 1, b = .9, c = 3)))
+plot( x = x, y = y, log = 'xy', panel.first = grid(), ylim = c( 1, 3))
+lines( x = x, y = predict( expdec), lty = 1, pch = 0)
+rm( x, y, expdec)
+```
+
+We would have to reprocess all of the $G_6$ data to do this, and a
+scheme to start the `nls()` estimate would have to be developed.
+Nevertheless, Bakker found what they believed to be a first order
+melting, primarily due to the lack of the divergence of $\xi_6$. We
+could try it though by repeating the fit in @fig-coldest.
+
+```{r}
+#| label: trifit3
+
+trifit3 <- function( data, verbose = FALSE) {
+   # dt should be a data.table with g6abs, g6std, graw, and rvec, and only
+   # those samples which count (i.e., the peaks).
+   tf <- trifit2( data, verbose = verbose) # use for starting guesses
+   # lin <- tf$lin # no need to repeat this.
+   lcl <- coef( tf$lin)
+   pow <- tf$pow
+   exf <- tf$exf
+   rm( tf) # no need to keep this big data structure around
+   dt <- data.table::copy( data)
+   dt[, ':='( weights = g6std^-2)] # add weights column
+   lin <- nls( g6abs ~ a + b * exp( -rvec / c), data = dt,  weights = dt$weights, 
+               start = list( a = lcl[1], b = 0.1, c = 1.0), trace = verbose)
+   sw <- sum( dt$weights) * (nrow( dt) - 2)
+   # add `rse` element to lm & nls lists
+   lin[["rse"]] <- sum( dt$weights * resid( lin)^2) / sw
+   lincoef <- unname( coef( lin))
+   lin[["abcoef"]] <- c( a = lincoef[1], b = lincoef[2])
+   list( lin = lin, pow = pow, exf = exf)
+} # end trifit3
+```
+
+We can apply this to the coldest run from @fig-coldest (run `r coldest`)
+as follows (the plot looks the same, so it is not reproduced):
+
+```{r}
+#| label: coldest2
+cl <- g6proc( td, MD2.F4, coldest, ft = 1.5, trifitter = trifit3, 
+              plotflag = FALSE)
+(clftdat <- fitdat( cl$fits))
+```
+
+The residual standard error from before (the simple linear fit) is
+`r MD2.F4[ run == coldest, lin.rse]`, which allowed the power-law fit to
+win. The `trifit3()` routine has been incorporated into the `MD2RP` *R*
+package.
+
+### Analysis of Bakker's 1984 Results
+
+As already mentioned, @Bakker1984 indicated that there was no hexatic
+phase in the 10,864 particle Lennard-Jones potential simulation. It is
+unclear how many time steps each thermodynamic point represented. The
+text does state that there were 40k steps in estimating the $G_6(r)$
+curves. Bakker considered the lack of lack of hysteresis in the
+$|\psi_6(0)|$ curves and the $G_6(L/2)$ where $L$ is the linear length
+of the system, and the number of point defects (particles with five or
+seven particles surrounding them, called 6-coordinated Voronoi cells;
+these three metrics plotted in Bakker's Fig. 2). Our evidence is that
+even if doubled, these short times may not create a good temperature
+estimates in the transition region, as fluctuations in solid and fluid
+phases can persist for long times.
+
+Bakker's evidence of only a first-order transition with no hexatic phase
+had three parts: hysteresis of the pe vs T curve (Bakker's Fig. 1),
+"non-zero plateau values in the intermediate region" of $G_6(r)$ curves,
+and the lack of divergence of $\xi_6$ as the temperature approaches the
+critical value of temperature. Below we reproduce theses charts. We did
+not record the $G_6(L/2)$ (that Bakker termed
+$G_6(r \rightarrow \infty)$), but we might be able to produce something
+better. Instead of just reporting the value at the largest $r$ measured,
+which as it gets small can be driven by noise, we can plot the fitted
+equation at $L/2$, switching between the power-law and the exponential
+according to the residual standard error. We did not record the overall
+average factor (a multiplier in both of these), so one will be used as
+the multiplying factor. The box of our system has sides that are
+$\pm \left\{ 8 \sqrt{ \frac{2\pi}{\sqrt{3}}}, 4\sqrt{2 \pi \sqrt{3}} \right\}$.
+The second term is the shorter, and it evaluates to about 13.196. The
+units for $r$ in $G_6(r)$ are the inter-particle distance
+$\alpha =  \sqrt{\frac{2\pi}{\rho\sqrt{3}}} \approx 1.90463$ when the
+density $\rho = 1/\pi$, which makes $L/2 \approx 6.9284$
+
+```{r}
+#| label: fig-bakf1
+#| fig-cap: Replication of Bakker's 1984 Figures 1 & 2 with series 5b data.
+#| fig-subcap:
+#| - "pe - T vs T.  There are as many Heat points as Cool, but they are masked."
+#| - "Fraction of particles with 6 nearest neighbors ($N_6/N$), Psiavg is $| \\langle \\psi_6 \\rangle |$, and $G_6(L/2)$."
+#| layout-ncol: 2
+colsp <- c( "Init" = 1, "Heat" = 2, "Cool" = 3)
+with( MD2.F4[ series == "S5b", 
+              .( T = ke.mean.rs, pe.mean.rs, dsmean, psiavg, itype, 
+                 exf.Estimate, exf.rse, pow.Estimate, pow.rse)], {
+   palette("ggplot")
+   # Plot 1
+   plot( pe.mean.rs - T ~ T, xlim = c( 0.005, 0.02), #ylim = c( 0,1), 
+         col = colsp[ itype], xlab = "T", ylab = "pe - ke", 
+         pch = colsp[ itype] - 1) 
+   grid()
+   abline( v = ketr, col = 'red', lty = 2)
+   legend( "topleft", c( "Init",  "Heat", "Cool"), pch = colsp - 1,
+           col = colsp)
+   # Plot 2
+   plot( 1 - (dsmean / 256) ~ T, xlim = c( 0.005, 0.02), col = 1, pch = 0, 
+         ylim = c( 0.0, 1.0), xlab = "T", ylab = "Fraction")
+   grid()
+   Lo2 <- 6.9284
+   points( ifelse( pow.rse < exf.rse, Lo2^-pow.Estimate, 
+                   exp( -Lo2/exf.Estimate)) ~ T, col = 2, pch = 1)
+   points( psiavg ~ T, col = 3, pch = 2)
+   abline( v = ketr, col = 'red', lty = 2)
+   legend( "bottomleft", c( "N6/N", "G6(L/2)",  "Psiavg"), pch = c( 0, 1, 2),
+           col = c(1, 2, 3))
+})
+```
+
+These curves certainly support Bakker's conclusion, perhaps with even
+more certainty. I will point out, though, that due to the limitation of
+the simulation environment (it took over 400 hours of compute time for
+Bakker and his team to generate the 70-or-so points of 40k steps) he did
+not have many samples between 1.02 and 1.08, where the hexatic state
+might have existed. By way of comparison, it took less than 12h of
+compute time to generate 1,224,870k steps (over one billion) compared to
+Bakker's 2,800k steps. Since Bakker's system is about 42.5 times as
+large, that 12h could be extrapolated to about 510h in a system the size
+of Bakker's, but with 437 time the steps.
+
+I will point out two other observations. Bakker's Fig. 2 shows a break
+in his $G_6(L/2)$ plot around $T^* = 0.8$, and his Fig. 4 shows a
+difference in character of his $G_6(r)$ curves, with those below
+$T^* = 1.18$ being curved down, while those above being curved up. The
+colder curves may be evidence of power-law decay, and, as we've seen,
+better correlation with the hexatic phase than a simple fluid.
+
+## Reversability
+
+A recent paper by @Valizadeh2026 indicated that cooling a system might
+not result in the crystals of a minimum energy system. The quenching
+rates were very high though. The only observed anomaly is in @fig-bakf1
+(a) above, in which a lone heated point stands out. This is from run
+`r MD2.F4[ series == "S5b" & (pe.mean.rs - ke.mean.rs) > 0.1165 & ke.mean.rs < 0.012, run]`.
+
+{{< pagebreak >}}
+
+<!-- # References -->
+
+<!-- ::: {#refs} -->
+
+<!-- ::: -->
+
+<!-- {{< pagebreak >}} -->
+
+# R Session Info
+
+<button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOne">
+
+</button>
+
+:::: {#collapseOne .accordion-collapse .collapse}
+::: {}
+Quarto CLI Version: {{< version >}}
+
+```{r}
+sessionInfo()
+```
+:::
+::::

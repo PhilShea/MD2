@@ -1,0 +1,1011 @@
+---
+title: "FinalDiffusion"
+author: "Phil Shea"
+date: last-modified
+format:
+  pdf:
+    fig-pos: 'H'
+#mainfont: "Times New Roman"
+bibliography: ../references.bib
+link-citations: true
+monofont: "Courier 10 Pitch"
+monofontoptions: 'Scale=0.8'
+execute:
+   freeze: auto
+editor_options:
+  markdown:
+    wrap: 72
+    references: 
+      location: block
+    canonical: true
+---
+
+```{r}
+#| label: init
+#
+# NOTE: if the package has changed, it must be installed locally via:
+#
+# devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+#
+# or
+#
+# devtools::install("/home/phil/MD/MD2RP")
+#
+# You probably have to re-start r after this.
+#
+# *****************************************************
+require( MD2RP)
+require( parallel)
+require( pracma)
+require( data.table)
+require( knitr)
+require( lattice)
+num_cores <- detectCores() - 1
+options(digits=5)
+"%within%" <- function( vector, range) # define convenience function.
+   (vector > range[ 1]) & (vector < range[ 2])
+
+td <- "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+MD2DF.N <- readRDS( "../MD2DF.N.RDS") # read in data current for analysis start.
+```
+
+## Diffusion
+
+There are several steps to incorporating the diffusion data into the
+`MD2DF` table.
+
+1.  Run the *julia* `MD2` program to measure average particle mean
+    displacements over time for each run. This will add executions to
+    each run.
+2.  Update the `MD2DF` table with the new execution data.
+3.  Read in the raw diffusion data files.
+4.  Create average diffusion data for each time delta (the raw data has
+    several raw measurements at each time delta).
+5.  Fit the diffusion data to a linear model for each run.
+6.  Add the diffusion data to the `MD2DF` table.
+
+Below are the counts of the data runs that have been heated or cooled.
+
+```{r}
+knitr::kable( MD2DF.N[ itype %in% c( "Cool", "Heat"), 
+                       .(count = .N), by = itype])
+```
+
+### Diffusion Executions
+
+Rather than being selective, we will make diffusion runs on all of the
+heated/cooled runs. Following what we did in
+[ReRun2024.pdf](ReRun2024.pdf), we will create a file list and a run
+number list for import into *julia*.
+
+```{r}
+#| eval: false
+drn <- MD2DF.N[ itype %in% c( "Heat", "Cool"), run]
+cat( '["',
+     paste( drn, collapse = '", "'), '"] \n', sep = "")
+lfn <- strsplit( sapply( drn, \(fn) last( list.files( td, 
+                                             paste(fn, "*.jld2", sep = ".")))),
+                  "[.]")
+
+as.integer(sapply( seq_along( lfn), \(i) lfn[[i]][3]))
+```
+
+```         
+["S3.0008h01", "S3.0008h02", "S3.0008h03", "S3.0008h04", "S3.0008h05",
+"S3.0008h06", "S3.0008h07", "S3.0008h08", "S3.0008h09", "S3.0008h10",
+"S3.0008h11", "S3.0008h12", "S3.0008h13", "S3.0008h14", "S3.0008h15",
+"S3.0008h16", "S3.0008h17", "S3.0008h18", "S3.0009h01", "S3.0009h02",
+"S3.0009h03", "S3.0009h04", "S3.0009h05", "S3.0009h06", "S3.0009h07",
+"S3.0009h08", "S3.0009h09", "S3.0009h10", "S3.0009h11", "S3.0009h12",
+"S3.0009h13", "S3.0009h14", "S3.0009h15", "S3.0009h16", "S3.0009h17",
+"S3.0010h01", "S3.0010h02", "S3.0010h03", "S3.0010h04", "S3.0010h05",
+"S3.0010h06", "S3.0010h07", "S3.0010h08", "S3.0010h09", "S3.0010h10",
+"S3.0010h11", "S3.0010h12", "S3.0010h13", "S3.0010h14", "S3.0010h15",
+"S3.0010h16", "S3.0011h01", "S3.0011h02", "S3.0011h03", "S3.0011h04",
+"S3.0011h05", "S3.0011h06", "S3.0011h07", "S3.0011h08", "S3.0011h09",
+"S3.0011h10", "S3.0011h11", "S3.0011h12", "S3.0011h13", "S3.0011h14",
+"S3.0011h15", "S3.0011h16", "S3.0043h01", "S3.0043h02", "S3.0043h03",
+"S3.0043h04", "S3.0043h05", "S3.0043h06", "S3.0043h07", "S3.0043h08",
+"S3.0043h09", "S3.0043h10", "S3.0043h11", "S3.0043h12", "S3.0043h13",
+"S3.0043h14", "S3.0043h15", "S3.0043h16", "S3.0043h17", "S3.0043h18",
+"S3.0044h01", "S3.0044h02", "S3.0044h03", "S3.0044h04", "S3.0044h05",
+"S3.0044h06", "S3.0044h07", "S3.0044h08", "S3.0044h09", "S3.0044h10",
+"S3.0044h11", "S3.0044h12", "S3.0044h13", "S3.0044h14", "S3.0044h15",
+"S3.0044h16", "S3.0044h17", "S3.0044h18", "S3.0045h01", "S3.0045h02",
+"S3.0045h03", "S3.0045h04", "S3.0045h05", "S3.0045h06", "S3.0045h07",
+"S3.0045h08", "S3.0045h09", "S3.0045h10", "S3.0045h11", "S3.0045h12",
+"S3.0045h13", "S3.0045h14", "S3.0045h15", "S3.0045h16", "S3.0045h17",
+"S3.0045h18", "S3.0046h01", "S3.0046h02", "S3.0046h03", "S3.0046h04",
+"S3.0046h05", "S3.0046h06", "S3.0046h07", "S3.0046h08", "S3.0046h09",
+"S3.0046h10", "S3.0046h11", "S3.0046h12", "S3.0046h13", "S3.0046h14",
+"S3.0046h15", "S3.0046h16", "S3.0046h17", "S3.0046h18"] 
+
+  [1]   6   6   6   6   6  12   6   6   6   6  12 101  36  12  24  12  12
+ [18]  12   6   6   6   6   6  12   6   6   6   6 104 101  12  12  12  12
+ [35]  12   6   6   6   6   6  12   6   6   6  95  12  24  12  12  12  36
+ [52]   6   6   6   6   6  12   6   6   6  95  12  12  12  12  12  12   6
+ [69]  12   6   6   6  90   6   6   6   6  12  12  12  12  12  12  12  12
+ [86]   6   6  12  12   6  90   6   6   6   6  12  12  12  12  12  12  12
+[103]  12   6   6   6  18 106  12   6   6   6   6  12  12  12  12  12  12
+[120]  12  12  12   6   6  12 106  90  12   6   6   6  12  12  12  12  12
+[137]  12  12  12
+```
+
+The names can be simply pasted into a *julia* `REPL`, but the run
+numbers require some simple hand editing, and, since I didn't want to
+put commas between all the numbers, must be wrapped in `vec()` to cause
+the resultant `1 x 139` array to be cast as a vector. On 4 August 2025,
+here is the initial *julia* run.
+
+``` julia
+phil@phil-XPS-8920:~$ julia --threads=4
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.11.6 (2025-07-09)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org/ release
+|__/                   |
+
+julia> cd("/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J")
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> td = "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+julia> names = ["S3.0008h01", "S3.0008h02", "S3.0008h03", "S3.0008h04", "S3.0008h05", "S3.0008h06", "S3.0008h07", "S3.0008h08", "S3.0008h09",
+"S3.0008h10", "S3.0008h11", "S3.0008h12", "S3.0008h13", "S3.0008h14",
+"S3.0008h15", "S3.0008h16", "S3.0008h17", "S3.0008h18", "S3.0009h01",
+"S3.0009h02", "S3.0009h03", "S3.0009h04", "S3.0009h05", "S3.0009h06",
+"S3.0009h07", "S3.0009h08", "S3.0009h09", "S3.0009h10", "S3.0009h11",
+"S3.0009h12", "S3.0009h13", "S3.0009h14", "S3.0009h15", "S3.0009h16",
+"S3.0009h17", "S3.0010h01", "S3.0010h02", "S3.0010h03", "S3.0010h04",
+"S3.0010h05", "S3.0010h06", "S3.0010h07", "S3.0010h08", "S3.0010h09",
+"S3.0010h10", "S3.0010h11", "S3.0010h12", "S3.0010h13", "S3.0010h14",
+"S3.0010h15", "S3.0010h16", "S3.0011h01", "S3.0011h02", "S3.0011h03",
+"S3.0011h04", "S3.0011h05", "S3.0011h06", "S3.0011h07", "S3.0011h08",
+"S3.0011h09", "S3.0011h10", "S3.0011h11", "S3.0011h12", "S3.0011h13",
+"S3.0011h14", "S3.0011h15", "S3.0011h16", "S3.0043h01", "S3.0043h02",
+"S3.0043h03", "S3.0043h04", "S3.0043h05", "S3.0043h06", "S3.0043h07",
+"S3.0043h08", "S3.0043h09", "S3.0043h10", "S3.0043h11", "S3.0043h12",
+"S3.0043h13", "S3.0043h14", "S3.0043h15", "S3.0043h16", "S3.0043h17",
+"S3.0043h18", "S3.0044h01", "S3.0044h02", "S3.0044h03", "S3.0044h04",
+"S3.0044h05", "S3.0044h06", "S3.0044h07", "S3.0044h08", "S3.0044h09",
+"S3.0044h10", "S3.0044h11", "S3.0044h12", "S3.0044h13", "S3.0044h14",
+"S3.0044h15", "S3.0044h16", "S3.0044h17", "S3.0044h18", "S3.0045h01",
+"S3.0045h02", "S3.0045h03", "S3.0045h04", "S3.0045h05", "S3.0045h06",
+"S3.0045h07", "S3.0045h08", "S3.0045h09", "S3.0045h10", "S3.0045h11",
+"S3.0045h12", "S3.0045h13", "S3.0045h14", "S3.0045h15", "S3.0045h16",
+"S3.0045h17", "S3.0045h18", "S3.0046h01", "S3.0046h02", "S3.0046h03",
+"S3.0046h04", "S3.0046h05", "S3.0046h06", "S3.0046h07", "S3.0046h08",
+"S3.0046h09", "S3.0046h10", "S3.0046h11", "S3.0046h12", "S3.0046h13",
+"S3.0046h14", "S3.0046h15", "S3.0046h16", "S3.0046h17", "S3.0046h18"] 
+139-element Vector{String}:
+ "S3.0008h01"
+ "S3.0008h02"
+ "S3.0008h03"
+ ⋮
+ "S3.0046h17"
+ "S3.0046h18"
+
+julia> runs = vec([  6   6   6   6   6  12   6   6   6   6  12 101  36  12  24
+12  12 12   6   6   6   6   6  12   6   6   6   6 104 101  12  12  12  12 12   
+6   6   6   6   6  12   6   6   6  95  12  24  12  12  12  36   6   6   6   6   
+6  12   6   6   6  95  12  12  12  12  12  12   6  12   6   6   6  90   6   6  
+6   6  12  12  12  12  12  12  12  12  6   6  12  12   6  90   6   6   6   6  
+12  12  12  12  12  12  12 12   6   6   6  18 106  12   6   6   6   6  12  12  
+12  12  12  12 12  12  12   6   6  12 106  90  12   6   6   6  12  12  12  12 
+12  12  12  12])
+139-element Vector{Int64}:
+  6
+  6
+  6
+  6
+  6
+ 12
+  ⋮
+ 12
+ 12
+ 12
+
+julia> @time MD2.filerun_floop( td, names, runs, 5000, 20, diffFlag = true)
+718.727007 seconds (845.93 M allocations: 63.890 GiB, 2.33% gc time, 
+1328 lock conflicts, 3.43% compilation time: 4% of which was recompilation)
+```
+
+### Updating `MD2DF.N`
+
+Twenty 5,000-step executions of 139 files in 719 seconds is about 19.3
+thousand-step runs per second, or 0.052s per thousand-step execution.
+The system failed to process all the new diffusion runs in one call of
+`MD2DFfile()`, possibly due to memory allocation errors. Since there are
+only eight new series, we'll process them one-by-one.
+
+```{r}
+#| label: MD2DF.N2
+MD2DF.N2 <- MD2DFfile( "../MD2DF.N2.RDS", td, "S3.0008h*.scalars.csv", 
+                       df = MD2DF.N,
+                      verbose = TRUE)
+```
+
+There was an unexplained issue with `S3.0009h11.rfdt.RDS`, which had to
+be deleted. The below was run in serial mode (`clusters = 0`) so the
+problem could be localized.
+
+```{r}
+#| label: MD2DF.N3
+MD2DF.N3 <- MD2DFfile( "../MD2DF.N3.RDS", td, "S3.0009h*.scalars.csv", 
+                       df = MD2DF.N2, clusters = 0,
+                      verbose = TRUE)
+```
+
+```{r}
+#| label: MD2DF.N4
+MD2DF.N4 <- MD2DFfile( "../MD2DF.N4.RDS", td, "S3.0010h*.scalars.csv", 
+                       df = MD2DF.N3, verbose = TRUE)
+```
+
+```{r}
+#| label: MD2DF.N5
+MD2DF.N5 <- MD2DFfile( "../MD2DF.N5.RDS", td, "S3.0011h*.scalars.csv", 
+                       df = MD2DF.N4, verbose = TRUE)
+```
+
+```{r}
+#| label: MD2DF.N6
+MD2DF.N6 <- MD2DFfile( "../MD2DF.N6.RDS", td, "S3.0043h*.scalars.csv", 
+                       df = MD2DF.N5, verbose = TRUE)
+```
+
+```{r}
+#| label: MD2DF.N7
+MD2DF.N7 <- MD2DFfile( "../MD2DF.N7.RDS", td, "S3.0044h*.scalars.csv", 
+                       df = MD2DF.N6, verbose = TRUE)
+```
+
+```{r}
+#| label: MD2DF.N8
+MD2DF.N8 <- MD2DFfile( "../MD2DF.N8.RDS", td, "S3.0045h*.scalars.csv", 
+                       df = MD2DF.N7, verbose = TRUE)
+```
+
+```{r}
+#| label: MD2DF.O
+MD2DF.O <- MD2DFfile( "../MD2DF.O.RDS", td, "S3.0046h*.scalars.csv", 
+                       df = MD2DF.N8, verbose = TRUE)
+```
+
+```{r}
+#| label: MD2DFP
+#| eval: false
+#| # eval by hand to re-create MD2DF.P
+MD2DF.P <- data.table::copy(MD2DF.O)
+MD2DF.P$itype <- with( MD2DF.O, # Tag energy type
+      ifelse( series %in% c("S1","S2"), "Init", # Asll S1 & S2 were simple inits
+            ifelse( !grepl( "h", energy), "Init", # If no "H", then init.
+                    ifelse( grepl( "0008|0009|0010|0011", energy), 
+                            # these were heated
+                            "Heat", "Cool") # else they were cooled.
+                    )
+            )
+      )
+# Tag the originating energy as the hseries
+setkey( MD2DF.P, ke.mean.rs)
+MD2DF.P[, hseries := fifelse( itype == "Init", "Init", 
+                              substring( energy, 1, 4))]
+saveRDS( MD2DF.P, "../MD2DF.P.RDS" )
+```
+
+```{r}
+#| label: readMD2DF.P
+#| include: false
+# this will execute when rendering, thus reading in the file saved above.
+MD2DF.P <- readRDS( "../MD2DF.P.RDS")
+```
+
+```{r}
+#| include: false
+rm( MD2DF.L, MD2DF.N, MD2DF.N2, MD2DF.N3, MD2DF.N4, MD2DF.N5, MD2DF.N6, 
+    MD2DF.N7, MD2DF.N8)
+gc()
+```
+
+```{r}
+plotconfMD2( df = MD2DF.P[ itype %in% c("Heat", "Cool"), ], y = "Pressure",
+             linethresh = 300)
+```
+
+```{r}
+#| label: fig-S3byh
+#| fig-cap: S3 data by energy initialization type. Those tagged "Init" were all individually initialized while the rest were eithher heated or cooled.  The numeric tags (e.g., `0044`) indicate the `Init` run used to start the heat or cool series.
+xyplot( Pressure.mean.rs ~ ke.mean.rs | hseries, 
+        data = MD2DF.P[ grepl("S3", series) & ke.mean.rs < 0.021,], group = itype)
+```
+
+### Reading in Diffusion Data
+
+We can find all of the diffusion files via the following expressions and
+function.
+
+```{r}
+#| label: read_diff
+read_diff <- function( td, runname) { 
+   # returns a data.table with diffusion data
+   # td is the test data directory
+   # runname is a filename ala list.files( td, glob2rx( "*.diff.txt"))
+   filename <- list.files( td, runname, full.names = TRUE)
+   #print( filename)
+   dd <- data.table::fread( filename)
+   nrdd <- nrow( dd)
+   ddcols <- colnames( dd)
+   timecols <- ddcols[ seq.int( from=4, to=length( ddcols), by=3)]
+   dscols   <- ddcols[ seq.int( from=5, to=length( ddcols), by=3)]
+   dmxcols  <- ddcols[ seq.int( from=6, to=length( ddcols), by=3)]
+   dd[, row := 1:nrdd] # adds row number to show time sequence of executions
+   dd[, run := rep( runname, nrdd)] # put run name in each row
+   reshape( dd, list( timecols, dscols, dmxcols),
+            v.names=c("Time", "D2", "Dmax"), timevar="group", idvar="row", 
+            drop=c("time","d^2", "max d^2"), direction="long")
+} # end read_diff
+```
+
+```{r}
+#| label: ddb
+#| warning: false
+# warnings are generated because the columns of the diff files have no names.
+
+diff_files <- list.files( td, glob2rx( "*h*.diff.txt"))
+# the '*.h* will cause only the newly created heat/cool files to be read.
+# call read_diff on each element of diff_files, and rbind into big data.table
+ddb <- data.table::rbindlist( lapply( diff_files, 
+                                      function(fn) read_diff( td, fn)))
+head(ddb)
+diffdata <- ddb[, .(d2mn = mean( D2), d2sd = sd( D2), maxD = max( Dmax)), 
+                by=.( Time, run)]
+# next line uses a regex to replace last 9 characters with nothing
+diffdata[, run := gsub( '.{9}$', "", run)] # remove the ".diff.txt" part
+head( diffdata, n=20)
+nrow( diffdata)
+```
+
+As a reminder, each time from each run generates an entry in `ddb` and
+this results in `r nrow(ddb)` rows.
+
+### Fitting the Data
+
+The next step is to fit each diffusion run's diffusion time series and
+look for linear fits.
+
+```{r}
+#| label: fitdiff
+fitdiff <- function( r, diffdata, plot=FALSE, weights = NULL, verbose = FALSE) { 
+   # r is the run id as a string.
+   # diffdata is a data.table with fields Time, run, d2mn (mean of the D2 data),
+   #     Other fields are ignored.
+   dd <- diffdata[ r == run,]
+   # print( nrow(dd))
+   maxT <- max( dd$Time)
+   maxd <- max( dd$d2mn)
+   if (!is.null(weights)) weights = 1 / dd$d2sd^2
+   
+   #lm0 <- lm( d2mn ~ Time - 1, data = dd)
+   lm1 <- lm( d2mn ~ Time, data = dd, weights = weights)
+   #lm2 <- lm( d2mn ~ poly( Time, 2), data = dd)
+ 
+   if (plot) {
+      newT <- data.frame( Time =c( 0, dd$Time)) # Predict value at Time = 0
+      pred.w.plim <- predict( lm1, newT, interval = "prediction")
+      pred.w.clim <- predict( lm1, newT, interval = "confidence")
+      plot( d2mn ~ Time, data = dd, xlim = c( 0, maxT), ylim = c(0, maxd), 
+              main = r, xlab = 'Time', ylab = expression( r^2))
+      grid()
+      if (!is.null( dd$d2sd)) 
+         arrows( dd$Time, dd$d2mn - dd$d2sd, dd$Time, dd$d2mn + dd$d2sd,
+                 length = 0.05, angle = 90, code = 3)
+      matplot(newT, cbind( pred.w.clim, pred.w.plim[, -1]), 
+              col = c( 1, 2, 2, 3, 3), lty = c(1,2,2,3,3), type = "l", 
+              add = TRUE)
+      #abline( lm1)
+      abline( h = mean( dd$d2mn), lty = 4, col = 4)
+      legend( x = 'bottomright',  pch = c(1, NA, NA, NA, NA), 
+              lty = c(0, 1, 2, 3, 4), col = c( 1, 1, 2, 3, 4),
+              legend = c("Measurements", 'Regression Line', "Conf. Interval",                            'Pred. Interval', 'Mean'))
+   }
+   if (verbose) {
+      #print( summary( lm0))
+      print( summary( lm1))
+      #print( summary( lm2))
+   }
+   nr <- nrow( dd)
+   mod <- summary( lm1)
+   coeff <- unname( mod$coefficients[ "Time", c( 'Estimate', 'Std. Error')])
+   t <- mod$fstatistic
+   Fpvalue <-  stats::pf( t['value'], t['numdf'], t['dendf'], lower.tail=FALSE)
+   data.table::data.table( run = r, nrd = nr, Estimated = coeff[1], 
+      Std.Errord = coeff[2], r.squaredd = mod$r.squared, 
+      Fvald =  unname( t['value']), Fpvalued = unname( Fpvalue), 
+      dfd = t['dendf'])
+} # end fitdiff
+```
+
+Here is an example of one run's data:
+
+```{r}
+fitdiff( "S3.0008h15", diffdata, plot = TRUE, verbose = TRUE)
+```
+
+```{r}
+#| label: diffproc
+
+```
+
+### Updating `MD2DF.P` with Diffusion Data
+
+The code below will update and save `MD2DF.P` using the `data.table`
+*merge* idiom.
+
+```{r}
+#| label: MD2DF.P2
+#| eval: false
+#| # run this by hand to save a new file.
+difflist <- unique( diffdata$run)
+diffproc <- data.table::rbindlist( lapply( difflist, fitdiff, diffdata))
+rm( difflist)
+MD2DF.P[ diffproc, 
+         `:=`( nrd = i.nrd, Estimated = i.Estimated, Std.Errord = i.Std.Errord, 
+               r.squaredd = i.r.squaredd, Fvald = i.Fvald, 
+               Fpvalued = i.Fpvalued, dfd = i.dfd), 
+         on="run"]
+saveRDS( MD2DF.P, file = "../MD2DF.P.RDS")
+rm( diffproc)
+```
+
+```{r}
+#| label: readMD2DF.P2
+#| include: false
+# this will execute when rendering, thus reading in the file saved above.
+MD2DF.P <- readRDS( "../MD2DF.P.RDS")
+```
+
+# Analysis
+
+## Diffusion
+
+The diffusion itself holds no surprises, although the cooling cycle
+retains its fluid state at a few lower temperatures (in runs that did
+not exhibit valid equilibrium behavior). Since
+$\left< r^2 \right> = 4 D t$, the minimum $D$ that will cause a particle
+to move the mean inter-particle distance of
+$a = \sqrt{2 \pi} / 3^{1/4} \approx 1.9046$ in time $t$ is
+$D = a^2 / 4t$, or `r 2 * pi / sqrt(3) / (4 * 50)` at $t = 50\tau$.
+
+```{r}
+#| label: fig-D2vT
+#| fig-cap: Difffusion estimate vs. temperature.  As before, red points are those not considerd valid. The blue vertical line is the start of diffusion for the `Init` points previously measured ($T = 0.01283$). The blue horizontal line is the threshold where the root-mean-square diffusion distance after $T = 50\tau$ (the maximum time over which diffusion was estimated) is equal to the mean particle distance $a = \sqrt{2 \pi / \sqrt{3}}$.
+ 
+pchlu <- c( Init = 1, Heat = 0, Cool = 2) # pch lookup
+with( MD2DF.P[ grepl( "S3", series, fixed = TRUE) & 
+                  ke.mean.rs %within% c( 0.004, 0.021),], {
+   col = ifelse( valid, "black", "red")
+   plot( y = Estimated/4, x = ke.mean.rs, col = col,
+      xlab = "T", ylab = "D", pch =  pchlu[ itype],
+      main = "D vs Temperature for S3 Runs",
+      panel.first = grid())
+   })
+abline( v = 0.01283, col = "blue")
+abline( h =  (2 * pi / sqrt(3)) / (4 * 50), col = 'blue')
+legend( "bottomright", legend = names( pchlu), pch = pchlu)
+```
+
+The F-p value (the probability that such a linear response could have
+been generated by random normal data) is also similar to previous
+results. extraordinarily
+
+```{r}
+#| label: fig-FpvaldvT
+#| fig-cap: Diffusion Regression FpValue vs. temperature (data is clipped at the low end at $1\times10^{-15}$, as some values were extraordinarily small).  As before, red points are those not considerd valid. The blue horizontal line is at $p = 0.01$ (the 99% confidence limit). The blue vertical line is at $T = 0.01283$.
+pchlu <- c( Init = 1, Heat = 0, Cool = 2) # pch lookup
+with( MD2DF.P[ grepl( "S3", series, fixed = TRUE) & 
+                  ke.mean.rs %within% c( 0.004, 0.021),], {
+   col = ifelse( valid, "black", "red")
+   plot( y = pmax( 1e-15, Fpvalued), x = ke.mean.rs, col = col,
+      xlab = "T", ylab = "F-P value", pch =  pchlu[ itype], log = 'y',
+      main = "F-P value vs Temperature for S3 runs",
+      panel.first = grid())
+   })
+abline( h = 0.01, col='blue')
+abline( v = 0.01283, col = "blue")
+legend( "bottomleft", legend = names( pchlu), pch = pchlu)
+```
+
+The F-statistic is not as clear as it was with only the `Init` data.
+
+```{r}
+#| label: fig-FpstatdvT
+#| fig-cap: Diffusion Regression F-statistic vs. temperature (data is clipped at the low end at $1\times10^{-15}$, as some values were very small).  As before, red points are those not considerd valid. The blue horizontal line is at $p = 0.01$ (the 99% confidence limit). The blue vertical line is at $T = 0.01283$.
+pchlu <- c( Init = 1, Heat = 0, Cool = 2) # pch lookup
+with( MD2DF.P[ grepl( "S3", series, fixed = TRUE) & 
+                  ke.mean.rs %within% c( 0.004, 0.021),], {
+   col = ifelse( valid, "black", "red")
+   plot( y = pmax( 1e-15, Fvald), x = ke.mean.rs, col = col,
+      xlab = "T", ylab = "F", pch =  pchlu[ itype], log = 'y',
+      main = "F Statistic vs Temperature for S3 runs",
+      panel.first = grid())
+   })
+abline( h = 10, col='blue')
+abline( v = 0.01283, col = "blue")
+legend( "bottomright", legend = names( pchlu), pch = pchlu)
+```
+
+Let's look at three diffusion files resulting from `S3.0043`.
+
+```{r}
+#| label: tbl-s343d
+#| tbl-cap: Relevent data for two instances of the cooled `S3.0043`
+knitr::kable( MD2DF.P[run %in% c('S3.0043h02', 'S3.0043h09', 'S3.0043h17'),
+                      .(run, T = ke.mean.rs, P = Pressure.mean.rs, 
+                        D = Estimated/4, Fpval = Fpvalued, Fvald, total.steps)])
+```
+
+The coldest shows modest motion and a mild recoil effect.
+
+```{r}
+#| label: fig-diff4317
+#| fig-cap: Diffusion plot for `S3.0043h17`, showing some movement over short times, with an olmost parabolic (spring like) recoil.
+fitdiff( "S3.0043h17", diffdata, plot = TRUE, verbose = TRUE, weights = TRUE)
+```
+
+`S3.004309` showed up around 95% confidence in its fit, but the recoil
+is sloppy (note the variance bars) and the total distance is small
+compared to $a^2 =$ `r 2 * pi / sqrt(3)`.
+
+```{r}
+#| label: fig-diff4309
+#| fig-cap: Diffusion plot for `S3.0043h09`, showing some movement over short times, with an olmost parabolic (spring like) recoil.
+fitdiff( "S3.0043h09", diffdata, plot = TRUE, weights = TRUE, verbose = TRUE)
+```
+
+```{r}
+#| label: fig-diff4303
+#| fig-cap: Diffusion plot for `S3.0043h09`, showing some movement over short times, with an almost parabolic (spring like) recoil.
+fitdiff( "S3.0043h02", diffdata, plot = TRUE, verbose = TRUE)
+```
+
+## Summary Statistics
+
+We will plot the various statistics and draw some lines where melting
+begins.
+
+```{r}
+#| label: S3DF
+S3DF <- copy( MD2DF.P[ grepl( "S3", series),]) # subset all series 3 data
+S3DF[ , rv := ke.sd.rs / ke.mean.rs] # add relative variance column
+setkey( S3DF, ke.mean.rs) # ensure data is sorted by temperature
+```
+
+### Specific Heat via First Difference
+
+We need to recreate the $dy/dx$ function.
+
+```{r}
+#| label: dydx
+
+dydx <- function( y, x, lag = 1) {
+   # find derivative over lag + 1 points
+   lx <- length( x)
+   stopifnot( length( y) == lx)
+   data <- data.table( x = x, y = y, keyby = x)
+   xm <- (data$x[ 1:(lx - lag)] + data$x[ (lag + 1):lx]) / 2 
+   # midpoint of eval sets
+   dydxfit <- function( i) { # get dy/dx from points i:(i + lag)
+      c <- coef( lm( y ~ poly( x, lag, raw = TRUE), # get poly coef
+                     data = data[ i:(i + lag)]))
+      dpc <- (1:lag) * tail( c, -1) # derivative of poly coeff
+      polyval( rev(dpc), xm[ i]) 
+      # evaluate polynomial at midpoint of data & return
+   }
+   dd <- vapply( 1:(lx - lag), dydxfit, 1.0)
+   list( dd=dd, xm = xm)
+}
+
+# test
+tx <- c(1, 4, 3, 3.5, 2, 5)
+ty <- tx^2
+(dd <- dydx(ty, tx, 2)) # Note the NaN in third position: 3,  5, NaN, 7, 9
+dd$dd - 2 * dd$xm
+rm( tx, ty, dd) # remove these variables
+```
+
+A few different lags of the `Init` group are plotted in @fig-Cv1.
+
+```{r}
+#| label: fig-Cv1
+#| fig-cap: Numerical derivative at three different lags.  
+#setkey(S3DTdiff2, TE.mean.rs)
+dedt1 <- with( S3DF[ itype == "Init",], {
+   dedt <- dydx( TE.mean.rs, ke.mean.rs)
+   plot( x = dedt$xm, y = dedt$dd, panel.first = grid(), #xlim=c(0.01,0.02),
+         xlab="ke", ylab = "Cv", main = "dE/dT, all points, three lags.")
+   dedt2 <- dydx( TE.mean.rs, ke.mean.rs, lag = 2)
+   points( x = dedt2$xm, y = dedt2$dd, col='red')
+   dedt3 <- dydx( TE.mean.rs, ke.mean.rs, lag = 3)
+   points( x = dedt3$xm, y = dedt3$dd, col='green')
+   legend( "bottomright", c("1", "2", "3"), pch=1, col=c('black','red','green'), 
+           title = "Lag")
+   dedt
+})
+detects <- c( maxCv1 = dedt1$xm[ which.max( dedt1$dd)]) # return xm of max value 
+detectsex <- c( maxCv1 = "Max Cv computed over all points.") 
+# explanation of detects.
+```
+
+Here we make a table we can use in a call to `xyplot()`
+
+```{r}
+#| label: fig-Cvbyhs
+#| warning: false # log will produce som NaNs
+#| fig-cap: First difference computation of the specific heat for each of the initialiation groups.
+Cvbyhs <- by( S3DF[, .(ke.mean.rs, TE.mean.rs, hseries, itype)], S3DF$hseries, 
+              with, c( hseries = unique(hseries), itype = unique( itype), 
+                       dydx( TE.mean.rs, ke.mean.rs)))
+# above returns a list of 9 elements: one for each hseries
+# Note that the function called by 'by' is 'with', and the `dydx()` call is
+#    passed as an extra parameter to `with`
+# The following will create a table of Log(Cv) values
+CvTable <- rbindlist( lapply( seq_along( Cvbyhs), function( i) {
+   hs <- names( Cvbyhs[i]) # The series is now in the name is this sublist.
+   x <- Cvbyhs[[i]]
+   Cvlen <- length( x$dd)
+   data.table( run = rep( NA, Cvlen), itype = rep( x$itype, Cvlen),
+               hseries = rep( hs, Cvlen),
+               valid = fifelse( x$xm %within% c( 0.01283, 0.014095),
+                                FALSE, TRUE), 
+               Temp = x$xm, variable = rep( "Log(Cv)", Cvlen),
+               value = log( x$dd))
+   }))
+xyplot( value ~ Temp | hseries, data = CvTable[ Temp < 0.021], group = itype)
+```
+
+We will create a new table which will add in some data and set the order
+of the data.
+$C_v = 1 / \left( 1 - \frac{N \left< (\delta T)^2 \right>}{T^2} \right)$
+(where $N$ is the number of particles, and
+$\left< (\delta T)^2 \right> / T^2$ is the relative temperature
+variance), we will threshold `Fpvalued` to a minimum of $10^{-15}$ and
+takes its logarithm, and remove the factor of four from `Estimated` to
+get $D$.
+
+```{r}
+#| label: S3DFd2ss 
+S3DFd2ss <- S3DF[,.( run, itype, Temp = ke.mean.rs, hseries, 
+                     valid = fifelse( valid == 1, TRUE, FALSE), 
+                     # Values below are those plotted, hopefully in this order
+                     TE = TE.mean.rs,
+                     Pressure = Pressure.mean.rs,
+                     rv,
+                     D = Estimated / 4.0, 
+                     LogFp = log( pmax( 1e-15, Fpvalued)), 
+                     psiavg, psiabs = psiabs.mean.rs, 
+                     Cv = 1 / (1 - 256 * rv^2))]
+```
+
+## Reorganizing Table
+
+To plot all of the data, we need to make a long-form table. First, we
+need to `melt()` the data table.
+
+```{r}
+#| label: S3DFd2m
+# First select just the columns we're interested in
+
+id.var = c( "run", "Temp", "valid", "itype", "hseries")
+S3DFd2m <- melt( S3DFd2ss, id.var = id.var, direction = 'long', 
+                 variable.name = 'variable', variable.factor = TRUE,
+                 value.name = 'value') 
+# now each variable is its own table.
+
+S3DFd2m2 <- rbind( S3DFd2m, CvTable)
+S3DFd2m2[, `:=`(variable = factor( variable, levels = unique( variable)),
+                itype = factor( itype), hseries = factor(hseries))]
+# giving the variable factor levels will cause xyplot to NOT sort it.
+setkeyv( S3DFd2m2, c( "variable", "Temp"))
+head( S3DFd2m2)
+```
+
+We now have each run with its temperature, the `valid` flag, the
+`itype`, the `hseries`, the variable, and the *value* of each variable.
+
+## Detecting Melting
+
+We have a number of ways to detect phase changes, and nine series in
+which to detect them.
+
+1.  Start of diffusion (using `stepdet()`)
+2.  Max relative temperature variance
+3.  The `Fpvalued` being less than 1%.
+4.  Detecting a point whose value is 5 or 7$\sigma$ beyond a lines fit
+    in the Isochor (using `linedet()`)
+    a.  Two going up in temperature
+    b.  one going down in temperature.
+5.  Max $C_v$
+    a.  For first difference method, and
+    b.  for $\left< (\delta T)^2 \right>$
+
+The first step is to define the two functions mentioned above.
+
+```{r}
+#| label: stepdet
+stepdet <- function( x, nsig = 3, nstart = 10, verbose = FALSE) {
+  # x is a numeric vector
+  # nsig is the number of standard deviations from the running mean x[i] must
+  # \depart to be considered a step.
+  # nstart is the number of points to start the running mean.
+  # x <- x[ !is.na(x)] # drop any NA values before length test.
+  stopifnot( length( x) > nstart +1)
+   if (verbose) print( x)
+  
+  cumdet <- function( state, new){
+    # state is a list with the following elements:
+    #   sx: cumsum of x
+    #   ss: the sum of squares
+    #   n: the number of points in the running mean
+    #   nv: the count when first detected
+    # new is a new value to add to the running mean.
+    if (state$nv == 0 ) { # only do this if we haven't detected a departure
+      meanx <- state$sx / state$n 
+      sdx <- sqrt( (state$ss - state$n * meanx^2)/ (state$n - 1)) 
+      if (verbose) {
+         #print(state)
+         print( c( meanx, sdx))
+      }
+      if( abs( new - meanx) < (nsig * sdx)) { # nothing detected
+        state$sx <- state$sx + new
+        state$ss <- state$ss + new^2
+        state$n <- state$n + 1
+        state$nv <- 0
+      } else { # departure detected
+        state$nv <- state$n + 1
+      }
+    } # simply return state.
+    return( state)
+  }
+  sxs <- sum( x[ 1:nstart])
+  sss <- sum( x[ 1:nstart]^2) #sum squared start.
+  s <- list( sx = sxs, ss = sss, n = nstart, nv = 0)
+  if (verbose) print( s)
+  Reduce( cumdet, x[(nstart + 1):length( x)], init = s)
+}
+
+(testcumdet <- stepdet( tx <- c( rnorm(20), 5 + rnorm(10)))) # n=20, nv=21
+```
+
+```{r}
+#| label: linedet
+linedet <- function( x, y, level = 0.99, nstart = 10) {
+  # x & y are a numeric vectors of the same length
+  # nsig is the probability that a noise deviation will cause a false detection
+  #   over the total run of points.
+  # depart to be considered a step.
+  # nstart is the number of points to start the running mean.
+  lx <- length( x)
+  stopifnot( lx > nstart +1)
+  stopifnot( lx == length( y))
+  dt <- data.table( x = x, y = y)
+  for ( i in nstart:(lx - 1)) { # step through looking for a departure
+    pr <- predict( lm( y ~ x, data = dt[ 1:i,]), 
+                   newdata = data.frame( x = x[ i + 1]), 
+                   interval = "prediction", level = level)
+    # cat( i, pr, "\n")
+    if (!(y[ i + 1] %within% pr[, c("lwr","upr")])) { # if departure detected
+      return( c( nv = i + 1, x = x[ i + 1], y = y[ i + 1],
+                 pred = pr[1, 1], lwr = pr[1, 2], upr = pr[1, 3]))
+      } # if (!(y...)
+  } # for ( i...)
+  # if we get here, there was no detection (if above was never TRUE)
+  return( c( nv = NA, x = NA, y = NA,
+                 pred = pr[1, 1], lwr = pr[1, 2], upr = pr[1, 3]))
+}
+
+tx <- 1:30
+ty <- tx + rnorm(30)
+ty[ 21:30] <- ty[ 21:30] + 5
+(testcumdet <- linedet( x = tx, y = ty)) # nv=21, x=20
+```
+
+```{r}
+#| include: false
+rm( tx, ty, testcumdet) # remove test variables.
+```
+
+Next we'll make a function which we can hand a filtered long form
+`data.table` and will return a record with the detection results.
+
+```{r}
+#| label: detect
+detect <- function( data, nsig = 3, nstart = 10, level = 0.99) {
+   # data is an MD2DF data.table SORTED BY TEMPERATURE (ke.mean.rs)
+   # nsig is the number of standard deviations for stepdet to detect start 
+   #     of diffusion
+   # nstart is the number of points to include in the start of running means 
+   #     or regression lines.
+   # level is the significance threshold to exceed to call a line departure 
+   #     a detection
+   #  
+   #  Returns a vector of temperatures at which detections occurred, and a 
+   #  string vector describing each detection.
+   setkey( data, Temp)
+   subs <- subset( data, variable == "D" & !is.na( value))
+   # not all records have diffusion estimates.
+   sd <- stepdet( subs$value, nsig, nstart)
+   detects   <- c( diff = subs$Temp[ sd$nv])
+   detectsex <- c( diff = "Start of diffusion (stepdet)")
+   subs <- subset( data, variable == "Cv")
+   detects   <- c( detects,   maxCv = subs$Temp[ which.max( subs$value)])
+   detectsex <- c( detectsex, maxCv = "Max Cv via rv")
+   subs <- subset( data, variable == "Log(Cv)")
+   detects   <- c( detects,   maxLCv = subs$Temp[ which.max( subs$value)])
+   detectsex <- c( detectsex, maxLCv = "Max Cv via 1st diff")   
+   subs <- subset( data, variable == "rv")
+   detects   <- c( detects,   Maxrv = subs$Temp[ which.max( subs$value)])
+   detectsex <- c( detectsex, Maxrv = "Max relative Temp variance")
+   subs <- subset( data, variable == "LogFp" & value < log(0.01))
+   detects   <- c( detects,   LogFp = subs$Temp[ 1])
+   detectsex <- c( detectsex, LogFp = "Start of Diff (Fp < 0.01)")
+   subs <- subset( data, variable == "Pressure")
+   detects   <- c( detects,
+                   Icld1 = subs$Temp[ linedet( x = subs$Temp, 
+                                                y = subs$value, 
+                                                nstart = nstart, 
+                                                level = level)["nv"]])
+   detectsex <- c( detectsex, Icld1 = "Isochor Solid1 (linedet)")
+   detects   <- c( detects,
+                   Icld2 = subs$Temp[ linedet( x = subs$Temp, 
+                                                y = subs$value, 
+                                                nstart = nstart, 
+                                                level = 0.99999)["nv"]])
+   detectsex <- c( detectsex, Icld2 = "Isochor Solid2 (linedet 5 nines)")
+   setorder( subs, -Temp) # Reverse order
+   detects   <- c( detects,
+                   Icld3 = subs$Temp[ linedet( x = subs$Temp, 
+                                                y = subs$value, 
+                                                nstart = nstart, 
+                                                level = 0.99)["nv"]])
+   detectsex <- c( detectsex, Icld3 = "Isochor Fluid (linedet)")
+   return( list( detects = detects, ex = detectsex))
+}
+```
+
+The code snippet below shows an example; the function returns eight
+temperatures.
+
+```{r}
+#| label: detectex
+detect( S3DFd2m2[ hseries == "Init",])
+```
+
+We need to determine the proper `nstart` to use for the heating cooling
+series. The first solid transition was previously detected at
+$T = 0.007971$. There are
+`r length( S3DFd2m2[ hseries == "0008" & variable == "Pressure" & Temp < 0.007971, value])`
+samples less that temperature in `hseries` `0008`.
+
+The following created a `data.table` from each `hseries`:
+
+```{r}
+#| label: detecths
+dhs <- rbindlist( lapply( levels( factor(S3DFd2m2$hseries)), 
+               function( x) {
+                  r <- detect( S3DFd2m2[ hseries == x,], nstart = 5)
+                  return( data.table( 
+                     hseries = x, # converts x to vector of correct length
+                     det = names( r$detects), detects = r$detects,
+                     ex = r$ex))
+               }))
+setkey( dhs, detects)
+knitr::kable( dhs)
+```
+
+@fig-Transition below shows plots of eight statistics. `Log(Cv)` is the
+Log of the specific heat calculated by numerical differentiation across
+heating/cooling series (i.e., `Init`, `0008`, etc.) as `lag = 1`;
+(estimates where the temperature between 0.01283 and 0.014095
+arbitrarily colored as not considered valid). `TE` is total energy, `rv`
+is the relative temperature variance (the variance of the 500-point
+re-sampled temperatures divided by the temperature mean), `psiavg` is
+the magnitude of the average of $\psi$ (i.e., the step-by-step average
+of the complex quantity) and `psiabs` is the step-by-step average of the
+magnitude of $\psi$. `D` is the estimate of diffusion, `LogFp` is the
+natural log of the probability of F-value of the diffusion regression of
+$\left< R^2(t) \right> \sim t$ (where $t$ is time;). Low probabilities
+indicate that that the regression line was unlikely caused by random
+noise, and thus diffusion was present. The vertical red dashed lines
+mark the detected transitions according to the `Init` heating/cooling
+series.
+
+```{r}
+#| label: fig-Transition
+#| fig-cap: "Statistics around transition plotted against temperature. Tan dots are points considered valid, blue ones not valid.  See text for description of statistics. Verticle red dashed line mark the transition." 
+#| fig-height: 9
+#| fig-width: 6.5
+xlim <- c(0.0069, 0.016)
+pltdata <- copy(S3DFd2m2[ Temp %within% xlim,])
+symb <- pchlu[ pltdata$itype]
+symcol <- fifelse( pltdata$valid, 'black','darkred')
+xyplot( value ~ Temp | variable, #subscripts = TRUE, #outer = FALSE,
+        data = pltdata, # groups = valid, 
+        as.table = TRUE,
+        #layout = c( 0, 7), 
+        #pch = pchlu[ pltdata$itype],
+        scales=list( y = list( relation = "free")),
+        xlab = "Temperature",
+        Main = "Key S3 Statistics Around Transition",
+        #par.settings = simpleTheme(pch = c(16, 16), 
+        #       col = c("peru", "cornflowerblue")),
+        panel = function( x, y, subscripts, ...) {
+           sym <- pltdata$valid[ subscripts]
+           col <- pltdata$itype[ subscripts]
+           pchs <- ifelse( sym, 1, 2)
+           cols <- ifelse( col == "Init", "black", ifelse( col == "Cool",
+                           'blue', 'red'))
+           panel.xyplot( x = x, y = y, # subscripts = subscripts, 
+                         col = cols,
+                         pch = pchs, ...)
+           panel.grid( h=-1, v=-1)
+           panel.abline( v = unique( signif( dhs$detects, 4)), col = "grey" ,
+                         lty = 2, alpha = 0.2)
+         },
+        auto.key = list( columns = 3))
+rpl <- recordPlot()
+png("TransitionIHC.png", width = 6.5, height = 9, units = "in", res = 100)
+replayPlot(rpl)
+invisible( dev.off())
+```
+
+Very little consistency there. Only the `Init` `hseries` really found
+the first solid transition, and the temperature spacing between the
+heating and cooling groups is so large that there is a large variance of
+the transition temperatures. @fig-dtbyh below shows the delta achieved
+at each temperature by `hseries`.
+
+```{r}
+#| label: fig-dtbyh
+#| fig-cap: Change in temperature between adjacent samples (after sorting by temperature), plotted against mean temperature for each `hseries` group. The `Init` group had very small spacing in temperature.
+dtbyh <- rbindlist( lapply( levels( S3DFd2m2$hseries), 
+               function( x) {
+                  y <- sort( 
+                     S3DFd2m2[ hseries == x & variable == "TE" & Temp < 0.021,
+                                 Temp])
+                  data.table( dT = diff( y), 
+                              Temp = (head( y, -1) + tail( y, -1)) / 2, 
+                              hseries = x)
+                  }))
+xyplot( dT ~ Temp | hseries, data = dtbyh, group = hseries)
+```
+
+As the system goes into the transition region, added or subtracted
+kinetic energy goes to or comes from potential energy, so the $\Delta T$
+is small. Note that this doesn't occur with the `Init` group as it was
+initialized to a particular kinetic energy and there there is no energy
+change between runs. @fig-debyh below shows the same plot for the energy
+change between runs.
+
+```{r}
+#| label: fig-debyh
+#| fig-cap: The change in total energy between adjacent samples, plotted agains the mean total energy between samples, after sorting by total energy.
+debyh <- rbindlist( lapply( levels( S3DFd2m2$hseries), 
+               function( hs) {
+                  y <- sort( 
+                     S3DFd2m2[ hseries == hs & variable == "TE" & Temp < 0.021,
+                                 value])
+                  #cat( hs, y, "\n", sep = ": ")
+                  data.table( dE = diff( y), 
+                              TE = (head( y, -1) + tail( y, -1)) / 2, 
+                              hseries = hs)
+                  }))
+xyplot( dE ~ TE | hseries, data = debyh, group = hseries)
+```

@@ -1,0 +1,1999 @@
+---
+title: "ReRun2024"
+author: "Phil Shea"
+date: last-modified
+format:
+  pdf:
+    fig-pos: 'H'
+#mainfont: "Times New Roman"
+bibliography: ../references.bib
+link-citations: true
+execute:
+   freeze: auto
+editor_options:
+  markdown:
+    wrap: 72
+    references: 
+      location: block
+    canonical: true
+---
+
+```{r}
+#| label: init
+#
+# NOTE: if the package has changed, it must be installed locally via:
+#
+# devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+#
+# or
+#
+# devtools::install("/home/phil/MD/MD2RP")
+#
+# You probably have to re-start r after this.
+#
+# *****************************************************
+require( MD2RP)
+require( parallel)
+require( pracma)
+require( data.table)
+require( knitr)
+require( lattice)
+num_cores <- detectCores() - 1
+options(digits=5)
+"%within%" <- function( vector, range) # define convenience function.
+   (vector > range[ 1]) & (vector < range[ 2])
+```
+
+------------------------------------------------------------------------
+
+# Re-Running 2024
+
+The 2024 data showed promise, but it had two major problems: 1) the
+initialization energies were random (the desired temperature is an
+input, but this only set the variance of each velocity distribution;
+since the temperature would be the variance of the generated velocities,
+it was random too), and 2) the potential energy had a step at `rskn`,
+the range of the force. While this wouldn't affect the calculation in
+any way, it creates noise in the total energy, which would experience
+steps as particles moved in and out of interaction range.
+
+Finally, the last version (V1.2) of the *Julia* code did not have the
+ability to heat or cool, nor did it have the ability to estimate
+dispersion. This set of experiments will re-run the important part of
+the 2024 runs, restricting the upper energy range (there were useless
+higher energy runs) and adding more runs in the transition neighborhood.
+The program still uses a temperature number as an integer to set the
+initialization temperature. This number is divided by 1,000 set the
+temperature of the particles at $t=0$. Previously we had executed 100
+different temperatures running from 1 to 100.
+
+## Preparing for the Runs
+
+We'll read in a the last version of the data file and rename it.
+
+```{r}
+#| label: MD2DF.C
+MD2DF.C <- readRDS("../MD2DF.C.RDS")
+setkey( MD2DF.C, "TE.mean.rs")
+```
+
+The transition region was narrowed to total energies of 0.1535 and
+0.1576. @fig-Final2 shows the data at the end of the last set of runs.
+
+![Close‑up of the transition region as identified in `Final2.pdf`,
+clearly showing where adding energy does not change the temperature.
+Thick black lines are weighted regressions of the solid region (valid
+points below 0.1535), and the fluid region (all points above 0.157), and
+the red line is the transition region drawn between (intersecting) the
+two regression lines. 1$\sigma$ confidence intervals of measurements are
+plotted as light blue region along with the regression lines, as well as
+gray region showing the maximum ‑ minimum range for each measurement.
+Points are shown as black circles and red triangles (valid and not valid
+points, respectively). 95% confidence intervals on the regression
+predictions are shown in thin blue lines.](../tregz4.png){#fig-Final2}
+
+The full data collection goes from a TE of 0.1284 to 0.23135, and these
+are high by on average about 0.01167 due to the PE step. @fig-keTE.C is
+a plot of the temperature vs total energy.
+
+```{r}
+#| label: fig-keTE.C
+#| fig-cap: Full data plot, with the gray band showing the standard deviation of the temperature estimates (not adjusted for the number of samples in the avereage). Red triangles are not considered valid averages.
+plotconfMD2( y="ke", df = MD2DF.C[ TE.mean.rs %within% c(0.0, 0.4),],
+              linethresh = 200, xlab = "Total Energy per Particle",
+              ylab = "Kinetic Energy per Particle") # sets up plot
+grid( col = "darkgray")
+```
+
+We don't need so many high energy points, so we should start spacing
+them out at the higher energies. @tbl-MD2DF.Ch shows the points
+approaching a total energy of 0.175:
+
+```{r}
+#| label: tbl-MD2DF.Ch
+#| tbl-cap: Points approaching total energy of 0.175.
+# output: asis
+knitr::kable( MD2DF.C[TE.mean.rs %within% c(0.168, 0.175),
+        .(TE.mean.rs, ke.mean.rs, energy, valid)])
+```
+
+We can use the above to see that initialization energies up to 42 or so
+will cover the range of interest. Above that we can space them by two
+and then three to get get a few high energy samples
+
+The transition region itself only had seven samples within the region
+(@tbl-MD2DF.Ctr).
+
+```{r}
+#| label: tbl-MD2DF.Ctr
+#| tbl-cap: Initialization and mean total energies near the transition region, with kinetic energy (i.e. temperature), run id, and valid flag. 
+trnrgn <- MD2DF.C[TE.mean.rs %within%  c(0.1534, 0.1576),
+         .(TE.init, TE.mean.rs, ke.mean.rs, run, valid)]
+knitr::kable( trnrgn)
+```
+
+The `S2b` series did have temperature correction at initialization, so
+let's look at the progression of the energies (@fig-S2binitstep).
+
+```{r}
+#| label: fig-S2binitstep
+#| fig-cap: Total Energy steps.  Each point is the energy delta from the previous energy initialization to the plotted one. Thus, the delta plotted at 30 is the energy change from 29 to 30.
+S2b <- MD2DF.C[series == "S2b",
+         .(TE.init, TE.mean.rs, ke.mean.rs, series, energy, valid)]
+dtrn <- diff(S2b$TE.mean.rs)
+mean( dtrn)
+plot( x= tail( as.numeric( S2b$energy),-1), y = dtrn, 
+      xlab = "Init Temp", ylab = "Delta TE", 
+      main = "Series S2b Initialization", panel.first = grid())
+```
+
+The mean step is almost the 0.001 that the code implemented.
+Unfortunately, the PE step gives a variance to the total energy that
+depends on the particle trajectories. We can expected that variance to
+be reduced by the elimination of the step.
+
+## New Series
+
+The new series will examine 50 temperature steps from 1 - 50 (the input
+is an integer temperature which is divided by 1,000), eleven steps of
+two from 52 to 72, and nine steps of three from 75 to 99. We'll probably
+run a 100 too, for a total of 71 runs. Well run all the energies to 10k
+steps and then we will look to see which energies now appear to be in
+the transition region. These will will run to 4M steps, and then start
+diffusion calculations (first executed on 6 April 2025, but an error was
+found, so it was re-executed on 9 April).
+
+## First Tranche
+
+``` julia
+julia> td = "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+julia> tlist = vcat([i for i in 1:50], [i for i in 52:2:72], 
+                    [i for i in 75:3:100], [100])
+julia> @time MD2.newruns( td, tlist, "S3.", 1000, 5000, 6)
+ 77.023278 seconds (132.86 M allocations: 10.292 GiB, 3.43% gc time, 88 lock 
+ conflicts, 2.40% compilation time)
+```
+
+The data is in the following directory:
+
+```{r}
+#| label: datadir
+datadir = "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+```
+
+That was 71 energies of 31k steps each, for a total of 2,201k steps in
+77s, or 0.034s/1k steps. The code above was slightly modified from what
+was actually run: a "dot" (".") was put in the "S3." input above. This
+was forgotten in the original run, and that input was copied, so the
+files were created without a dot between the series and the energy. This
+was corrected with the unix command `rename "s/S3(.*)/S3.$1/" S3*`.
+
+```{r}
+#| label: MD2DF.D
+MD2DF.D <- MD2DFfile( "../MD2DF.D.RDS", datadir, "S3.*.csv", df = MD2DF.C)
+```
+
+The data is plotted in @fig-MD2DF.D, with the temperature vs. total
+energy in @fig-keTE.D below.
+
+```{r}
+#| label: fig-MD2DF.D
+#| fig-cap: "All (or most) of the (now) 60 columns represented one way or another below. The first eight plots are simply `plotScalars` (that is, `ke sd`, `ke`, Pressure, relative temperature variamce `rtv`, $r^2$ of temperature regression, ke relative range, $<\\psi>$, all plotted againt total energy, and  . These are followed by (left to right, top to bottom) `TE Range` (`TE.max.raw - TE.min.raw` in open symbols, and `TE.sd.rs` in closed symbols, plotted logrithmically), Momentum squared (with standard deviation and range), Maximum of momentum squared vs. total steps, spectral width (in units of $1 / \\tau$), $ \\psi$ delta -  the difference berween `psiabs` and `psiavg`, and at the bottem left total steps."
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.D[series == "S3"], linethresh = 200)
+```
+
+```{r}
+#| label: fig-keTE.D
+#| fig-cap: "Temperature (i.e., mean kinetic energy) for series 3.  Red triangles are measurements not considered valid."
+plotconfMD2( MD2DF.D[ series == "S3",], y="ke", 
+             main = " Temperature vs. Total Energy")
+```
+
+We can look at a few runs (@fig-xn30 and @fig-xn100 below).
+
+```{r}
+#| label: fig-xn30
+#| fig-cap: "`S3.0030` plot with first 1,000 steps skipped."
+xn30 <- head( combineruns( datadir, "S3", "0030")$rundt, 
+              MD2DF.D[ run == "S3.0030", total.steps])
+plotMD2( as.data.frame( tail( xn30, -1000)), dt=0.01)
+```
+
+```{r}
+#| label: fig-xn100
+#| fig-cap: "`S3.0100` with first 1,000 steps skipped."
+xn100 <- head( combineruns( datadir, "S3", "0100", verbose=TRUE)$rundt,
+               MD2DF.D[ run == "S3.0100", total.steps])
+plotMD2( as.data.frame( tail( xn100, -1000)), dt=0.01)
+```
+
+So the previously observed steps are gone. We will import the data into
+a new data table. There are 14 runs which are considered "not valid."
+
+```{r}
+#| label: rmxn100
+# clean up
+rm( xn30, xn100)
+gc()
+```
+
+Next, we look at the variance of the total energy by run in
+@fig-S2S3TEsd . The reduced deviation in the S3 runs shows that
+excluding the potential energy step worked.
+
+```{r}
+#| label: fig-S2S3TEsd
+#| fig-cap: The standard deviation of the total energy plotted by series. The S2 and S2b series did _not_ correct for the potential energy step, and as particles moved in and out of the range, so total energy would be afffected. (Vertical scale is logrithmic.)
+ser <- as.factor( MD2DF.D$series)
+lev <- levels( ser)
+plot( TE.sd.rs ~ TE.mean.rs, data = MD2DF.D, col = ser,
+      log='y', pch = 19, xlab = "Mean Total Energy", ylab = "SD", 
+      main = "Standard Deviation of Total Energy by Series")
+ grid()
+ legend( x = "bottomright", legend = lev, pch=19, col = 1:3)
+```
+
+Looking into the transition region (@fig-keTE.Dz) we can see the
+distribution of samples in and around the transition.
+
+```{r}
+#| label: fig-keTE.Dz
+#| fig-cap: Zoom into Series 3 data @fig-keTE.D
+plotconfMD2( MD2DF.D[ series == "S3" & TE.mean.rs %within% c(0.14,0.155),],
+             y="ke")
+grid(col="darkgray")
+```
+
+We need more samples in the transition region (0.144 to 0.152), and the
+randomness of the initialization energy will help with that.
+
+```{r}
+#| label: fig-delta-te
+#| fig-cap: "Total energy change at each energy step. There is a fair amount of uncertainty starting in the transition region."
+setkey( MD2DF.D, TE.mean.rs)
+tt <- MD2DF.D[ series == "S3",]
+plot( x = tail( tt$TE.mean.rs, -1), y=diff( tt$TE.mean.rs), 
+      panel.first = grid(),
+      xlab = "TE", ylab = expression(Delta * E), 
+      main = "Energy Increment between Runs")
+```
+
+We also need more executions for the runs not yet declared valid, and
+we'll include those in the transition regions too (@tbl-MD2DF.Dtrn)
+
+```{r}
+#| label: tbl-MD2DF.Dtrn
+#| tbl-cap: Key values for transition region points in `MD2DF.D`.
+knitr::kable( MD2DF.D[ series == "S3" & 
+                       (TE.mean.rs %within% c(0.144, 0.152) | !valid), 
+         .(energy, TE.mean.rs, ke.mean.rs, ke.sd.rs, valid)])
+```
+
+That's nine energies: 29 through 37 (we need to both re-run and extend
+these), plus eight more: 43, 46, 54, 64, 66, 81, 90, & 99. We already
+know that we want to run 4M steps in the transition region, and we'll
+add 60k steps to the remaining *not valid* runs.
+
+## Second Tranche
+
+Below is the record of the the additional executions.
+
+``` julia
+julia> tlist2 = [i for i in 29:37]
+
+julia> @time MD2.newruns( td, tlist2, "S3b.", 10000, 10000, 400)
+
+1572.568106 seconds (2.16 G allocations: 148.349 GiB, 3.00% gc time, 197 lock conflicts)
+
+julia> tstr2 = [@sprintf("S3.%.4d", i) for i in tlist2]
+julia> @time MD2.filerun_thread( td, tstr2, 7, 10000, 370)
+1508.708704 seconds (1.99 G allocations: 136.938 GiB, 3.02% gc time, 141 lock conflicts, 0.12% compilation time)
+
+julia> tlist3 = [43, 46, 54, 64, 66, 81, 90,  99]
+julia> tstr3 = [@sprintf("S3.%.4d", i) for i in tlist3]
+julia> @time MD2.filerun_thread( td, tstr3, 7, 10000, 6)
+ 24.146227 seconds (28.71 M allocations: 1.973 GiB, 3.13% gc time, 23 lock conflicts)
+```
+
+In the first statement (`newruns()`) I was not working at the computer,
+and had shut the memory hog *Chrome*. That is nine runs of 401 10k-step
+executions for 36,090k total steps which took 26m 12.54s (0.0436s/1k
+steps). This is a bit slower, and is likely because *Julia* was started
+with `julia --threads 7,1`, that's seven threads with one reserved for
+garbage collection. Unsure exactly what this means, but only runs of
+different energies can be run in parallel. I think that of the nine, six
+run in parallel, and then three more. The extended runs in
+`filerun_thread()` were executed while I was using *Chrome*, and were
+nine runs of 370 10k-step executions for 33,300 total steps, which took
+25m 8.7s (0.0453s/1k steps; and that was an error: it should have been
+397 executions, not 370, so we are short of 4M steps by 269k steps). The
+last run was eight runs of six 10k executions, for 480k steps for
+0.0503s/1k steps. This next statement will create `MD2DF.E`:
+
+```{r}
+#| label: MD2DF.E
+system.time( MD2DF.E <- MD2DFfile( "../MD2DF.E.RDS", datadir, "S3*.scalars.csv",
+                                   df=MD2DF.D))
+```
+
+Did not get very parallel execution there. It may have been memory
+issues, as I closed *Chrome*, *VSCode*, *Julia*, and an instance of
+*RStudio* and I saw a few more cores used. That took almost 14 m. The
+data is summarized in @fig-MD2DF.E below.
+
+```{r}
+#| label: fig-MD2DF.E
+#| fig-cap: All (or most) of the 60 columns represented one way or another. The first nine plots are simply `plotScalars`. These are followed by (left to right, top to bottom) `TE Range` (`TE.max.raw - TE.min.raw` in open symbols, and `TE.sd.rs` in closed symbols, plotted logrithmically), Momentum squared (with standard deviation and range), Maximum of momentum squared vs. total steps, spectral width (in units of $1 / \tau$), $ \psi$ delta -  the difference berween `psiabs` and `psiavg`, and at the bottem left total steps.
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2( MD2DF.E[ series == "S3" | series == "S3b"], linethresh = 200)
+```
+
+@fig-MD2DF.EkeTE show the temperature vs. energy plot of the new data.
+
+```{r}
+#| label: fig-MD2DF.EkeTE
+#| fig-cap: Full series 3 plot of temperature (ke) vs total energy.
+plotconfMD2( MD2DF.E[ series == "S3" | series=="S3b",], y="ke")
+```
+
+@fig-MD2DF.EkeTEz shows that are still a number of points not considered
+valid, and a dearth of points in the transition region. The new points
+overlapped the first set, so we may have to create some by hand, as the
+run scripts take integers for the init temperature. We will also heat
+some runs, but that is a separate investigation.
+
+```{r}
+#| label: fig-MD2DF.EkeTEz
+#| fig-cap: Zoom into transition region of @fig-MD2DF.EkeTE
+plotconfMD2( MD2DF.E[ (series == "S3" | series == "S3b") & 
+                      TE.mean.rs %within% c(0.14,0.155),], y="ke")
+grid(col="darkgray")
+```
+
+There are still eight runs not considered valid, but only three are well
+outside the transition region (@tbl-MD2DF.Envalid).
+
+```{r}
+#| label: tbl-MD2DF.Envalid
+#| tbl-cap: "*Not valid* runs in `MD2DF.E`."
+setkey( MD2DF.E, TE.mean.rs)
+knitr::kable( MD2DF.E[ series == "S3" | 
+                       series == "S3b",][ valid==0,                                                           .(total.steps, TE.mean.rs, run)])
+```
+
+`S3.0081` is alone among the hot runs that are not considered valid.
+@fig-xn81.E is a plot of that run.
+
+```{r}
+#| label: fig-xn81.E
+#| fig-cap: Raw plots of `S3.0081` with first 1,000 steps skipped. Note the `combineruns()` function will combine all executions, not just the 91k steps which created the data point in `MD2DF.E`.  Only the `head()` of the data is used here.
+xn81.E <- head( combineruns( datadir, "S3", "0081", verbose=TRUE)$rundt,
+                MD2DF.E[ run == "S3.0081", total.steps])
+plotMD2( as.data.frame( tail( xn81.E, -1000)), dt=0.01)
+```
+
+It's hard to see issues there. In figure @fig-xn81.Ekers the resampled
+data perhaps shows a growing variance:
+
+```{r}
+#| label: fig-xn81.Ekers
+#| fig-cap: "Run `S3.0081` kinetic energy resampled by 500 steps."
+plot( rsmpavg( xn81.E$ke, 500), ylab="ke", panel.first=grid())
+```
+
+We'll round out the runs, doubling the 91k steps and reaching 4M for
+those in the transition region.
+
+``` julia
+julia> tstr4 = ["S3.0046", "S3.0054", "S3.0081"]
+julia> @time MD2.filerun_thread( td, tstr4, 13, 10000, 9)
+ 22.626391 seconds (32.58 M allocations: 1.915 GiB, 3.25% gc time, 22 lock conflicts, 124.21% compilation time: 3% of which was recompilation)
+ 
+julia> @time MD2.filerun_thread( td, ["S3.0030", "S3.0032"], 377, 10000, 27)
+ 43.005529 seconds (32.29 M allocations: 2.220 GiB, 1.12% gc time, 7 lock conflicts)
+```
+
+These new executions will be incorporated into `MD2DF.F`, and the
+updated transition region plotted in @fig-MD2DF.Ftr.
+
+```{r}
+#| label: MD2DF.F
+MD2DF.F <- MD2DFfile( "../MD2DF.F.RDS", datadir, "S3*.scalars.csv", df=MD2DF.E)
+setkey( MD2DF.F, TE.mean.rs)
+```
+
+```{r}
+#| label: fig-MD2DF.Ftr
+#| fig-cap: "Updated plot of transition region in `MD2DF.F`."
+plotconfMD2( MD2DF.F[ (series == "S3" | series == "S3b") & 
+                      TE.mean.rs %within% c(0.14,0.155),], y="ke")
+```
+
+```{r}
+#| label: tbl-MD2DF.Fnvtr
+#| tbl-cap: Key values for transition region points in `MD2DF.F`.
+knitr::kable( MD2DF.F[ series == "S3" | 
+                       series == "S3b",][ valid==0 | 
+                                          TE.mean.rs %within% c( 0.1435, 0.146),
+                  .(total.steps, TE.mean.rs, valid, run)])
+```
+
+`S3.0081` still isn't there (@fig-xn81.F).
+
+```{r}
+#| label: fig-xn81.F
+#| fig-cap: Resampled kinetic energy of `S3.0081` corresponding to data in `MD2DF.F`.
+rm( xn81.E) # These are fairly large structures, so remove them.
+xn81.F <- head( combineruns( datadir, "S3", "0081", verbose=TRUE)$rundt,
+              MD2DF.F[ run == "S3.0081", total.steps])
+plot( rsmpavg( xn81.F$ke, 500), ylab="ke", panel.first=grid())
+```
+
+Add two runs in the gap. Lot's of room for error when doing this by hand
+rather than using the run scripts.
+
+``` julia
+julia> fn1="S3.00285"
+"S3.00285"
+
+julia> fn2="S3.00295"
+"S3.00295"
+
+julia> fn1=joinpath(td, "S3.00285")
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980/S3.00285"
+
+julia> fn2=joinpath(td, "S3.00295")
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980/S3.00295"
+
+julia> MD2.InitSystem( fn1 * ".0000", temp = 0.0285, io = open( fn1 * ".txt", "a"))
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980/S3.00285.0000.jld2 
+at 2025-04-10T15:37:45.854
+Current Steps: 0
+Maximum Speed: 0.501760501832179)
+
+julia> MD2.InitSystem( fn2 * ".0000", temp = 0.0295, io = open( fn2 * ".txt", "a"))
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980/S3.00295.0000.jld2 
+at 2025-04-10T15:38:05.023
+Current Steps: 0
+Maximum Speed: 0.580096413562172)
+
+
+julia> @time MD2.filerun_thread( td, ["S3.00295", "S3.00285"], 0, 10000, 400)
+621.263542 seconds (482.96 M allocations: 33.105 GiB, 1.48% gc time, 
+7 lock conflicts, 1.05% compilation time: 6% of which was recompilation)
+```
+
+Process the data in `MD2DF.G`.
+
+```{r}
+#| label: MD2DF.G
+MD2DF.G <- MD2DFfile( "../MD2DF.G.RDS", datadir, "S3*.scalars.csv", df=MD2DF.F)
+setkey( MD2DF.G, TE.mean.rs)
+```
+
+@fig-MD2DF.GkeTEz is a close up of the transition region as recorded in
+`MD2DF.G`.
+
+```{r}
+#| label: fig-MD2DF.GkeTEz
+#| fig-cap: Zoom into transition region of `MD2DF.G`.
+plotconfMD2( MD2DF.G[ (series == "S3" | series == "S3b") & 
+                      TE.mean.rs %within% c(0.14,0.155),], y="ke")
+grid(col="darkgray")
+```
+
+@tbl-MD2DF.Gnvtr shows some specifics of `MD2DF.G`.
+
+```{r}
+#| label: tbl-MD2DF.Gnvtr
+#| tbl-cap: Key values for transition region points in `MD2DF.G`.
+knitr::kable( MD2DF.G[ series == "S3" | 
+                       series == "S3b",][ valid==0 | 
+                           TE.mean.rs %within% c( 0.1435, 0.146),
+                           .(total.steps, steps.avg, TE.mean.rs, valid, run)])
+```
+
+Why is `S3.0081` still not in equilibrium? There must still be a bit of
+a slope. One of the frustrating aspects of the procedure is that as
+there are very many steps, the criteria become increasingly difficult to
+satisfy.
+
+```{r}
+#| label: fig-xn81.Gkers
+#| fig-cap: Resampled kinetic energy of `S3.0081` corresponding to data in `MD2DF.G`.
+rm( xn81.F)
+xn81.G <- head( combineruns( datadir, "S3", "0081", verbose=TRUE)$rundt,
+              MD2DF.G[ run == "S3.0081", total.steps])
+plot( rsmpavg( xn81.G$ke, 500), ylab="ke", panel.first=grid())
+```
+
+Adding two more runs in the gaps.
+
+``` julia
+julia> fn3=joinpath(td, "S3.00275")
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980/S3.00275"
+
+julia> fn4=joinpath(td, "S3.00305")
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980/S3.00305"
+
+julia> MD2.InitSystem( fn3 * ".0000", temp = 0.0275, io = open( fn3 * ".txt", "a"))
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980/S3.00275.0000.jld2 
+at 2025-04-11T09:25:33.588
+Current Steps: 0
+Maximum Speed: 0.5907964319252281)
+
+julia> MD2.InitSystem( fn4 * ".0000", temp = 0.0305, io = open( fn4 * ".txt", "a"))
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980/S3.00305.0000.jld2 
+at 2025-04-11T09:25:52.825
+Current Steps: 0
+Maximum Speed: 0.6470211823889013)
+
+julia> @time MD2.filerun_thread( td, ["S3.00275", "S3.00305"], 0, 10000, 400)
+651.526996 seconds (478.44 M allocations: 32.884 GiB, 2.08% gc time, 9 lock conflicts)
+```
+
+Process the data in `MD2DF.H`.
+
+```{r}
+#| label: MD2DF.H
+MD2DF.H <- MD2DFfile( "../MD2DF.H.RDS", datadir, "S3*.scalars.csv", df=MD2DF.G)
+setkey( MD2DF.H, TE.mean.rs)
+```
+
+And plot the transition region in @fig-MD2DF.HkeTEz.
+
+```{r}
+#| label: fig-MD2DF.HkeTEz
+#| fig-cap: Transition region zoom into `MD2DF.H`.
+plotconfMD2( MD2DF.H[ (series == "S3" | series == "S3b") & 
+                      TE.mean.rs %within% c(0.138,0.155),], y="ke")
+grid(col="darkgray")
+```
+
+That's a surprise. The new point `S3.00275` temperature is below that of
+the next higher energy (and also the next lower energy). This calls into
+question the start of the transition region.
+
+```{r}
+#| label: tbl-MD2DF.Hnvtr
+#| tbl-cap: Key values for transition region points in `MD2DF.H`. 
+knitr::kable( MD2DF.H[ series == "S3" | 
+                       series == "S3b",][ valid==0 | TE.mean.rs %within% 
+                                             c( 0.140, 0.145),
+                  .(total.steps, steps.avg, TE.mean.rs, valid, run)])
+```
+
+The new data calls into question whether `S3.0027`, `S3.0028` or even
+`S3.0026` are truly in equilibrium. All three of these need to be run to
+to 4M steps (i.e., an additional 397 10k runs). The gap between
+`S3.0026` and `S3.0027` is also a bit large: 0.00127 (see
+@fig-delta-te), so we ought to fill that gap in with a 4M step run.
+
+Let's see if we can tell what is going on with `S3.00275`:
+
+```{r}
+#| label: fig-xn275.Hkers
+#| fig-cap: "Run `S3.0275` kinetic energy resampled by 500 steps." 
+xn275.H <- head( combineruns( datadir, "S3", "00275", verbose=TRUE)$rundt,
+               MD2DF.H[ run == "S3.00275", total.steps])
+plot( rsmpavg( xn275.H$ke, 500), ylab="ke", panel.first=grid())
+```
+
+@fig-xn275.H shows that the system is going in and out of melting.
+
+```{r}
+#| label: fig-xn275.H
+#| fig-cap: "`S3.00275` with first 1,000 steps skipped."
+plotMD2( as.data.frame( tail( xn275.H, -1000)), dt=0.01)
+```
+
+The following cleans up memory a bit.
+
+```{r}
+rm( xn275.H, xn81.G)
+gc()
+```
+
+Lastly we'll look at the state of the Nelson-Halperin order parameter in
+@fig-MD2DF.Hpsi.
+
+```{r}
+#| label: fig-MD2DF.Hpsi
+#| fig-cap: The magnitude of the complex Nelson-Halperin order parameter averaged over all steps (solid symbols), and the mean of the magnitude avereaged over 500 steps (open symbols). Blue circles considred valid, and red triangles not considered valid.
+with( MD2DF.H[ series == "S3" | series == "S3b",] ,{
+   pch <- rep_len( 16, length.out = length( valid)) # solid symbols
+   pch[ valid == 0] <- 17
+   col = rep_len( "darkblue", length.out = length( valid))
+   col[ valid == 0] <- 'darkred'
+   plot( x = TE.mean.rs, y = 1000 * psiavg, col = col, pch = pch,
+   xlab = "Total Energy", ylab = expression(1000 * psi), log="y",
+   panel.first = grid())
+   pch <- pch - 15 # This will switch to open symbols
+   points( x = TE.mean.rs, y = 1000 * psiabs.mean.rs, col = col, pch = pch)})
+```
+
+## Final Extra runs
+
+``` julia
+phil@phil-XPS-8920:/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J$ julia --threads 7,1
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.11.4 (2025-03-10)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org/ release
+|__/                   |
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> td ="/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+julia> fn5=joinpath(td, "S3.00265")
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980/S3.00265"
+
+julia> MD2.InitSystem( fn5 * ".0000", temp = 0.0265, io = open( fn5 * ".txt", "a"))
+-----saveMDRecord()
+System state saved in
+/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980/S3.00265.0000.jld2
+at 2025-04-12T10:30:20.420
+Current Steps: 0
+Maximum Speed: 0.6140123749750873)
+
+julia> @time MD2.filerun_thread( td, ["S3.0026", "S3.00265", "S3.0027",
+   "S3.0028"], [7, 0, 7, 7], 10000, 397)
+661.105087 seconds (960.64 M allocations: 65.810 GiB, 2.94% gc time, 
+84 lock conflicts, 3.63% compilation time: 7% of which was recompilation)
+```
+
+The above effected four calls each with 397 executions of 10k steps, for
+15.88M steps, 0.0624s/1k steps. These will be incorporated in `MD2DF.I`.
+
+```{r}
+#| label: MD2DF.I
+MD2DF.I <- MD2DFfile( "../MD2DF.I.RDS", datadir, "S3*.scalars.csv", df=MD2DF.H)
+setkey( MD2DF.I, TE.mean.rs)
+```
+
+And plot the transition region again (@fig-MD2DF.IkeTE).
+
+```{r}
+#| label: fig-MD2DF.IkeTE
+#| fig-cap: "Transition Region with completed additional runs."
+plotconfMD2( MD2DF.I[ (series == "S3" | series == "S3b") & 
+                      TE.mean.rs %within% c(0.138,0.150),], y="ke")
+grid(col="darkgray")
+```
+
+# Transition Region
+
+The following is a closer look at the transition region. @tbl-MD2DF.Itr
+lists key points in that region
+
+```{r}
+#| label: tbl-MD2DF.Itr
+#| tbl-cap: "Key transition values (total energy between 0.140 and 0.148).  The `msd` values are the measured ke standard deviation divided by the square root of the number of samples, that is, it is the standard deviation of the mean ke."
+knitr::kable( MD2DF.I[ series == "S3" | series == "S3b",][ valid==0 | TE.mean.rs %within% c( 0.140, 0.148),.(total.steps, steps.avg, TE.mean.rs, valid, run, ke.mean.rs, msd=ke.sd.rs/sqrt(nr))])
+```
+
+Now we have two 4M step runs labeled "valid" before the transition
+region, and all runs not declared valid have around 4M points (with the
+exception of the oddball `S3.0081`). We'll call `S3.0265` at 0.14231 the
+top of the solid region. The bottom of the fluid region is not so clear,
+as the 4M step run `S3b.0033` was not "valid" at at TE of 0.14872, but
+it looks like it sits on the line, and there are three valid runs at
+lower energies. We will choose `S3.0031` at TE of 0.14692 as the first
+fully fluid run, although arguments could be made to go as low as
+`S3b.0030` or even `S3b.00305`. The following code will generate
+regressions of the solid and fluid regions (@fig-treg5).
+
+```{r}
+#| label: fig-treg5
+#| warning: false
+#| fig-cap: "Unweighted regressions of kinetic and total energy."
+
+minpe <- 0.127373 - 0.0114238 # Theoretical minimum PE
+S3DT <- MD2DF.I[ series == "S3" | series == "S3b"]
+temin <- 0.14232 # transition energy ,in, just above S3.00265
+temax <- 0.14691 # transition region max, just below S3.0031
+maxte <- max( S3DT$TE.mean.rs)
+vs <- S3DT[ TE.mean.rs <= temin, .(run, ke.mean.rs, TE.mean.rs, ke.sd.rs, nr)]
+setkey(vs, TE.mean.rs) # solid table
+slm <- lm( ke.mean.rs ~ I(TE.mean.rs - minpe) - 1, data=vs) # Solid lm with minpe
+summary(slm)
+slinex <- c(minpe, temin) # TE endpoints for solid line.
+sliney <- predict( slm, data.frame( TE.mean.rs = slinex)) # solid line ke's
+vf <- S3DT[ TE.mean.rs > temax, .(run, ke.mean.rs, TE.mean.rs, ke.sd.rs, nr, 
+                                  ke.min.raw, ke.max.raw, valid, Fval)]
+# ALL points above 0.157
+setkey(vf, TE.mean.rs)
+flm <- lm( ke.mean.rs ~ TE.mean.rs, data=vf) # fluid lm of all points.
+summary( flm)
+cflm  <- coef( flm) # coefficients of fluid lm of all points.
+tlinex <- c( temin, (sliney[2] - cflm[1]) / cflm[ 2])
+# the right endpoint needs to be updated.
+flinex <- c( tlinex[2], maxte)
+fliney <- predict( flm, data.frame( TE.mean.rs = flinex))
+tliney <- c( sliney[2],  sliney[2]) # trans. line y endpoints
+plotconfMD2( y="ke", df = S3DT, 
+             linethresh = 200, xlab = "Total Energy per Particle", 
+             ylab = "Kinetic Energy per Particle") # sets up plot
+grid( col = "darkgray") # replot grid so it sits in foreground of range area
+lines( slinex, sliney, lwd = 2) # Solid line
+lines( tlinex, tliney, lwd = 2, col = 'red') # transition line
+lines( flinex, fliney, lwd = 2) # fluid line All pnts
+pred.s.plim <- predict( slm, interval = "prediction") # solid prediction
+matlines(vs$TE.mean.rs, pred.s.plim[,-1], lty = c(1,1), lwd = c(1,1), 
+        col = c('blue','blue'), type = "l")
+pred.f.plim <- predict( flm, interval = "prediction")
+matlines(vf$TE.mean.rs, pred.f.plim[,-1], lty = c(1,1), lwd = c(1,1), 
+        col = c('blue','blue'), type = "l")
+text( x = tlinex, y = tliney, labels = format( tlinex, trim=TRUE, digits=4), 
+      pos = c( 3, 1), cex = 0.8)
+rpl <- recordPlot()
+png("treg5.png", width = 600, height = 300)
+replayPlot(rpl)
+dev.off()
+```
+
+Those are very good fits, but zooming in (@fig-treg5z) shows there is
+something else going on.
+
+```{r}
+#| label: fig-treg5z
+#| warning: false
+#| fig-cap: 'Close‑up of the transition region from @fig-treg5, clearly showing where adding energy does not change the temperature. Thick black lines are regressions of the solid region (valid points below 0.14232), and the fluid region (all points above 0.14691), and the red line is the transition region drawn between (intersecting) the two regression lines. 1$\sigma$ confidence intervals of measurements are plotted as light blue region along with the regression lines, as well as gray region showing the maximum ‑ minimum range for each measurement. Points are shown as black circles and red triangles (valid and not valid points, respectively). 95% confidence intervals on the regression predictions are shown as thin blue lines.'
+
+plotconfMD2( y="ke", df = S3DT[ TE.mean.rs %within% c( 0.135, 0.155),], 
+             linethresh = 200, xlab = "Total Energy per Particle", 
+             ylab = "Kinetic Energy per Particle") # sets up plot
+grid( col = "darkgray") # replot grid so it sits in foreground of range area
+lines( slinex, sliney, lwd = 2) # Solid line
+lines( tlinex, tliney, lwd = 2, col = 'red') # transition line
+lines( flinex, fliney, lwd = 2) # fluid line All pnts
+pred.s.plim <- predict( slm, interval = "prediction") # solid prediction
+matlines(vs$TE.mean.rs, pred.s.plim[,-1], lty = c(1,1), lwd = c(1,1), 
+        col = c('blue','blue'), type = "l")
+pred.f.plim <- predict( flm, interval = "prediction")
+matlines(vf$TE.mean.rs, pred.f.plim[,-1], lty = c(1,1), lwd = c(1,1), 
+        col = c('blue','blue'), type = "l")
+text( x = tlinex, y = tliney, labels = format( tlinex, trim=TRUE, digits=4), 
+      pos = c( 3, 1), cex = 0.8)
+rpl <- recordPlot()
+png("tregz5.png", width = 600, height = 300)
+replayPlot(rpl)
+dev.off()
+```
+
+## Weighted Regression
+
+The fluid line near the transition region systematically misses most of
+the points. Perhaps a weighted regression will help. @fig-kesd looks at
+the variances of the kinetic energy.
+
+```{r}
+#| label: fig-kesd
+#| warning: false
+#| fig-cap: 'Standard deviation of the resampled kinetic energy estimates as a function of the mean total energy.'
+
+plot(ke.sd.rs ~ TE.mean.rs, data = S3DT, xlab = "Total Energy per Particle",
+ylab = "Estimated Std. Dev of KE mean")
+grid()
+```
+
+That actually looks pretty linear. Let's see if it is.
+
+```{r}
+#| label: tesdlm
+
+tesdlm <- lm( ke.sd.rs ~ TE.mean.rs, data = S3DT[ !(TE.mean.rs %within% c(0.14, 0.16)),])
+summary( tesdlm)
+```
+
+Let's see if setting the intercept at minimum TE to zero improves the
+regression.
+
+```{r}
+#| label: tesdlm2
+
+tesdlm2 <- lm( ke.sd.rs ~ I(TE.mean.rs - minpe) - 1, data = S3DT[ !(TE.mean.rs %within% c(0.14, 0.16)),])
+summary( tesdlm2)
+```
+
+The higher regression coefficient is misleading, as it is calculated
+differently for a slope-only regression. We need to develop a
+theoretical foundation for this, but for the moment we'll simply reuse
+the total energy regression as weight in the ke vs. TE regression.
+First, we imposed an intercept by subtracting the minimum pe from the TE
+in the regression. The *actual* intercept (zero TE on the graph) is
+$-m E_{\text{minpe}}$, where $,m$ is the slope, and $E_{\text{minpe}}$
+is the min pe. @fig-kesdreg shows the predicted points on that line.
+
+```{r}
+#| label: fig-kesdreg
+#| warning: false
+#| fig-cap: "Standard deviation of the resampled kinetic energy estimates as a function of the mean total energy with simple slope-only regression line.  The dark green small points are the predicted standard deviations at each run's TE."
+
+plotconf( y = S3DT$ke.sd.rs, x = S3DT$TE.mean.rs, Fval = S3DT$Fval, 
+          xlab = "Kinetic Energy per Particle", 
+          ylab = "Estimated Std. Dev of KE mean")
+ctesdlm2 <- coef(tesdlm2)
+abline( -minpe * ctesdlm2, ctesdlm2)
+
+points( S3DT$TE.mean.rs, predict( tesdlm2, new = S3DT[,.(TE.mean.rs)]), 
+        pch = 20, col = 'darkgreen')
+grid()
+```
+
+The predictions above are the predicted standard deviation of the
+re-sampled ke points. The mean ke is the average of those points, so the
+variance of that average is the variance of the original data divided by
+the number of samples in the average (@fig-tregz6).
+
+```{r}
+#| label: fig-tregz6
+#| warning: false
+#| fig-cap: "Close‑up of the transition region as identified with weighted regression. As before, thick black lines are weighted regressions of the solid region (points with TE below 0.14232), and the fluid region (points above 0.14691), and the red line is the transition region drawn between (intersecting) the two regression lines. 1$\\sigma$ confidence intervals of measurements are plotted as light blue region along with the regression lines, as well as gray region showing the maximum ‑ minimum range for each measurement. Points are shown as black circles and red triangles (valid and not valid points, respectively). 95% confidence intervals on the regression predictions are shown in thin blue lines, and reflect the application of the weights (the confidence region is narrow where there are many samples)."
+
+fw <- vf$nr / (predict( tesdlm2,  new = vf[,.(TE.mean.rs)])^2) # fluid weights
+fwlm <- lm( ke.mean.rs ~ TE.mean.rs, data=vf, weights = fw) # fluid lm
+summary( fwlm)
+cfwlm  <- coef( fwlm) # coefficients of fluid lm of all points.
+tlinex2 <- c( temin, (sliney[2] - cfwlm[1]) / cfwlm[ 2])
+flinex2 <- c( tlinex2[2], maxte)
+fliney2 <- predict( fwlm, data.frame( TE.mean.rs = flinex2))
+plotconfMD2( y="ke", df = S3DT[ TE.mean.rs %within% c( 0.135, 0.155),], 
+             linethresh = 200, xlab = "Total Energy per Particle", 
+             ylab = "Kinetic Energy per Particle") # sets up plot
+grid( col = "darkgray") # replot grid so it sits in foreground of range area
+lines( slinex, sliney, lwd = 2) # Solid line
+lines( tlinex2, tliney, lwd = 2, col = 'red') # transition line
+lines( flinex2, fliney2, lwd = 2) # fluid line All pnts
+pred.s.plim <- predict( slm, interval = "prediction") # solid prediction
+matlines(vs$TE.mean.rs, pred.s.plim[,-1], lty = c(1,1), lwd = c(1,1), 
+        col = c('blue','blue'), type = "l")
+pred.fw.plim <- predict( fwlm, interval = "prediction")
+matlines(vf$TE.mean.rs, pred.fw.plim[,-1], lty = c(1,1), lwd = c(1,1), 
+        col = c('blue','blue'), type = "l")
+text( x = tlinex2, y = tliney, labels = format( tlinex2, trim=TRUE, digits=4), 
+      pos = c( 3, 1), cex = 0.8)
+rpl <- recordPlot()
+png("tregz6.png", width = 600, height = 300)
+replayPlot(rpl)
+dev.off()
+```
+
+@fig-treg6 is full plot.
+
+```{r}
+#| label: fig-treg6
+#| warning: false
+#| fig-cap: 'Weighted regressions of the full `S3` data set.'
+
+fw <- vf$nr / (predict( tesdlm2,  new = vf[,.(TE.mean.rs)])^2) # fluid weights
+fwlm <- lm( ke.mean.rs ~ TE.mean.rs, data=vf, weights = fw) # fluid lm
+summary( fwlm)
+cfwlm  <- coef( fwlm) # coefficients of fluid lm of all points.
+tlinex2 <- c( temin, (sliney[2] - cfwlm[1]) / cfwlm[ 2])
+flinex2 <- c( tlinex2[2], maxte)
+fliney2 <- predict( fwlm, data.frame( TE.mean.rs = flinex2))
+plotconfMD2( y="ke", df = S3DT, 
+             linethresh = 200, xlab = "Total Energy per Particle", 
+             ylab = "Kinetic Energy per Particle") # sets up plot
+grid( col = "darkgray") # replot grid so it sits in foreground of range area
+lines( slinex, sliney, lwd = 2) # Solid line
+lines( tlinex2, tliney, lwd = 2, col = 'red') # transition line
+lines( flinex2, fliney2, lwd = 2) # fluid line All pnts
+pred.s.plim <- predict( slm, interval = "prediction") # solid prediction
+matlines(vs$TE.mean.rs, pred.s.plim[,-1], lty = c(1,1), lwd = c(1,1), 
+        col = c('blue','blue'), type = "l")
+pred.fw.plim <- predict( fwlm, interval = "prediction")
+matlines(vf$TE.mean.rs, pred.fw.plim[,-1], lty = c(1,1), lwd = c(1,1), 
+        col = c('blue','blue'), type = "l")
+text( x = tlinex2, y = tliney, labels = format( tlinex2, trim=TRUE, digits=4), 
+      pos = c( 3, 1), cex = 0.8)
+rpl <- recordPlot()
+png("treg6.png", width = 600, height = 300)
+replayPlot(rpl)
+dev.off()
+```
+
+## Weights vs ke
+
+We can do a similar exercise by regressing the ke standard deviation
+with the mean ke itself (@fig-kesdvke).
+
+```{r}
+#| label: fig-kesdvke
+#| warning: false
+#| fig-cap: 'Standard deviation of the resampled kinetic energy estimates as a function of the mean  kinetic energy.'
+
+plotconf( y = S3DT$ke.sd.rs, x = S3DT$ke.mean.rs, Fval = S3DT$Fval, 
+          xlab = "Kinetic Energy per Particle", 
+          ylab = "Estimated Std. Dev of KE mean")
+grid()
+```
+
+This also will go to zero as the ke goes to zero.
+
+```{r}
+#| label: kesdlm
+
+kesdlm <- lm( ke.sd.rs ~ ke.mean.rs - 1, 
+              data = S3DT[ !(TE.mean.rs %within% c(0.14, 0.16)),])
+summary( kesdlm)
+```
+
+## Polynomial Regression
+
+The classic way to do a polynomial regression is to increase the degree
+until the AIC increases. This took some experimentation to accomplish
+the results in @tbl-polyreg.
+
+```{r}
+#| label: tbl-polyreg
+#| tbl-cap: AIC of poly fits from 2 though 8 degrees.
+fplm <- lm( ke.mean.rs ~ poly( TE.mean.rs, 2), data=vf) # fluid lm
+fwplm <- lm( ke.mean.rs ~ poly( TE.mean.rs, 2), data=vf, weights = fw) 
+fwplm2 <- lm( ke.mean.rs ~ poly( TE.mean.rs, 3), data=vf, weights = fw) 
+fwplm3 <- lm( ke.mean.rs ~ poly( TE.mean.rs, 5), data=vf, weights = fw) 
+fwplm4 <- lm( ke.mean.rs ~ poly( TE.mean.rs, 6), data=vf, weights = fw) 
+fwplm5 <- lm( ke.mean.rs ~ poly( TE.mean.rs, 7), data=vf, weights = fw) 
+fwplm6 <- lm( ke.mean.rs ~ poly( TE.mean.rs, 8), data=vf, weights = fw)
+knitr::kable( AIC( flm, fwlm, fplm, fwplm, fwplm2, fwplm3, fwplm4, fwplm5, fwplm6))
+```
+
+The best weighted fit is a seventh degree polynomial, which is, of
+course, ridiculous. If we look at the significance of the coefficients
+though, we see that the third order coefficient is the only one with any
+real significance (until the 7th.)
+
+```{r}
+summary( fwplm5)
+```
+
+So the third order is possibly justified. Note also the second order
+un-weighted regression has a similar AIC to the third order weighted.
+The great disparity in the weights may be driving the fit in unjustified
+ways. @fig-tregp is a plot of two polynomial fits.
+
+```{r}
+#| label: fig-tregp
+#| warning: false
+#| fig-cap: 'Polynomial fit of the fluid region. Solid black line is a third-degree weighted fit, and the dashed red line is a second-degree unweighted fit. The two lines substantially overlap with the data and each other, and so are difficult to distinguish. The blue lines are the confidence interval of the weighted fit.'
+
+summary( fplm)
+summary( fwplm2)
+
+plotconfMD2( y="ke", df = vf,  # just plot fluid region
+             linethresh = 200, xlab = "Total Energy per Particle", 
+             ylab = "Kinetic Energy per Particle") # sets up plot
+grid( col = "darkgray") # replot grid so it sits in foreground of range area
+
+lines( vf$TE.mean.rs, predict( fwplm2), lwd = 2) # fluid line All pnts
+lines( vf$TE.mean.rs, predict( fplm), lwd = 2, col = "darkred", lty = 2) 
+pred.fwp.plim <- predict( fwplm2, interval = "prediction")
+matlines(vf$TE.mean.rs, pred.fwp.plim[,-1], lty = c(1,1), lwd = c(1,1), 
+        col = c('blue','blue'), type = "l")
+rpl <- recordPlot()
+png("tregp.png", width = 600, height = 300)
+replayPlot(rpl)
+dev.off()
+```
+
+```{r}
+#| include: false
+rm( rpl, fplm, fwplm, fwplm2, fwplm3, fwplm4, fwplm5, fwplm6, fwlm, flm, slm, 
+    vf, slinex, sliney, flinex, fliney, flinex2, fliney2, 
+    pred.s.plim, pred.fw.plim, pred.fwp.plim, ctesdlm2, cfwlm)
+```
+
+# Specific Heat
+
+The specific heat is the slope of the energy vs. temperature curve.
+
+```{r}
+#| label: fig-EvT
+#| fig-cap: "The total energy vs. temperature.  The dotted line is attempting to show the very small standard deviation of the energy points.  The red triangles are points not considered validly inequilibrium. Remember that the temperature data has significant standard deviations, but these are not displayed."
+setkey( S3DT, ke.mean.rs)
+plotconfMD2( x='ke.mean.rs', y="TE", df=S3DT[ TE.mean.rs %within% c(0.135,0.155)],
+             linethresh=200, xlab="Kinetic Energy per Particle", 
+             ylab ="Total Energy per Particle")# sets up plot
+```
+
+We need a numerical derivative function in order to compute
+$C_v = dE / dT$. We will simply fit (really, *draw*) a line or curve
+between a number of points, and compute the derivative of that line or
+curve. `lm( y ~ poly( x, n), ...)` will fit a polynomial of degree `n`
+to the values passed it, and if we pass `n + 1` values, the fit will be
+exact (i.e., pass through the supplied points). The derivative will be
+evaulated at the midpoint between the first and last point.
+
+```{r}
+#| label: dydx
+
+dydx <- function( y, x, lag = 1) {
+   # find derivative over lag + 1 points
+   lx <- length( x)
+   stopifnot( length( y) == lx)
+   data <- data.table( x = x, y = y, keyby = x)
+   xm <- (data$x[ 1:(lx - lag)] + data$x[ (lag + 1):lx]) / 2 # midpoint of eval sets
+   dydxfit <- function( i) { # get dy/dx from points i:(i + lag)
+      c <- coef( lm( y ~ poly( x, lag, raw = TRUE), # get poly coef
+                     data = data[ i:(i + lag)]))
+      dpc <- (1:lag) * tail( c, -1) # derivative of poly coeff
+      polyval( rev(dpc), xm[ i]) # evaluate polynomial at midpoint of data & return
+   }
+   dd <- vapply( 1:(lx - lag), dydxfit, 1.0)
+   list( dd=dd, xm = xm)
+}
+
+# test
+tx <- c(1, 4, 3, 3.5, 2, 5)
+ty <- tx^2
+(dd <- dydx(ty, tx, 2)) # Note the NaN in third position: 3,  5, NaN, 7, 9
+dd$dd - 2 * dd$xm
+rm( tx, ty, dd) # remove these variables
+```
+
+A few different lags are plotted in @fig-Cv1.
+
+```{r}
+#| label: fig-Cv1
+#| fig-cap: Numerical derivative at three different lags.  
+#setkey(S3DT, TE.mean.rs)
+with( S3DT, {
+   dedt <- dydx( TE.mean.rs, ke.mean.rs)
+   plot( x = dedt$xm, y = dedt$dd, panel.first = grid(), #xlim=c(0.01,0.02),
+         xlab="ke", ylab = "Cv", main = "dE/dT, all points, three lags.")
+   dedt2 <- dydx( TE.mean.rs, ke.mean.rs, lag = 2)
+   points( x = dedt2$xm, y = dedt2$dd, col='red')
+   dedt3 <- dydx( TE.mean.rs, ke.mean.rs, lag = 3)
+   points( x = dedt3$xm, y = dedt3$dd, col='green')
+   legend( "topright", c("1", "2", "3"), pch=1, col=c('black','red','green'), 
+           title = "Lag")
+})
+```
+
+The negative values are unrealistic, but not unsurprising due to the
+fluctuations in the transition region. While the line looks pretty flat,
+it also looks like it is zero, which is clearly a scaling issue: the
+large values returned by the first difference causes the variations in
+the rest of the line to be unnoticeable. We can also exclude the points
+not considered valid, and this generates all positive results, and with
+one very large value, so a log plot is used in @fig-Cv2.
+
+```{r}
+#| label: fig-Cv2
+#| fig-cap: Log plot of specific heat computed using only points considerd valid.
+with(S3DT[ valid == 1,], {
+   dedtv <- dydx( TE.mean.rs, ke.mean.rs)
+   plot( x = dedtv$xm, y = dedtv$dd, panel.first = grid(), #xlim=c(0.01,0.02),
+         log='y', xlab="ke", ylab = "Cv")
+   dedtv2 <- dydx( TE.mean.rs, ke.mean.rs, lag = 2)
+   points( x = dedtv2$xm, y = dedtv2$dd, col='red')
+   dedtv3 <- dydx( TE.mean.rs, ke.mean.rs, lag = 3)
+   points( x = dedtv3$xm, y = dedtv3$dd, col='green')
+   legend( "topright", c("1", "2", "3"), pch=1, col=c('black','red','green'), 
+           title = "Lag")
+})
+```
+
+The kinetic energy has a rather large variance, and putting that in the
+denominator feels odd. @fig-ooCv1 below is the reciprocal computed as
+$dT / dE$.
+
+```{r}
+#| label: fig-ooCv1
+#| fig-cap: The specific heat computed as the reciprocal of $dT / dE$ (valid points only). Note that the independent axis used here is the total energy, not the kinetic energy.
+with(S3DT[ valid == 1,], {
+   dedtv <- dydx( ke.mean.rs, TE.mean.rs)
+   plot( x = dedtv$xm, y = 1/dedtv$dd, panel.first = grid(), #xlim=c(0.01,0.02),
+         log='y', xlab="TE", ylab = "Cv")
+   dedtv2 <- dydx( ke.mean.rs, TE.mean.rs, lag = 2)
+   points( x = dedtv2$xm, y = 1/dedtv2$dd, col='red')
+   dedtv3 <- dydx( ke.mean.rs, TE.mean.rs, lag = 3)
+   points( x = dedtv3$xm, y = 1/dedtv3$dd, col='green')
+   legend( "topright", c("1", "2", "3"), pch=1, col=c('black','red','green'),  
+           title = "Lag")
+})
+```
+
+Let's zoom in a bit on those plots.
+
+```{r}
+#| label: fig-Cv1z
+#| fig-cap: Zoom into @fig-Cv1 (all points).
+with( S3DT, {
+   dedt <- dydx( TE.mean.rs, ke.mean.rs)
+   plot( x = dedt$xm, y = dedt$dd, panel.first = grid(), xlim=c(0.01,0.02),
+         xlab="ke", ylab = "Cv")
+   dedt2 <- dydx( TE.mean.rs, ke.mean.rs, lag = 2)
+   points( x = dedt2$xm, y = dedt2$dd, col='red')
+   dedt3 <- dydx( TE.mean.rs, ke.mean.rs, lag = 3)
+   points( x = dedt3$xm, y = dedt3$dd, col='green')
+   legend( "topright", c("1", "2", "3"), pch=1, col=c('black','red','green'),  
+           title = "Lag")
+})
+```
+
+First, let's look at the valid E vs. T plot (@fig-EvTv).
+
+```{r}
+#| label: fig-EvTv
+#| fig-cap: "The total energy vs. temperature. Only points considered valid shown. The standard deviations of the temperature means are displayed with error bars.  While these increase significantly through the transition region, the large number of points in the averages reduce the standard deviations to small values."
+
+with(S3DT[ (valid == 1) & (TE.mean.rs %within% c(0.135,0.155))],  {
+   plot( x = ke.mean.rs, y = TE.mean.rs, pch=".",
+             xlab = "Kinetic Energy per Particle", log='y',
+             ylab = "Total Energy per Particle", panel.first = grid()) # sets up plot
+   sd <- ke.sd.rs / sqrt( nr)
+   arrows( x0 = ke.mean.rs - sd, y0 = TE.mean.rs, 
+           x1 =  ke.mean.rs + sd, y1 = TE.mean.rs, length = 0.05, angle=90, code=3)
+   })
+```
+
+That looks too-good-to-be-true: two points at roughly the same
+temperature but with different total energies. @fig-Cv2z shows the zoom
+into @fig-Cv2.
+
+```{r}
+#| label: fig-Cv2z
+#| fig-cap: Zoom into @fig-Cv2 (only points considered valid).
+with(S3DT[ valid==1,], {
+   dedtv <- dydx( TE.mean.rs, ke.mean.rs)
+   plot( x = dedtv$xm, y = dedtv$dd, panel.first = grid(), xlim=c(0.01,0.02),
+         log='y', xlab="ke", ylab = "Cv")
+   dedtv2 <- dydx( TE.mean.rs, ke.mean.rs, lag = 2)
+   points( x = dedtv2$xm, y = dedtv2$dd, col='red')
+   dedtv3 <- dydx( TE.mean.rs, ke.mean.rs, lag = 3)
+   points( x = dedtv3$xm, y = dedtv3$dd, col='green')
+   legend( "topright", c("1", "2", "3"), pch=1, col=c('black','red','green'),  
+           title = "Lag")
+})
+```
+
+```{r}
+#| label: fig-ooCv1z
+#| fig-cap: The reciprocal Cv on valid points, plotted on linear scale. This is essentially a zoom into @fig-ooCv1.
+with(S3DT[ valid==1,], {
+   dedtv <- dydx( ke.mean.rs, TE.mean.rs)
+   plot( x = dedtv$xm, y = dedtv$dd, panel.first = grid(),
+         xlim=c(0.135,0.17),
+         #log='y', 
+         xlab="TE", ylab = "1/Cv")
+   dedtv2 <- dydx( ke.mean.rs, TE.mean.rs, lag = 2)
+   points( x = dedtv2$xm, y = dedtv2$dd, col='red')
+   dedtv3 <- dydx( ke.mean.rs, TE.mean.rs, lag = 3)
+   points( x = dedtv3$xm, y = dedtv3$dd, col='green')
+   legend( "topright", c("1", "2", "3"), pch=1, col=c('black','red','green'),  
+           title = "Lag")
+})
+```
+
+# Diffusion Estimates
+
+## Making the Runs
+
+We must select runs on which to estimate the diffusion. We will not use
+all runs, but will do three solid, four fluid, and all in and near the
+transition region. We will divide up the two regions into four and five
+divisions, respectively. `S3.0001` at `TE = 0.11695` is the lowest
+energy run, and `S3.0100` at `TE = 0.21554` is the highest.
+
+```{r}
+minte <- vs[ run == 'S3.0001', TE.mean.rs]
+sde <- (temin - minte)/4 # solid delta energy
+minte + sde * c(1, 2)
+```
+
+Runs `S3.0007` and `S3.0014` are the closest to those energies. All of
+the \~4M step runs will have diffusion estimated (`S3.0026` through
+`S3.0037`, including all of the `S3b.` runs), the highest energy one
+being `S3.0037` at `TE = 0.15289`.
+
+```{r}
+fde <- (maxte - 0.15289)/5
+0.15289 + fde * c( 1, 2, 3)
+```
+
+Runs `S3.0050`, `S3.0062`, and `S3.0075` are the runs closest to those
+energies. The expression below will create a list (that can be copied
+and pasted into *Julia* with some effort).
+
+```{r}
+#| eval: false
+(drn <- c('S3.0001', 'S3.0007', 'S3.0014', S3DT[ total.steps > 100000, run], 
+          'S3.0050', 'S3.0062', 'S3.0075', 'S3.0100')) # diffusion runs
+```
+
+\`
+
+```         
+[1] "S3.0001"  "S3.0007"  "S3.0014"  "S3.0026"  "S3.00265" "S3.0027"  "S3.00275"
+"S3.0028"  "S3.00285" "S3b.0029"
+[11] "S3.0029"  "S3.00295" "S3.00305" "S3b.0030" "S3.0030"  "S3b.0031" "S3.0031"
+"S3b.0032" "S3.0032"  "S3.0033" 
+[21] "S3b.0033" "S3b.0034" "S3.0034"  "S3.0035"  "S3b.0035" "S3b.0036" "S3.0036"
+"S3b.0037" "S3.0037"  "S3.0046" 
+[31] "S3.0054"  "S3.0081"  "S3.0050"  "S3.0062"  "S3.0075"  "S3.0100" 
+```
+
+\`
+
+We also need the starting execution number (i.e., the `.jld2` file name)
+from which each file starts. This is all rather clumsy, but here it is
+(using the anonymous function shortcut "`\()`")
+
+```{r}
+#| eval: false
+lfn <- strsplit( sapply( drn, \(fn) last( list.files( datadir, 
+                                             paste(fn, "*.jld2", sep = ".")))),
+                  "[.]")
+
+as.integer(sapply( seq_along( lfn), \(i) lfn[[i]][3]))
+```
+
+```         
+[1]  27  27  27 417 417 420 420 420 420 421 400 400 400 421 400 421 397 421 
+ 424 397 421 421 397 397 421 421 397 401 397
+[30]  42  42  42  27  27  27  27
+```
+
+Now, I did this previously, but there was an error in `RunScripts.jl`
+which did not pass along the diffusion parameters to `extendrun()`.
+Tried again on 27 April 2025:
+
+``` julia
+#| eval: false
+phil@phil-XPS-8920:~$ julia --threads=auto
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.11.5 (2025-04-14)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org/ release
+|__/                   |
+
+julia> Threads.nthreads()
+8
+
+julia> cd("/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J")
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> runs = ["S3.0001", "S3.0007","S3.0014", "S3.0026", "S3.00265", "S3.0027",
+"S3.00275", "S3.0028", "S3.00285", "S3b.0029", "S3.0029", "S3.00295",
+"S3.00305","S3b.0030", "S3.0030", "S3b.0031", "S3.0031","S3b.0032", "S3.0032",
+"S3.0033", "S3b.0033",  "S3b.0034", "S3.0034", "S3.0035", "S3b.0035", 
+"S3b.0036", "S3.0036", "S3b.0030", "S3.0037", "S3.0046", "S3.0054","S3.0081",
+"S3.0050", "S3.0062", "S3.0075", "S3.0100"]
+
+julia> start=[27,  27,  27, 417, 417, 420, 420, 420, 420, 421, 400, 400, 400, 
+421, 400, 421, 397, 421, 424, 397, 421, 421, 397, 397, 421, 421, 397, 401, 397,
+42,  42,  42,  27, 27,  27,  27]
+
+julia> td ="/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+julia> @time MD2.filerun_thread( td, runs, start, 5000, 20, diffFlag=true)
+┌ Warning: Opening file with JLD2.MmapIO failed, falling back to IOStream
+└ @ JLD2 ~/.julia/packages/JLD2/nPYlZ/src/JLD2.jl:153
+ERROR: TaskFailedException
+
+nested task error: SystemError: opening file "/media/phil/Original/Users/phils
+/Documents/DSP/MD/Data/1980/S3.0029.0400.jld2": No such file or directory
+```
+
+Much output from above was redacted (as were the definition output), as
+it ended in error, but 31 `*.diff.txt` files were created that appeared
+to be complete. `s3.0029.diff.txt` only had the header line in it (19
+bytes long) so I deleted it.
+
+The problem was that the `R` function above found `S3.00295.0400.jld2`
+when searching for `S3.0029`. I should have wrapped `glob2rx()` around
+the `paste()` expression.
+
+```{r}
+#| eval: false
+lfn <- strsplit( sapply( drn, \(fn) last( list.files( datadir, 
+                                 glob2rx( paste(fn, "*.jld2", sep = "."))))),
+                  "[.]")
+(crn <- as.integer(sapply( seq_along( lfn), \(i) lfn[[i]][3]))) # current run number
+```
+
+This caused confusion between the runs and the starting run number. The
+run names are correct in `drn`. The execution number called for in the
+*julia* run were as follows:
+
+```{r}
+jrn <- c( 27,  27,  27, 417, 417, 420, 420, 420, 420, 421, 400, 400, 400, 421,
+          400, 421, 397, 421, 424, 397, 421, 421, 397, 397, 421, 421, 397, 401,
+          397,  42, 42,  42,  27, 27,  27,  27)
+```
+
+The difference (today) is as follows:
+
+```{r}
+#| eval: false
+difrn <- crn - jrn
+difrn[difrn != 20]
+drn[ difrn != 20 | is.na(difrn)] # the NA has to be handled specially.
+```
+
+```         
+[1] -23   0   0  NA   4   0
+[1] "S3.0029"  "S3.00295" "S3.00305" "S3b.0030" "S3.0030"  "S3b.0037"
+```
+
+These six files didn't get run. Some of the runs that were extended were
+duplicative of older runs too. This resulted in a number (70) of files
+of the form `S3.0027.0401(1).jld2`, where the `(1)` indicates that the
+file already existed. This is not a problem, but we didn't extend the
+runs. These files are deleted. The `NA` was caused by the `(1)` file
+showing up in the list returned by `list.files()`
+
+```{r}
+#| label: redo2
+#| eval: false
+drn2 <- c("S3.0029", "S3.00295", "S3.00305", "S3b.0030", "S3.0030", "S3b.0037")
+lfn2 <- strsplit( sapply( drn2, \(fn) last( list.files( datadir, 
+                           glob2rx( paste(fn, "*.jld2", sep = "."))))), "[.]")
+(crn2 <- as.integer(sapply( seq_along( lfn2), \(i) lfn2[[i]][3]))) # current run number
+```
+
+``` r
+[1] 377 400 400 437 404 401
+```
+
+``` julia
+phil@phil-XPS-8920:/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980$ julia --threads=auto
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.11.5 (2025-04-14)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org/ release
+|__/                   |
+
+julia> Threads.nthreads()
+8
+
+julia> cd("/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J")
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> runs = ["S3.0029", "S3.00295", "S3.00305", "S3b.0030", "S3.0030",
+"S3b.0037"]
+6-element Vector{String}:
+ "S3.0029"
+ "S3.00295"
+ "S3.00305"
+ "S3b.0030"
+ "S3.0030"
+ "S3b.0037"
+
+julia> td="/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+julia> start = [377, 400, 400, 437, 404, 401]
+6-element Vector{Int64}:
+ 377
+ 400
+ 400
+ 437
+ 404
+ 401
+
+julia> @time MD2.filerun_thread( td, runs, start, 5000, 20, diffFlag=true)
+ 28.490565 seconds (35.79 M allocations: 2.722 GiB, 2.71% gc time, 73 lock conflicts)
+```
+
+## Updating the MD2DF Database
+
+We have added executions to 70-odd runs, and the statistics of these
+need to be updated. The following code accomplishes this.
+
+```{r}
+#| label: MD2DF.J
+MD2DF.J <- MD2DFfile( "../MD2DF.J.RDS", datadir, "S3*.scalars.csv", df = MD2DF.I,
+                      verbose = TRUE)
+```
+
+``` r
+12095  files found.
+Processing  12095  files.
+S3\.0001 S3\.0002 S3\.0003 S3\.0004 S3\.0005 S3\.0006 S3\.0007 S3\.0008 
+S3\.0009 S3\.0010 S3\.0011 S3\.0012 S3\.0013 S3\.0014 S3\.0015 S3\.0016 
+S3\.0017 S3\.0018 S3\.0019 S3\.0020 S3\.0021 S3\.0022 S3\.0023 S3\.0024 
+S3\.0025 S3\.0026 S3\.00265 S3\.0027 S3\.00275 S3\.0028 S3\.00285 S3\.0029 
+S3\.00295 S3\.0030 S3\.00305 S3\.0031 S3\.0032 S3\.0033 S3\.0034 S3\.0035
+S3\.0036 S3\.0037 S3\.0038 S3\.0039 S3\.0040 S3\.0041 S3\.0042 S3\.0043 
+S3\.0044 S3\.0045 S3\.0046 S3\.0047 S3\.0048 S3\.0049 S3\.0050 S3\.0052 
+S3\.0054 S3\.0056 S3\.0058 S3\.0060 S3\.0062 S3\.0064 S3\.0066 S3\.0068 
+S3\.0070 S3\.0072 S3\.0075 S3\.0078 S3\.0081 S3\.0084 S3\.0087 S3\.0090 
+S3\.0093 S3\.0096 S3\.0099 S3\.0100 S3b\.0029 S3b\.0030 S3b\.0031 
+S3b\.0032 S3b\.0033 S3b\.0034 S3b\.0035 S3b\.0036 S3b\.0037  runs to process.
+```
+
+@fig-treg7 shows te full current data set.
+
+```{r}
+#| label: fig-treg7
+#| warning: false
+#| fig-cap: 'Full `S3` data set after diffusion updates.'
+
+S3DTb <- MD2DF.J[ series=="S3" | series=="S3b"]
+plotconfMD2( y="ke", df = S3DTb, 
+             linethresh = 200, xlab = "Total Energy per Particle", 
+             ylab = "Kinetic Energy per Particle") # sets up plot
+grid( col = "darkgray") # replot grid so it sits in foreground of range area
+#lines( slinex, sliney, lwd = 2) # Solid line
+lines( tlinex2, tliney, lwd = 2, col = 'red') # transition line
+text( x = tlinex2, y = tliney, labels = format( tlinex2, trim=TRUE, digits=4), 
+      pos = c( 3, 1), cex = 0.8)
+rpl <- recordPlot()
+png("treg7.png", width = 600, height = 300)
+replayPlot(rpl)
+dev.off()
+```
+
+@fig-treg7z zooms into the transition region.
+
+```{r}
+#| label: fig-treg7z
+plotconfMD2( y="ke",df = S3DTb[ TE.mean.rs %within% c( 0.135, 0.155),], 
+            linethresh = 200, xlab = "Total Energy per Particle", 
+            ylab = "Kinetic Energy per Particle")# sets up plot
+lines( tlinex2, tliney, lwd = 2, col = 'red') # transition line
+text( x = tlinex2, y = tliney, labels = format( tlinex2, trim=TRUE, digits=4), 
+      pos = c( 3, 1), cex = 0.8)
+rpl <- recordPlot()
+png("treg7z.png", width = 600, height = 300)
+replayPlot(rpl)
+dev.off()
+```
+
+## Reading in diffusion data
+
+We can find all of the diffusion files via the following expressions and
+function. (Note that when initially run, there all diffusion files did
+not exist. Re-running this script however will find all diffusion files
+in existence, and so will show updated results.)
+
+```{r}
+#| label: ddb
+#| warning: false
+# warnings are generated because the columns of the diff files have no names.
+
+(diff_files <- list.files( datadir, glob2rx( "*.diff.*")))
+
+read_diff <- function( datadir, runname) { # returns a data.table with diffusion data
+   filename <- list.files( datadir, runname,full.names = TRUE)
+   #print( filename)
+   dd <- data.table::fread( filename)
+   nrdd <- nrow( dd)
+   ddcols <- colnames( dd)
+   timecols <- ddcols[ seq.int( from=4, to=length( ddcols), by=3)]
+   dscols   <- ddcols[ seq.int( from=5, to=length( ddcols), by=3)]
+   dmxcols  <- ddcols[ seq.int( from=6, to=length( ddcols), by=3)]
+   dd[, row := 1:nrdd] # adds row number to show time sequence of executions
+   dd[, run := rep( runname, nrdd)] # put run name in each row.
+   reshape( dd, list( timecols, dscols, dmxcols),
+            v.names=c("Time", "D2", "Dmax"), timevar="group", idvar="row", 
+            drop=c("time","d^2", "max d^2"), direction="long")
+}
+
+# call on each element of diff_files, and bind into big data table
+ddb <- rbindlist( lapply( diff_files, function(fn) read_diff( datadir, fn)))
+head(ddb)
+```
+
+To get the mean displacement we must average by time and run. We will
+soon need to correlate the run with those in the main MD2 data table, so
+we need to drop the last nine characters of the file name.
+
+```{r}
+#| label: diffdata
+diffdata <- ddb[, .(d2mn = mean( D2), d2sd = sd( D2), maxD = max( Dmax)), 
+                by=.( Time, run)]
+# next line uses a regex to replace last 9 characters with nothing/
+diffdata$run <- gsub( '.{9}$', "", diffdata$run)
+head( diffdata, n=20)
+```
+
+## Analysis of Max Motion
+
+If the particles move near half the side distances, then the calculation
+may be in error. What is recorded is $r^2$, and the maximum of that
+quantity observed. Just as a reminder, our 256 particle system at a
+density of $1 / \pi$ has the system size given by
+$B_x = \frac{8 \sqrt{2 \pi}}{3^{1/4}}$ and $B_y = B_x\sqrt{3} / 2$ (so
+$B_x =$ `r 8 * sqrt( 2 * pi)/3^(1/4)` and $B_y =$
+`r (sqrt(3) / 2) * 8 * sqrt( 2 * pi)/3^(1/4)`). We can find the overall
+max observed and its source via the following:
+
+```{r}
+sqrt( mxd2 <- max( diffdata$maxD))
+diffdata[ which.max( diffdata$maxD == mxd2),]
+```
+
+That is a bigger than $B_y/2$
+(`r (sqrt(3) / 4) * 8 * sqrt( 2 * pi)/3^(1/4)`), although the vector is
+likely not aligned with either of the dimensions. @fig-allD2 shows all
+of the diffusion measurements on one graph.
+
+```{r}
+#| label: fig-allD2
+#| fig-cap: "All $r^2$ measurements from all runs.  Each of the 36 runs is given one of 6 'open' symbols (so the symbols are re-used). the red dashed line is $B_y/2$."
+plot( sqrt(maxD) ~ Time, data=diffdata, xlim = c(0, 50), 
+      pch = mod( as.integer( as.factor( diffdata$run)), 6))
+abline( h = (sqrt(3) / 4) * 8 * sqrt( 2 * pi)/3^(1/4), lty=2, col = 'darkred')
+```
+
+This begs for improvements to the diffusion measurement apparatus.
+
+## Diffusion Estimates
+
+Now we need to perform a linear regression on the data, and we need to
+determine if there really is no trend, if there is a linear trend, or if
+there is a curve to the trend. To do this, we'll do a linear regression
+with an intercept, a regression without an intercept (if there is
+diffusion, $D(t) = 0$), and a second degree polynomial regression. For
+each regression, we'll record the coefficients, the regression
+coefficient, and the f-value.
+
+First though, let's look at some of the data. @fig-exdifplt plots four
+diffusion lines.
+
+```{r}
+#| label: fig-exdifplt
+#| fig-cap: Mean estimated diffusion for four progressivly hotter runs.  `S3.0001` is the coldest run, and `S3.0081` is the hottest.
+wdd <- dcast( diffdata, Time ~ run, value.var = 'd2mn') # long-to-wide
+pl <- c('S3.0001', 'S3.0031', 'S3.0046', 'S3.0081')
+matplot( wdd$Time, wdd[, ..pl], pch=1:4, type="b", xlab = 'Time',
+         ylab=expression(r^2), panel.first=grid(), xlim=c(0, 50), 
+         main = 'Some Example Diffusion Plots')
+legend( x="topleft", pl, pch=1:4, col=1:4)
+```
+
+We need a function to do a few fits for us, and plot the results.
+Initially, I fit a line, a line without an intercept, a 2nd degree
+polynomial, and `I(Time^2)` (parabola without intercept). None of these
+were very helpful, and while the 2nd degree polynomial did appear to be
+somewhat more significant on the hot runs, the 2nd degree polynomial was
+*always* statistically significant, so the function below only fits the
+line with intercept.
+
+```{r}
+#| label: fitdiff
+fitdiff <- function( r, diffdata, plot=FALSE, verbose = FALSE) { 
+   # include the run ID in r as a string
+   dd <- diffdata[ r == run,]
+   # print( nrow(dd))
+   maxT <- max( dd$Time)
+   maxd <- max( dd$d2mn)
+   
+   #lm0 <- lm( d2mn ~ Time - 1, data = dd)
+   lm1 <- lm( d2mn ~ Time, data = dd)
+   #lm2 <- lm( d2mn ~ poly( Time, 2), data = dd)
+ 
+   if (plot) {
+      newT <- data.frame( Time =c( 0, dd$Time)) # Predict value at Time = 0
+      pred.w.plim <- predict( lm1, newT, interval = "prediction")
+      pred.w.clim <- predict( lm1, newT, interval = "confidence")
+      plot( d2mn ~ Time, data = dd, xlim = c( 0, maxT), ylim = c(0, maxd), 
+              main = r, xlab = 'Time', ylab = expression( r^2))
+      grid()
+      matplot(newT, cbind( pred.w.clim, pred.w.plim[, -1]), 
+              col = c( 1, 2, 2, 3, 3), lty = c(1,2,2,3,3), type = "l", 
+              add = TRUE)
+      #abline( lm1)
+      abline( h = mean( dd$d2mn), lty = 4, col = 4)
+      legend( x = 'bottomright',  pch = c(1, NA, NA, NA, NA), 
+              lty = c(0, 1, 2, 3, 4), col = c( 1, 1, 2, 3, 4),
+              legend = c("Measurements", 'Regression Line', "Conf. Interval",                            'Pred. Interval', 'Mean'))
+   }
+   if (verbose) {
+      #print( summary( lm0))
+      print( summary( lm1))
+      #print( summary( lm2))
+   }
+   nr <- nrow( dd)
+   mod <- summary( lm1)
+   coeff <- unname( mod$coefficients[ "Time", c( 'Estimate', 'Std. Error')])
+   t <- mod$fstatistic
+   Fpvalue <-  stats::pf( t['value'], t['numdf'], t['dendf'], lower.tail=FALSE)
+   data.table::data.table( run = r, nrd = nr, Estimated = coeff[1], 
+      Std.Errord = coeff[2], r.squaredd = mod$r.squared, 
+      Fvald =  unname( t['value']), Fpvalued = unname( Fpvalue), 
+      dfd = t['dendf'])
+}
+```
+
+Each temperature region has a particular character. Figures [-@fig-df01]
+through [-@fig-df46] show a cold, hot and transition diffusion
+estimates. The first is the coldest run and shows no diffusion.
+
+```{r}
+#| label: fig-df01
+fitdiff( "S3.0001", diffdata = diffdata, plot = TRUE, verbose = TRUE)
+```
+
+The hot run shows a possible parabolic response.
+
+```{r}
+#| label: fig-df81
+fitdiff( "S3.0081", diffdata = diffdata, plot = TRUE, verbose = TRUE)
+```
+
+The next two are around and above the transition region. Both show
+highly linear response with intercepts near, but statistically
+significant from, the origin.
+
+```{r}
+#| label: fig-df31
+fitdiff( "S3.0031", diffdata = diffdata, plot = TRUE, verbose = TRUE)
+```
+
+```{r}
+#| label: fig-df46
+fitdiff( "S3.0046", diffdata = diffdata, plot = TRUE, verbose = TRUE)
+```
+
+Lastly, we'll look at the way the standard deviation of the diffusion
+estimates change over the length of time estimated in @fig-diffsd.
+
+```{r}
+#| label: fig-diffsd
+#| fig-cap: Standard deviation as a percent of the diffusion estimate plotted agains the time duration over which the diffuaion was estimated.
+setkeyv( diffdata, c("run", "Time"))
+plot(100 * d2sd / d2mn ~ Time, data = diffdata[ run %in% pl,], 
+     pch = as.integer( factor( run)), col = as.integer( factor( run)), 
+     ylab = "SD as %")
+legend( x="topleft", legend = pl, col = 1: length(pl), pch = 1:length(pl))
+grid()
+```
+
+This is good news. `S3.0031` is close to the transition region so it
+might be expected to have a variance higher than the other runs. That
+they are so tightly grouped fits the theory (the diffusion will be
+proportional to temperature, and the variance is also proportional to
+temperature).
+
+I looked at multiple types of regression (with and without intercept,
+second degree polynomial, and simple $T^2$ with no intercept, but *all*
+worked pretty well always, so I stuck with simple linear regression
+reporting the slope). `fitdiff()` will do this for us, with the
+`diffdata` data table passed in as a second parameter in `lapply()`.
+
+```{r}
+#| label: S3DTdiff
+difflist <- unique( diffdata$run)
+diffproc <- data.table::rbindlist( lapply( difflist, fitdiff, diffdata))
+S3DTdiff <- diffproc[ S3DTb, on = 'run']
+```
+
+The data table `S3DTdiff` now has the diffusion estimates (which is just
+the slope of the regression line) added to the full data table.
+@fig-treg8z shows the transition region with points at which diffusion
+was measured highlighted.
+
+```{r}
+#| label: fig-treg8z
+#| fig-cap: "@fig-treg7z with the points on which diffusion was estimated over-plotted with green triangles (which is pretty much all of them)."
+plotconfMD2( y = "ke", df = S3DTb[ TE.mean.rs %within% c( 0.135, 0.155),], 
+            linethresh = 200, xlab = "Total Energy per Particle", 
+            ylab = "Kinetic Energy per Particle")# sets up plot
+points( ke.mean.rs ~ TE.mean.rs, data = S3DTdiff[ !is.na( nrd),], pch = 0, 
+        col = "green")
+lines( tlinex2, tliney, lwd = 2, col = 'red') # transition line
+text( x = tlinex2, y = tliney, labels = format( tlinex2, trim=TRUE, digits=4), 
+      pos = c( 3, 1), cex = 0.8)
+rpl <- recordPlot()
+png("tregz8.png", width = 600, height = 300)
+replayPlot(rpl)
+dev.off()
+```
+
+@fig-fulldiffplot shows the measured diffusion.
+
+```{r}
+#| label: fig-fulldiffplot
+#| fig-cap: THe measured diffusion as a function of temperature.
+plot( Estimated ~ ke.mean.rs, data = S3DTdiff[ !is.na( nrd),], xlab = 'ke', 
+      ylab = expression( r^2), main =  "Diffusion vs. Temperature")
+grid()
+```
+
+@fig-diffplotz zooms into the jump, clearly showing that some points may
+not be in equilibrium.
+
+```{r}
+#| label: fig-diffplotz
+#| fig-cap: Zoom into the transition region of @fig-fulldiffplot.
+
+setkey( S3DTdiff, ke.mean.rs)
+plot( Estimated ~ ke.mean.rs, data = S3DTdiff[ !is.na( nrd),], xlab = 'ke', 
+      ylab = expression( r^2), main =  "Diffusion vs. Temperature",  typ = 'b',
+      xlim = c(0.01, 0.02), ylim = c(0.0, 0.05))
+grid()
+```
+
+The diffusion starts bouncing around, but we do not see a steady state
+approaching the transition. We need more points. As of 7 May 2025, here
+is the state shown in @tbl-S3DTdiff.
+
+```{r}
+#| label: tbl-S3DTdiff
+#| tbl-cap: Points with temperature between 0.01 and 0.013.
+knitr::kable(S3DTdiff[ ke.mean.rs %within% c(0.010, 0.013), 
+                       .(run, valid, ke.mean.rs, TE.mean.rs, nrd)])
+```
+
+On 7 May, the following data needed to be added to the diffusion record.
+
+```{r}
+#| label: redo3
+#| eval: true
+(drn3 <- c("S3.0020", "S3.0021", "S3.0022", "S3.0023", "S3.0024", "S3.0025"))
+lfn3 <- strsplit( sapply( drn3, \(fn) last( list.files( datadir, 
+                           glob2rx( paste(fn, "*.jld2", sep = "."))))), "[.]")
+(crn3 <- as.integer(sapply( seq_along( lfn3), \(i) lfn3[[i]][3]))) # current run number
+```
+
+Here is the *julia* run.
+
+``` r
+[1] "S3.0020" "S3.0021" "S3.0022" "S3.0023" "S3.0024" "S3.0025"
+[1] 7 7 7 7 7 7
+```
+
+``` julia
+phil@phil-XPS-8920:~$ julia --threads=auto
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.11.5 (2025-04-14)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org/ release
+|__/                   |
+
+julia> cd("/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J")
+
+julia> td="/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> runs = ["S3.0020", "S3.0021", "S3.0022", "S3.0023", "S3.0024", "S3.0025"]
+
+6-element Vector{String}:
+ "S3.0020"
+ "S3.0021"
+ "S3.0022"
+ "S3.0023"
+ "S3.0024"
+ "S3.0025"
+
+julia> @time MD2.filerun_thread( td, runs, 7, 5000, 20, diffFlag=true)
+ 31.562082 seconds (52.85 M allocations: 3.559 GiB, 2.84% gc time, 83 lock conflicts, 162.38% compilation time: 2% of which was recompilation)
+```
+
+Now we need to find just these `*.diff.txt` files and incorporate them
+into the database. We added 20 executions to runs which previously only
+had seven. The first step is to create the next MD2DF database.
+
+```{r}
+#| label: MD2DF.K
+MD2DF.K <- MD2DFfile( "../MD2DF.K.RDS", datadir, "S3*.scalars.csv", 
+                      df = MD2DF.J, verbose = TRUE)
+```
+
+``` r
+12215  files found.
+Processing  12215  files.
+S3\.0001 S3\.0002 S3\.0003 S3\.0004 S3\.0005 S3\.0006 S3\.0007
+S3\.0008 S3\.0009 S3\.0010 S3\.0011 S3\.0012 S3\.0013 S3\.0014
+S3\.0015 S3\.0016 S3\.0017 S3\.0018 S3\.0019 S3\.0020 S3\.0021
+S3\.0022 S3\.0023 S3\.0024 S3\.0025 S3\.0026 S3\.00265 S3\.0027
+S3\.00275 S3\.0028 S3\.00285 S3\.0029 S3\.00295 S3\.0030 S3\.00305
+S3\.0031 S3\.0032 S3\.0033 S3\.0034 S3\.0035 S3\.0036 S3\.0037
+S3\.0038 S3\.0039 S3\.0040 S3\.0041 S3\.0042 S3\.0043 S3\.0044
+S3\.0045 S3\.0046 S3\.0047 S3\.0048 S3\.0049 S3\.0050 S3\.0052
+S3\.0054 S3\.0056 S3\.0058 S3\.0060 S3\.0062 S3\.0064 S3\.0066
+S3\.0068 S3\.0070 S3\.0072 S3\.0075 S3\.0078 S3\.0081 S3\.0084
+S3\.0087 S3\.0090 S3\.0093 S3\.0096 S3\.0099 S3\.0100 S3b\.0029
+S3b\.0030 S3b\.0031 S3b\.0032 S3b\.0033 S3b\.0034 S3b\.0035 
+S3b\.0036 S3b\.0037  runs to process. 
+```
+
+The following code will create the new record.
+
+```{r}
+#| label: diffdata2
+#| warning: false
+# warnings will be generated.
+(diff_files2 <- paste( drn3, ".diff.txt", sep="")) # names of all diff files
+ddb2 <- rbindlist( lapply( diff_files2, function(fn) read_diff( datadir, fn)))
+# ddb2 has the full set of observations.
+head(ddb2)
+# diffdata2 holds the mean 
+diffdata2 <- ddb2[, .(d2mn = mean(D2), d2sd = sd(D2), maxD = max(Dmax)), 
+                  by = .( Time, run)]
+# next line uses a regex to replace last 9 characters with nothing
+diffdata2$run <- gsub( '.{9}$', "", diffdata2$run)
+head( diffdata2, n=20)
+difflist2 <- unique( diffdata2$run)
+diffproc2 <- data.table::rbindlist( lapply( difflist2, fitdiff, diffdata2))
+S3DTdiff2  <- S3DTdiff[ diffproc2, `:=`( 
+      nrd = i.nrd, Estimated = i.Estimated, Std.Errord = i.Std.Errord, 
+      r.squaredd = i.r.squaredd, Fvald = i.Fvald, Fpvalued = i.Fpvalued, 
+      dfd = i.dfd), on="run"]
+```
+
+Finally, add the diffusion data to the `MD2DF` data table and save.
+
+```{r}
+MD2DF.L <- merge(MD2DF.K, S3DTdiff2[, .(run, nrd, Estimated, Std.Errord, 
+      r.squaredd, Fvald, Fpvalued, dfd)], by = "run", all = TRUE)
+saveRDS( MD2DF.L, file = "../MD2DF.L.RDS")
+```
+
+@fig-treg9z plots that new data.
+
+```{r}
+#| label: fig-treg9z
+#| fig.cap: "Zoom into transition region showing the points at which diffusion was measured with green squares."
+plotconfMD2( y = "ke", df = S3DTdiff2[ TE.mean.rs %within% c( 0.135, 0.155),], 
+            linethresh = 200, xlab = "Total Energy per Particle", 
+            ylab = "Kinetic Energy per Particle")# sets up plot
+points( ke.mean.rs ~ TE.mean.rs, data = S3DTdiff2[ !is.na( nrd),], pch = 0, 
+        col = "green")
+lines( tlinex2, tliney, lwd = 2, col = 'red') # transition line
+text( x = tlinex2, y = tliney, labels = format( tlinex2, trim=TRUE, digits=4), 
+      pos = c( 3, 1), cex = 0.8)
+rpl <- recordPlot()
+png("treg9z.png", width = 600, height = 300)
+replayPlot(rpl)
+dev.off()
+```
+
+@fig-diffplot2z shows the complete diffusion data.
+
+```{r}
+#| label: fig-diffplot2z
+#| fig-cap: "Updated diffusion plot, confidence intervals (the standard error of the estimate) shown in light blue."
+setkey( S3DTdiff2, ke.mean.rs)
+with( S3DTdiff2[ !is.na( nrd),], {
+  plotconf( y = Estimated, x = ke.mean.rs, sd = Std.Errord, xlab = 'ke', 
+      ylab = "4D", main =  "Diffusion vs. Temperature", Fval = Fval,
+      xlim = c(0.012,0.014), ylim = c(0.0, 0.05))
+})
+grid()
+```
+
+We can compute numerical derivatives of this data. The four-point
+derivative (lag = 3) fails (@fig-dDdTz).
+
+```{r}
+#| label: fig-dDdTz
+#| fig-cap: "Zoom into the numerical derivative at three different lags. The lag 3 return `NA` for a number of points near the transition (a result of ill-conditioned regressions)."
+#setkey(S3DT, TE.mean.rs)
+with( S3DTdiff2[ !is.na( nrd),], {
+   dDdT <- dydx( Estimated, ke.mean.rs)
+   plot( x = dDdT$xm, y = dDdT$dd, panel.first = grid(), xlim=c(0.0120,0.0140),
+         xlab="ke", ylab = "d(4D)/dT", typ = 'b', main = "d(4D)/dT, three lags.",
+         ylim = c( -200, 200))
+   dDdT2 <- dydx( Estimated, ke.mean.rs, lag = 2)
+   points( x = dDdT2$xm, y = dDdT2$dd, typ = 'b', col='red')
+   dDdT3 <- dydx( Estimated, ke.mean.rs, lag = 3)
+   points( x = dDdT3$xm, y = dDdT3$dd, typ = 'b', col='green')
+   legend( "topright", c("1", "2", "3"), pch=1, col=c('black','red','green'), 
+           title = "Lag")
+})
+```
+
+When the estimated $d r^2/ dT$ is below 0.01, the substance appears to
+be more-or-less solid. Zooming into the transition region, we can see a
+few poits that might appear to be starting to experience diffusion
+(@fig-diffplot2z2). In particular, the last three points look like they
+are increasing, and the standard error band excludes zero (meaning that
+zero diffusion is outside one standard deviation of the estimate).
+
+```{r}
+#| label: fig-diffplot2z2
+with( S3DTdiff2[ Estimated < 0.01,], {
+  plotconf( y = Estimated, x = ke.mean.rs, sd = Std.Errord, xlab = 'ke', 
+      ylab = "4D", main =  "Diffusion vs. Temperature", Fval = Fval,
+      #xlim = c(0.0,0.013), ylim = c(0.0, 0.0012))
+  )
+})
+abline( h = 0.0)
+grid( col='darkgrey')
+```
+
+@tbl-S3DTdiff2tr lists points in transition region with small estimates
+of $4D$.
+
+```{r}
+#| label: tbl-S3DTdiff2tr
+#| tbl-cap: "Diffusion estimates with temperature between 0.010 and 0.0135, and estimates of $4D$ (the `Estimated` column) between 0.0006 and 0.02."
+knitr::kable( S3DTdiff2[ !is.na( nrd) & (ke.mean.rs %within% c(0.010, 0.0135) & (Estimated %within% c(0.0006, 0.02))), 
+           .(run, ke.mean.rs, Estimated, Std.Errord, Fvald, Fpvalued) ])
+```
+
+So, it appears as though those last three points are not showing
+diffusion, even though they are hotter than other points clearly showing
+diffusion signs. Indeed, the P-value of the estimate shows that the
+diffusion estimates are time-correlated with high probability. @fig-FpvD
+shows the P-value of the regression against the estimated diffusion.
+
+```{r}
+#| label: fig-FpvD
+#| fig-cap: "Log-log plot of F-Pvalue of the regression (log-scale) against the absolute value of estimated diffusion (small diffusion values are sometimes slightly negative).  The P-value of all estimates such that $4D > 0.01$ are very small, indicating that the regressions are highly statistically significant."
+with( S3DTdiff2, {
+  plotconf( y = Fpvalued, x = abs(Estimated), xlab = '|4D|', 
+      ylab = "P(f)", main =  "P-Value of Regression vs. 4D", log='xy', 
+      panel.first = grid( col='darkgrey'))
+})
+
+```
+
+Let's look at `S3.0027` (@fig-df27). Definitely no diffusion happening
+here.
+
+```{r}
+#| label: fig-df27
+#| fig-cap: "Diffusion estimate for `S3.0027`."
+fitdiff( "S3.0027", diffdata = diffdata, plot = TRUE, verbose = TRUE)
+```
+
+Conversely, let's look at the coldest run which shows diffusion:
+`S3.00275` (@fig-df275).
+
+```{r}
+#| label: fig-df275
+#| fig-cap: "Diffusion estimate for `S3.00275`, the coldest run showing diffusion."
+#| # surpress the function output as it's not needed with verbose = TRUE.
+invisible( fitdiff( "S3.00275", diffdata = diffdata, plot = TRUE, 
+                    verbose = TRUE))
+```

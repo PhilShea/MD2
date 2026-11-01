@@ -1,0 +1,2005 @@
+---
+title: "S5 Finish"
+author: "Phil Shea"
+date: last-modified
+number-sections: true
+pdf-engine: xelatex
+format:
+  pdf:
+    fig-pos: 'H'
+    toc: true
+    toc-depth: 2
+#mainfont: cambria
+execute:
+  sanitize: false
+  freeze: auto
+crossref:
+  fig-title: '**Figure**'
+  fig-labels: arabic
+  title-delim: "**.**"
+    #cite-method: biblatex
+#mainfont: "Latin Modern Roman"
+bibliography: "../Melting in Two D.bib"
+link-citations: true
+monofont: "Courier"
+monofontoptions: 'Scale=0.8'
+editor_options:
+  markdown:
+    wrap: 72
+    references: 
+      location: block
+    canonical: true
+---
+
+```{r}
+#| label: init
+#| include: false
+#
+# NOTE: if the package has changed, it must be installed locally via:
+#
+# devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+# (for Windows)
+# or
+#
+# devtools::install("/home/phil/MD/MD2RP")
+# (for linux)
+#
+# You probably have to re-start R after this.
+#
+# *****************************************************
+require( MD2RP)
+require( parallel)
+require( pracma)
+require( data.table)
+require( knitr)
+require( lattice)
+require( JuliaCall)
+require( latex2exp)
+num_cores <- detectCores() - 1
+options(digits=5)
+"%within%" <- function( vector, range) # define convenience function.
+   (vector > range[ 1]) & (vector < range[ 2])
+
+td <- "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+MD2S5 <- readRDS( "../MD2S5.RDS") # read in current data for analysis 
+```
+
+# August 2026
+
+It is now 25 August 2026, and we have completed analysis of the existing
+`S5b` series including the $G_6$ behavior. It appears that we have
+*only* a first order transition. The transition is pegged by run
+`S5b.00123` and can be seen in @fig-TvE1 below.
+
+```{r}
+#| label: fig-TvE1
+#| fig-cap: Temperature vs total energy per particle. The red-dashed lines are the transition temperature (horizontal) and energy (verticle) of 0.01309 and 0.1441 respectively.
+
+(temp <- MD2S5[ dsmean >34 & dsmean < 36, 
+                .(run, dsmean, TE.mean.rs, ke.mean.rs)])
+TEtr <- temp$TE.mean.rs[1]
+ketr <- temp$ke.mean.rs[1]
+dsmtr <- temp$dsmean[1]
+plot( ke.mean.rs ~ TE.mean.rs, data = MD2S5, xlab = 'TE', ylab = 'T')
+grid()
+abline( v = TEtr, col = 'red', lty = 2)
+abline( h = ketr, col = 'red', lty = 2)
+```
+
+Other similar metric indicate the transition at a single temperature.
+Since all of these runs were initialized, we would like to do two things
+to complete series 5 (before moving on to larger systems).
+
+1.  Add more initializations near the transition energy, as there
+    appears to be a gap in energies.
+2.  Perform heating and cooling as was done previously (four heating and
+    four cooling).
+
+In both of these, we will perform the $G_6$ analysis and will expand the
+diffusion measurement, doubling the time over which diffusion is
+measured.
+
+## Nomenclature
+
+The following is the nomenclature of equations:
+
+- $T$ is generic temperature
+- $E_t$ is total energy
+- $E_k$ is kinetic energy
+- $\rho$ is density (almost always $\rho = 1/\pi$)
+- $U$ is potential energy, and $U_0$ is the potential energy of the
+  system in the rest position.
+- $\tau$ is the unit of time.
+- $\Delta t$ is the time step (in units of $\tau$)
+
+## Housekeeping
+
+At the end of the last analysis
+[2026-Init](Archived%20Notes/2026-Init.pdf) we added a number of data
+item to the `data.table` named `MD2S5`. This contained only the `S5b`
+runs, but for consistency, we need to add it into the main data record.
+Recall that the full name we're using is `MD2DT.x.RDS`, where `x` is a
+generation label (`C` in this instance). The following will read that
+in.
+
+```{r}
+#| label: MD2DT.C.RDS
+# we'll only execute this by hand.
+MD2.C <- readRDS( "../MD2DT.C.RDS")
+```
+
+Now we need to merge the two data tables. `MD2S5` has 93 variables, 20
+more than `MD2.C`. We copy `MD2.C` into a new memory location named
+`MD2.D`, and the merge occurs in-place in `MD2.D`. After creating it, we
+save it. This will not evaluate in rendering, but is here as a record of
+what was done.
+
+```{r}
+#| label: MD2DT.D.RDS
+#| eval: false
+MD2.D <- copy( MD2.C) # deep copy
+setkey( MD2.D, run)
+setkey( MD2S5, run)
+MD2.D[ MD2S5, (names( MD2S5)) := mget( paste0( "i.", names( MD2S5)))]
+ncol( MD2.D)
+saveRDS( MD2.D, "../MD2DT.D.RDS")
+```
+
+```{r}
+#| label: saveMD2DT.D.RDS
+#| include: false
+# This is hidden in rendering, but MD2.D is read in again.
+MD2.D <- readRDS( "../MD2DT.D.RDS")
+```
+
+## Plot of all Data
+
+As we've done previously, let's plot key data items. First, we have to
+melt the data.
+
+```{r}
+#| label: melt1
+#  variables plotted across the row in order here.
+Srn <- MD2.D[ , .( run, Series = newSeries, # Series re-name
+                       #itype, 
+                       Temp = ke.mean.rs, # hseries, 
+                       # Values below are those plotted, hopefully in this order
+                       TE = TE.mean.rs, psiavg, Cv = 1 / (1 - 256 * rtv^2),
+                       Pressure = Pressure.mean.rs, psiabs = psiabs.mean.rs,
+                           rtv,
+                       D = Estimated / 4.0, dsmean, 
+                           rseRatio = pow.rse / exf.rse,
+                       LogFpD = ifelse( Estimated < 0.0, NA, 
+                                   # set lower limit, drop -D
+                                   log10( pmax( 1e-15, Fpvalued))))]
+# First select just the columns we're interested in
+
+id.var = c( "run", "Series", "TE") 
+melt1 <- melt( Srn, id.var = id.var, #direction = 'long', 
+                 variable.name = 'variable', variable.factor = TRUE,
+                 value.name = 'value') 
+# now each variable is its own table.
+```
+
+@fig-Transition1 shows the resultant plot. The pressure has a barely
+detectable bump, but note that everything moves at the transition
+energy. The data in the figure is as follows: from top to bottom, left
+to right, Temperature, Pressure, Diffusion, `LogFpD` is the common
+logarithm of the diffusion F-statistic probability value (the
+probability that the regression occurs randomly; note that many values
+are smaller than $10^{-15}$), `psiavg` is $|\langle \psi_6 \rangle|$
+(the magnitude of the complex average) and `psiabs` is
+$\langle |\psi_6| \rangle$ (the average of the magnitudes), `dsmean` is
+the mean number of dislocations (`S5b` only), `Cv` is the specific heat
+computed as $C_v = 1 / \left( 1 - N  \sigma_T^2 / T^2 \right)$, where
+$N$ is the number of particles (256) and $\sigma_T^2 / T^2$ is the
+relative temperature variance (`rtv`), plotted next, and finally
+`rseRatio`, which is the ratio of the $G_6$ power-law and exponential
+fits residual standard errors (the ratio being less than one means that
+the power-law fit was better, also `S5b` only).
+
+```{r}
+#| label: fig-Transition1
+#| fig-cap: Statistics around transition plotted against total energy per particle.   The vertical red dashed line is the transition energy of 0.1441. See the text for descriptions of the data.
+#| fig-height: 9
+#| fig-width: 6.5
+
+xlim <- c(0.0, 0.17)
+pltdata <- melt1[ TE %within% xlim,]
+gps <- length( unique( pltdata$Series))
+pchs <- rep_len( 0:6, length.out = gps)
+cols <- rep(  c("darkred", "darkgreen", "darkblue"), each = 7, 
+                  length.out = gps)
+xyplot(
+  value ~ TE | variable, 
+  data = pltdata,
+  groups = Series,      # <-- tell lattice to use Series as groups
+  subscripts = TRUE,
+  as.table = TRUE,
+  scales = list( y = list( relation = "free")),
+  xlab = "TE / particle",
+  main = "Key Statistics Around Transition",
+  par.settings = list( superpose.symbol = list( pch = pchs, col = cols)),
+  auto.key = list( columns = 3),   # <-- legend appears
+  panel = function(x, y, subscripts, groups, ...) 
+     {
+      panel.grid( h = -1, v = -1)
+      panel.superpose( x, y, subscripts = subscripts, groups = groups,
+                       panel.groups = function(x, y, ...) {
+                       panel.xyplot(x, y, ...)}, 
+                       ...)
+      panel.abline( v = TEtr, col = 'red', lty = 2)
+     } # end panel = function...
+)# end of xyplot( ...
+```
+
+# Adding to the Data
+
+Below we create new data by heating and cooling, and by making new
+initializations.
+
+## Filling the transition gap.
+
+Run `S5b.00123` appears to be in the middle of the transition, but there
+is a gap below it in both temperature and energy (see @tbl-TransRuns).
+
+```{r}
+#| label: tbl-TransRuns
+#| tbl-cap: Runs within $\pm0.0012\epsilon$ of transition energy of 0.1441 sorted by total energy. TE is total energy, "TEdelta" is the increment in total energy. T is the temperature, and "Tdelta" is the increment in temperature.
+setkey( MD2S5, TE.mean.rs)
+knitr::kable( MD2S5[ TE.mean.rs %within% (TEtr + .0012*c(-1, 1)), 
+       .( Run = run, TE = TE.mean.rs, TEdelta = TE.mean.rs - shift( TE.mean.rs), 
+          T = ke.mean.rs, Tdelta = ke.mean.rs - shift( ke.mean.rs))])
+```
+
+We can see that `S5b.00123` has a total energy that is 0.001 above
+`S5b.00118`, and almost that much (0.0008) below `S5b.00135`. The
+requested initialization temperature is the number in the run name (so
+`123` is passed to `runn()`, which divides by 10,000, so the requested
+temperature is 0.0123). This procedure works pretty well, although there
+is some variance in the result (@fig-tinit).
+
+```{r}
+#| label: fig-tinit
+#| fig-cap: Correlation of initialization temperature with final temperature. The black line is is the regression fit without an intercept. The red dashed lines are the transition temperature of 0.01309.
+tinitdt <- MD2S5[, .( tinit = strtoi( substr( run, 5, 9), base = 10L) / 10000, 
+                      temp = ke.mean.rs)]
+plot( temp ~ tinit, data = tinitdt, main = NULL, xlab = "T Init", 
+      ylab = "Final Avg. T")
+grid()
+tinitlm <- lm( temp ~ tinit -1, data = tinitdt )
+abline( tinitlm)
+abline( v = 123/10000, h = ketr, col = 'red', lty = 2)
+summary( tinitlm)
+```
+
+The summary shows that the resulting temperature is about 1.08 times the
+requested temperature. So the requested temperature of 0.0123 would
+result in a temperature of 0.0133. Conversely, to achieve a temperature
+of 0.01309, an initialization of 0.12127. Indeed, run `S5b.00121`
+thermalized to 0.013008. So, we will initialize and run five more
+systems all initialized as run `S5b.00121`. We will do this by
+identifying the runs with an alphanumeric ".a", ".b", and so on.
+Unfortunately, the `newruns()` function does not facilitate this, but
+`newruns()` doesn't do much, and we can execute the `for` loop in the
+*Julia* "REPL".
+
+```{julia}
+#| eval: false
+julia> datadir
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+julia> tlist = [121, 121, 121, 121, 121]
+5-element Vector{Int64}:
+ 121
+ 121
+ 121
+ 121
+ 121
+
+julia> sname = ["S5b.a", "S5b.b","S5b.c","S5b.d","S5b.e" ]
+5-element Vector{String}:
+ "S5b.a"
+ "S5b.b"
+ "S5b.c"
+ "S5b.d"
+ "S5b.e"
+
+julia> using FLoops
+
+julia> @time FLoops.@floop for i in 1:5
+       MD2.runn( datadir, tlist[i], sname[i], 1000, 50000, 40, T = Float32,
+                 tau=0.0177737)
+       end
+290.876429 seconds (590.86 M allocations: 18.921 GiB, 2.51% gc time, 
+   70 lock conflicts, 0.13% compilation time: 30% of which was recompilation)
+```
+
+Process the data to see if we closed the gap.
+
+```{r}
+#| label: MD2.E
+#| eval: false
+system.time( MD2.E <- MD2DFfile( "../MD2DT.E.RDS", td, "S5b.*.scalars.csv",
+                                 df = MD2.D, verbose = TRUE))
+```
+
+```{r}
+#| label: readMD2DT.E.RDS
+#| include: false
+# This is hidden in rendering, but MD2.D is read in again.
+MD2.E <- readRDS( "../MD2DT.E.RDS")
+```
+
+```         
+4384  files found.
+Processing  4384  files.
+S5b\.00010 S5b\.00015 S5b\.00020 S5b\.00025 S5b\.00030 S5b\.00035 S5b\.00040 S5b\.00045 S5b\.00050 S5b\.00055 S5b\.00060 S5b\.00061 S5b\.00062 S5b\.00063 S5b\.00064 S5b\.00065 S5b\.00066 S5b\.00067 S5b\.00068 S5b\.00069 S5b\.00070 S5b\.00071 S5b\.00072 S5b\.00073 S5b\.00074 S5b\.00075 S5b\.00076 S5b\.00077 S5b\.00078 S5b\.00079 S5b\.00080 S5b\.00081 S5b\.00082 S5b\.00083 S5b\.00084 S5b\.00085 S5b\.00086 S5b\.00087 S5b\.00088 S5b\.00089 S5b\.00090 S5b\.00091 S5b\.00092 S5b\.00093 S5b\.00094 S5b\.00095 S5b\.00096 S5b\.00097 S5b\.00098 S5b\.00099 S5b\.00100 S5b\.00101 S5b\.00102 S5b\.00103 S5b\.00104 S5b\.00105 S5b\.00106 S5b\.00107 S5b\.00108 S5b\.00109 S5b\.00110 S5b\.00111 S5b\.00112 S5b\.00113 S5b\.00114 S5b\.00115 S5b\.00116 S5b\.00117 S5b\.00118 S5b\.00119 S5b\.00120 S5b\.00121 S5b\.00122 S5b\.00123 S5b\.00124 S5b\.00125 S5b\.00126 S5b\.00127 S5b\.00128 S5b\.00129 S5b\.00130 S5b\.00131 S5b\.00132 S5b\.00133 S5b\.00134 S5b\.00135 S5b\.00136 S5b\.00137 S5b\.00138 S5b\.00139 S5b\.00140 S5b\.00145 S5b\.00150 S5b\.00155 S5b\.00160 S5b\.00165 S5b\.00170 S5b\.00175 S5b\.00180 S5b\.00185 S5b\.00190 S5b\.00195 S5b\.00200 S5b\.00205 S5b\.00210 S5b\.a00121 S5b\.b00121 S5b\.c00121 S5b\.d00121 S5b\.e00121  runs to process. 
+   user  system elapsed 
+  0.617   0.349 166.804 
+```
+
+The processing did not occur in parallel, and took almost 3 minutes.
+Nevertheless, below are the additional points.
+
+```{r}
+#| label: tbl-newinits
+#| tbl-cap: New initializations at 121, plus the original. TE is total energy, T is temperature, Steps is total steps. Note none of the runs are considered valid at over two million runs.
+setkey( MD2.E, series, TE.mean.rs)
+knitr::kable( MD2.E[ grepl( "^S5b.*121$", run), 
+                     .( Run = run, TE = TE.mean.rs, T = ke.mean.rs, 
+                        Steps = total.steps, valid)],
+              format.args = list(big.mark = ','))
+```
+
+```{r}
+#| label: fig-newfive
+#| fig.cap: Five new points in red. Red dashed lines are the transition temperature and energy (horizontal and vertical respectively). Blue dashed line is the requested initilaization temperature.
+with( MD2.E[ series == "S5b" & 
+                    (TE.mean.rs %within% (c( -1, 1) * 0.005 + TEtr)),
+                    .( run, ke.mean.rs, TE.mean.rs, 
+                       newr = !grepl( "^S5b.00", run))], {
+   color = ifelse( newr, 'red', 'black')
+   plot( y = ke.mean.rs, x = TE.mean.rs, panel.first = grid(), col = color, 
+         xlab = "Energy per Particle", ylab = "Temp.")
+   abline( v = TEtr, col = 'red', lty = 2)
+   abline( h = ketr, col = 'red', lty = 2)
+   abline( h = 0.0121, col = 'blue', lty = 2)
+})
+```
+
+The system is clearly resistant to creating energies in the gap ( 0.1431
+to 0.144). We will wait to create diffusion and $G_6$ estimates.
+
+## Heating and Cooling
+
+Following [HeatCool.pdf](Archived%20Notes/HeatCool.pdf)\] we set up four
+heating and four cooling from series `S5b`. We ran the four coldest and
+four hottest files.
+
+```{r}
+#| label: tbl-eighthc
+#| tbl-cap: Temperatures, total energy, and valid status for the four coldest and hotest runs.
+S5b <- MD2.D[ series == 'S5b', ] # we'll need this later
+EndRuns <- S5b[ c(1:4, last(1:nrow(S5b), 4)),]
+knitr::kable( EndRuns[, # 1st four, last four
+                   .( run, T = ke.mean.rs, TE = TE.mean.rs, valid)])
+```
+
+We need to know the last file produced for all of these, and we can get
+a hint via the following:
+
+```{r}
+ substring( S5b[ c(1:4, last(1:nrow(S5b), 4)), lrfdt.file], 61)
+```
+
+So all the runs completed with 30 files, meaning that the `...0031.jld`
+file would be the last saved system state. Referring back to [2026
+Update.pdf](Archived%20Notes/2026%20Update.pdf), we see that
+$\beta = 0.00001 = 10^{-5}$. We showed that the approximate increase in
+total energy is given by $E_t \approx E_{t,0} + 2L\beta E_{k,0}$, where
+the additional subscript of $0$ indicates step zero of the
+heating/cooling. @fig-diffTE shows the `S5b` energy steps.
+
+```{r}
+#| label: fig-diffTE
+#| fig-cap: Log plot of total energy step between samples, plotted against total energy.  The red dashed vertical line is the the transition energy, and the blue dashed horizontal line is the mean total energy step of $4.39 \times 10^{-4}$.
+setkey( S5b, TE.mean.rs)
+plot( y = diff(S5b$TE.mean.rs), x = last( S5b$TE.mean.rs, -1), log = 'y',
+      panel.first = grid(), xlab = 'Total Energy', ylab = 'Energy Step')
+abline( v = TEtr, col = 'red', lty = 2)
+abline( h = mean(diff(S5b$TE.mean.rs)), col = 'blue', lty = 2)
+```
+
+So we'll use the $10^{-5}$, at the high temperature, but we'll double
+that for heating at the lower temperatures. As we get into the
+transition region, we'll decrease the heating $\beta$.
+
+### Getting Thermalized Files
+
+We'll start by following the prior procedure of executing 30k steps.
+
+```{julia}
+#| label: juliah1
+#| eval: false
+julia> snames = ["S5b.00010.0031", "S5b.00015.0031", "S5b.00020.0031",
+      "S5b.00025.0031", "S5b.00195.0031", "S5b.00200.0031", "S5b.00205.0031",
+      "S5b.00210.0031"]
+8-element Vector{String}:
+ "S5b.00010.0031"
+ "S5b.00015.0031"
+ "S5b.00020.0031"
+ "S5b.00025.0031"
+ "S5b.00195.0031"
+ "S5b.00200.0031"
+ "S5b.00205.0031"
+ "S5b.00210.0031"
+
+julia> beta = 1e-5 * [2, 2, 2, 2, -1, -1, -1, -1]
+8-element Vector{Float64}:
+  2.0e-5
+  2.0e-5
+  2.0e-5
+  2.0e-5
+ -1.0e-5
+ -1.0e-5
+ -1.0e-5
+ -1.0e-5
+
+julia> @time MD2.heatcool( datadir, snames, Beta = beta)
+ 17.681470 seconds (14.97 M allocations: 713.384 MiB, 30.26% gc time, 
+   142 lock conflicts, 33.02% compilation time: <1% of which was recompilation)
+```
+
+By default, `heatcool()` will execute a heating run, and then run six
+5,000 step thermalization executions. We then need to process these and
+see if they have completely thermalized. The below code processes the
+new files.
+
+```{r}
+#| label: MD2.E2
+#| eval: false
+MD2.E2 <- MD2DFfile( "../MD2DT.E2.RDS", td, "S5b.*h01*.csv", df = MD2.E,
+                     verbose = TRUE)
+```
+
+```{r}
+#| include: false
+# This is hidden in rendering, but MD2.D is read in again.
+MD2.E2 <- readRDS( "../MD2DT.E2.RDS")
+```
+
+And we can see the results of the process in @tbl-hc1 below:
+
+```{r}
+#| label: tbl-hc1
+#| tbl-cap: First heating session results.  Two runs are not at equilibrium.
+knitr::kable( MD2.E2[ grepl( "S5b", run) & grepl( glob2rx('*h01*'), run), 
+                      .( run, valid, T = ke.mean.rs, TE = TE.mean.rs, 
+                         Steps = total.steps)],
+              format.args = list(big.mark = ','))
+```
+
+Two of the runs (`S5b.00200h01` and `S5b.00205h01`) were not considered
+valid yet. All of the runs had roughly the expected change of
+temperature and total energy. The two runs were extended by hand.
+
+```{julia}
+#| eval: false
+julia> snames2 = ["S5b.00200h01", "S5b.00205h01"]
+2-element Vector{String}:
+ "S5b.00200h01"
+ "S5b.00205h01"
+
+julia> @time FLoops.@floop for i in snames2 
+   MD2.extendrun( datadir, i, 6, execs = 6) end
+  6.291828 seconds (4.28 M allocations: 197.805 MiB, 2.69% gc time, 
+                    11 lock conflicts, 3.32% compilation time)
+```
+
+This processes the files resulting in @tbl-hc1b.
+
+```{r}
+#| label: MD2.E3
+#| eval: false
+MD2.E3 <- MD2DFfile( "../MD2DT.E3.RDS", td, "S5b.*h01*.csv", df = MD2.E2,
+                     verbose = TRUE)
+```
+
+```{r}
+#| include: false
+# This is hidden in rendering, but MD2.D is read in again.
+MD2.E3 <- readRDS( "../MD2DT.E3.RDS")
+```
+
+```{r}
+#| label: tbl-hc1b
+knitr::kable( MD2.E3[ grepl( "S5b", run) & grepl( glob2rx('*h01*'), run), 
+                      .( run, valid, T = ke.mean.rs, Et = TE.mean.rs, 
+                         Steps = total.steps)],
+              format.args = list(big.mark = ','))
+```
+
+So one of the two is now valid. Let's look at the one which is not
+(@fig-200h01)
+
+```{r}
+#| label: fig-200h01
+#| fig-cap: Momentum (`M^2`), kinetic, potential, and total energy (`ke`, `pe`, `TE`), pressure, real and imaginary components of $\psi_6$ (`Rpsi` & `Impsi`) and $|\psi_6|$ (`psi`).
+S5b.200h01 <-combineruns(td, "S5b", "00200h01")
+plotMD2( S5b.200h01$rundt, dt = 0.0177737)
+```
+
+The momentum looks worrisome. It's relative range though is small:
+`r diff( range( S5b.200h01$rundt$TE)) / mean( S5b.200h01$rundt$TE)` and
+this is about 500 times the `Float32` epsilon (computed in *julia* via
+`1.20522e-4 / (2 * eps( Float32))` yielding 505.51). Extended the run
+again (below).
+
+```{r}
+#| include: false
+rm( S5b.200h01)
+```
+
+```{julia}
+#| eval: false
+julia> @time MD2.extendrun( datadir, "S5b.00200h01", 12, steps = 10000, 
+                            execs = 12)
+ 15.308360 seconds (7.06 M allocations: 271.711 MiB, 0.27% gc time, 
+                    0.02% compilation time: 100% of which was recompilation)
+120000
+
+```
+
+The `extendrun()` routine returns `120000` which is the number of steps
+run in this execution series. @tbl-hc1c shows that all runs are now in
+equilibrium.
+
+```{r}
+#| label: MD2.E4
+#| eval: false
+MD2.E4 <- MD2DFfile( "../MD2DT.E4.RDS", td, "S5b.*h01*.csv", df = MD2.E3,
+                     verbose = TRUE)
+```
+
+```{r}
+#| include: false
+# This is hidden in rendering, but MD2.D is read in again.
+MD2.E4 <- readRDS( "../MD2DT.E4.RDS")
+```
+
+```{r}
+#| label: tbl-hc1c
+#| tbl-cap: Final disposition of the new runs.
+knitr::kable( MD2.E4[ grepl( "S5b", run) & grepl( glob2rx('*h01*'), run), 
+                      .( run, valid, T = ke.mean.rs, Et = TE.mean.rs, 
+                         Steps = total.steps)],
+              format.args = list(big.mark = ','))
+```
+
+### Diffusion and $G_6$
+
+So now all of of the runs are validly thermalized. The next step is to
+perform diffusion and $G_6$ measurements. These measurements will add
+many steps to the runs, so further heating and cooling will be done
+after diffusion and $G_6$ measurements. We would like to double the
+diffusion estimate time over that previously used. The previous `S5`
+runs estimated diffusion over 5,000 steps (diffusion is estimated over
+an execution; repeated executions provides data for averages), so we
+will now use 10,000 steps. We had previously used 20 executions, so the
+diffusion was an average of 20 diffusion curves.
+
+The $G_6$ measurement is performed as an independent measurement over
+`g6skips` skip cycles, and is accumulated between executions, with the
+final measurement being written after the final execution. We wanted to
+at least mimic @Keim2007 who averaged over 70 statistically independent
+configurations. Previous work (see
+[SpectralAnalysis.pdf](Archived%20Notes/SpectralAnalysis.pdf)) on
+`S5b.00150` indicated that 99% of the spectral energy pf the temperature
+data was contained within frequencies below $0.72/\tau$. This is a
+period of `r 1 / 0.72`, so at a sample rate of 0.0177737, that equates
+to `r (1 / 0.72) / 0.0177737` samples (meaning `gskips > 2`). If we
+stick to the diffusion measurement of 10,000 steps with `gskips = 20`
+and `skip = 50`, each execution would result in 10 $G_6$ estimates, and
+20 executions would give us `r 20 * 10` $G_6$ estimates.
+
+We need to get a list of the new heat runs. To these we want to add the
+newly initialized runs with energy 121 (see @tbl-newinits). The code
+below will generate the data.
+
+```{r}
+drn <- MD2.E4[ series == "S5b" & 
+                  (grepl( "^.*h", run) | grepl( "[a-e]00121", run)), run] 
+cat( '["', # create runs string
+      paste( drn, collapse = '", "'), '"] \n', sep = "")
+# Next line searches td for each run, grabs last, and extracts execution number
+lfn <- strsplit( sapply( drn, \(fn) last( list.files( td,
+            paste(fn, "*.jld2", sep = ".")))), "[.]")
+as.integer( sapply( seq_along( lfn), \(i) lfn[[i]][3]))
+```
+
+Here is the *Julia* execution. We copy the run names from above, and
+manually add the execution numbers.
+
+```{julia}
+#| label: juliaDg61
+#| eval: false
+julia> snames3 = ["S5b.00010h01", "S5b.00015h01", "S5b.00020h01", 
+                  "S5b.00025h01", "S5b.00195h01", "S5b.00200h01", 
+                  "S5b.00205h01", "S5b.00210h01", "S5b.a00121", "S5b.b00121",
+                  "S5b.c00121", "S5b.d00121", "S5b.e00121"] 
+13-element Vector{String}:
+ "S5b.00010h01"
+ "S5b.00015h01"
+ "S5b.00020h01"
+ "S5b.00025h01"
+ "S5b.00195h01"
+ "S5b.00200h01"
+ "S5b.00205h01"
+ "S5b.00210h01"
+ "S5b.a00121"
+ "S5b.b00121"
+ "S5b.c00121"
+ "S5b.d00121"
+ "S5b.e00121"
+
+julia> runs = [6,  6,  6,  6,  6, 24, 12,  6, 41, 41, 41, 41, 41]
+13-element Vector{Int64}:
+  6
+  6
+  6
+  6
+  6
+ 24
+ 12
+  6
+ 41
+ 41
+ 41
+ 41
+ 41
+
+julia> @time MD2.filerun_floop( datadir, snames3, runs, 10000, 20, 
+                                diffFlag = true, deltat = 10, g6flag = true,
+                                g6skips = 20)
+Dislocation stats: (count = 200, mean = 0.0, std = 0.0, min = 0.0, max = 0.0)
+nrm = 947.6176290926662
+ceil((4 * Ng * dr) / a) = 29.0
+(lastlpeaks, lpeaks) = (18, 18)
+Saving g6 data to /media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980/
+   S5b.00010h01.g6.csv
+┌ Warning: Skipped line arg green.
+└ @ Plots ~/.julia/packages/Plots/8ZnR3/src/args.jl:1111
+┌ Warning: Invalid negative or zero value 0.0 found at series index 1 for 
+log10 based yscale
+└ @ Plots ~/.julia/packages/Plots/8ZnR3/src/utils.jl:105
+Dislocation stats: (count = 200, mean = 17.595, std = 8.229190292144278, 
+                    min = 2.0, max = 40.0)
+nrm = 947.6176290926662
+ceil((4 * Ng * dr) / a) = 29.0
+(lastlpeaks, lpeaks) = (12, 12)
+Saving g6 data to /media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980/
+   S5b.e00121.g6.csv
+
+ ⋮
+
+```
+
+This worked for a while, but then `GKS: could not load glyph: 20` errors
+started occurring, followed by a `TaskFailedException`. This was likely
+caused by the plotting, which obviously should be turned off for
+parallel runs. It look like all 13 `g6.csv` and `diff.txt` files were
+created though. First, update the main data table.
+
+```{r}
+#| label: MD2.E5
+#| eval: false
+MD2.E5 <- MD2DFfile( "../MD2DT.E5.RDS", td, "S5b.*.csv", df = MD2.E4,
+                     verbose = TRUE, clusters = 1)
+```
+
+```{r}
+#| include: false
+# This is hidden in rendering, but MD2.E5 is read in again.
+MD2.E5 <- readRDS( "../MD2DT.E5.RDS")
+```
+
+Initially had some difficulty, as prior work left files with names like
+`S5b.00010apd.csv` in the data directory, and this broke the
+`createdf()` process. Cleaned these up, and the process was run single
+threaded, which took some time.
+
+At this time (2 September 2026) the procedures `g6proc()`,
+`findpeaks()`, and both `trifit()` and `trifit2()` were copied from
+[2026 Init.qmd](%5B2026%20Init.qmd) and into the `MD2RP` project. No
+test or example files were created.
+
+```{r}
+#| label: fig-g6dataa121
+#| fig-cap: $G_6$ plot fot `S5b.a00121`.
+g6dataa121 <- g6proc( td, MD2.E5, "S5b.a00121", ft = 1.5, plotflag = TRUE)
+```
+
+The runs are still stored in the symbol `drn`, so we can do the
+following:
+
+```{r}
+#| label: MD2.E6
+g6dt <- data.table()
+system.time( for( i in drn) {
+   g6data <- g6proc( td, MD2.E5, i, trifitter = trifit2, ft = 1.5)
+   g6dt <- rbind( g6dt, g6data$newrow)
+})
+setkey( MD2.E5, run)
+setkey( g6dt, run)
+MD2.E6 <- MD2.E5[ g6dt, (names( g6dt)) := mget( paste0( "i.", names( g6dt)))]
+saveRDS( MD2.E6, "../MD2DT.E6.RDS")
+```
+
+We can see the newly added data in @tbl-newg6.
+
+```{r}
+#| label: tbl-newg6
+#| echo: false
+#| tbl-cap: A subset of the newly added $G_6$ statistics.
+knitr::kable(MD2.E6[ series == "S5b" & 
+                  (grepl( "^.*h", run) | grepl( "[a-e]00121", run)), 
+                  .(run, dsmean, lin.rse, pow.rse, exf.rse)])
+```
+
+Next we need to process the diffusion data. Here it is done by hand,
+with the functions `read_diff()` and `fitdiff()` added to `MD2RP`.
+
+```{r}
+#| label: diffproc
+#| warning: false
+filelist <- list.files( td, 
+            "^(S5b\\.)(([a-e]\\d{5})|(\\d{5}h01))(\\.diff\\.txt)")
+ddb <- data.table::rbindlist( lapply( filelist, \(fn) read_diff( td, fn)))
+diffdata <- ddb[, .(d2mn = mean( D2), d2sd = sd( D2), maxD = max( Dmax)),
+       by = .( Time, run)] # this creates a new DT with summaries by Time & run
+diffdata[, run := gsub( '.{9}$', "", run)] # removes ".diff.txt" from run
+difflist <- unique( diffdata$run) # get list of unique runs
+diffproc <- data.table::rbindlist( lapply( difflist, fitdiff, diffdata))
+```
+
+So now we have the data in a data table and can look at it. The raw data
+is most easily accessed via the `fitdiff()` function.
+
+```{r}
+#| label: fig-S5b10h01diff
+#| fig-cap: Diffusion plot for coldest heat run.  "Ringing" with a period of about $50\tau$ is evident.
+fitdiff( "S5b.00010h01", diffdata, plot = TRUE, verbose = TRUE)
+```
+
+The processed data as a table looks like the following:
+
+```{r}
+knitr::kable( head( diffproc[, .(run, Estimated, Fpvalued)]))
+```
+
+We can also do this in one call as follows:
+
+```{r}
+#| label: difflist
+#| warning: false
+rm( diffdata, diffproc, ddb) # clean up
+difflist <- procdiffiles( td, 
+      filepatt = "^(S5b\\.)(([a-e]\\d{5})|(\\d{5}h01))(\\.diff\\.txt)",
+      MD2.E6)
+```
+
+The symbol `difflist` now has the same collection of data developed
+above.
+
+```{r}
+fitdiff( "S5b.e00121", difflist$diffdata, plot = TRUE, verbose = TRUE)
+```
+
+The update `MD2` data table is also contained in `difflist`, and can be
+saved thus:
+
+```{r}
+#| label: MD2.E7
+MD2.E7 <- difflist$newMD2
+saveRDS( MD2.E7, "../MD2DT.E7.RDS")
+```
+
+### Continuing Heating and Cooling
+
+(4 September 2026) The process works, we need only continue heating and
+cooling. Reviewing [S5.pdf](Archived%20Noted/S5.pdf) we can see that
+things start to happen around $T = 0.00668$ while heating, and
+$T = 0.0131$ while cooling. The procedure will be to perform heating and
+cooling (four of each), update the table to check for validity and
+resulting temperatures, make the diffusion/$G_6$ executions, and repeat.
+Once runs start moving into the above temperature ranges, we'll cut
+$\beta$ in half to cause small temperature and energy steps. The
+transition energies are also in the range $0.13 < E_t < 0.15$. We will
+continue doing this until the entire temperature range is covered from
+above and below, with either "valid" runs or 2M steps.
+
+A new *Julia* session was started, and the `BaselineSpeed.jl` file
+executed so most code is compiled. Here we get the run names and
+numbers.
+
+```{r}
+drn <- MD2.E4[ series == "S5b" & grepl( "^.*h", run) , run] 
+cat( '["', # create runs string
+      paste( drn, collapse = '", "'), '"] \n', sep = "")
+# Next line searches td for each run, grabs last, and extracts execution number
+lfn <- strsplit( sapply( drn, \(fn) last( list.files( td,
+            paste(fn, "*.jld2", sep = ".")))), "[.]")
+as.integer( sapply( seq_along( lfn), \(i) lfn[[i]][3]))
+```
+
+```{julia}
+#| label: juliahc2
+#| eval: false
+julia> beta = 1e-5 * [2, 2, 2, 2, -1, -1, -1, -1]
+8-element Vector{Float64}:
+  2.0e-5
+  2.0e-5
+  2.0e-5
+  2.0e-5
+ -1.0e-5
+ -1.0e-5
+ -1.0e-5
+ -1.0e-5
+julia> snames = ["S5b.00010h01.0026", "S5b.00015h01.0026", "S5b.00020h01.0026",
+                 "S5b.00025h01.0026", "S5b.00195h01.0026", "S5b.00200h01.0044",
+                 "S5b.00205h01.0032", "S5b.00210h01.0026"]
+8-element Vector{String}:
+ "S5b.00010h01.0026"
+ "S5b.00015h01.0026"
+ "S5b.00020h01.0026"
+ "S5b.00025h01.0026"
+ "S5b.00195h01.0026"
+ "S5b.00200h01.0044"
+ "S5b.00205h01.0032"
+ "S5b.00210h01.0026"
+
+julia> @time MD2.heatcool( datadir, snames, steps = 10000, Beta = beta)
+ 14.288113 seconds (28.70 M allocations: 1.109 GiB, 3.98% gc time, 
+                    108 lock conflicts, 0.05% compilation time)
+
+
+```
+
+We doubled the equilibrium executions. Overall, each run now has 1k
+heat/cool steps plus 60k equilibrium steps. The runs took
+`r 14.288113 / (8 * 61)`s per 1k steps.
+
+```{r}
+#| label: MD2.E8
+MD2.E8 <- MD2DFfile( "../MD2DT.E8.RDS", td,"S5b.*h02*.csv", df = MD2.E7, 
+                     verbose =TRUE)
+knitr::kable( MD2.E8[ grepl("S5b", run) & grepl( glob2rx( '*h02*'), run),
+                      .( run, valid, T = ke.mean.rs, Et = TE.mean.rs, 
+                      Steps = total.steps)], format.args = list(big.mark = ','))
+```
+
+All but the last (and hottest) was valid. We'll extend that run by hand.
+
+```{julia}
+#| eval: false
+julia> @time MD2.extendrun( datadir, "S5b.00210h01", 6, steps = 10000, 
+                            execs = 6)
+  7.447268 seconds (3.53 M allocations: 135.862 MiB, 0.30% gc time, 
+                    0.04% compilation time)
+60000
+
+julia> @time MD2.extendrun( datadir, "S5b.00210h02", 6, steps = 10000, 
+                            execs = 6)
+  7.236983 seconds (3.53 M allocations: 135.853 MiB, 0.25% gc time)
+60000
+
+```
+
+Running things by hand is error prone, and I accidentally extended the
+`h01` instead of `h02`. Deleted these extra files with the *Unix*
+command `rm -v MD/Data/1980/S5b*\(1\)*`. Single threaded, that's
+`r 7.236983 / 60`s per 1k steps. This is about four times longer.
+
+```{r}
+#| label: MD2.E9
+MD2.E9 <- MD2DFfile( "../MD2DT.E9.RDS", td,"S5b.*h02*.csv", df = MD2.E8, 
+                     verbose =TRUE)
+knitr::kable( MD2.E9[ grepl("S5b", run) & grepl( glob2rx( '*h02*'), run),
+                      .( run, valid, T = ke.mean.rs, Et = TE.mean.rs, 
+                      Steps = total.steps)], 
+              format.args = list(big.mark = ','))
+```
+
+Next is the diffusion / $G_6$ runs. Since these are done via
+`filerun_floop()`, we just use the run names and file numbers. We
+modified the *Julia* $G_6$ code to not try to plot when run in parallel.
+This failed with a segmentation fault. It looks like I forgot to save a
+file.
+
+```{julia}
+#| eval: false
+julia> snames2 = ["S5b.00010h02", "S5b.00015h02", "S5b.00020h02", 
+                  "S5b.00025h02", "S5b.00195h02", "S5b.00200h02", 
+                  "S5b.00205h02", "S5b.00210h02"] 
+8-element Vector{String}:
+ "S5b.00010h02"
+ "S5b.00015h02"
+ "S5b.00020h02"
+ "S5b.00025h02"
+ "S5b.00195h02"
+ "S5b.00200h02"
+ "S5b.00205h02"
+ "S5b.00210h02"
+
+julia> runs = [6,  6,  6,  6,  6,  6,  6, 12]
+8-element Vector{Int64}:
+  6
+  6
+  6
+  6
+  6
+  6
+  6
+ 12
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+julia> @time MD2.filerun_floop( datadir, snames2, runs, 10000, 20, 
+                                diffFlag = true, deltat = 10, g6flag = true,
+                                g6skips = 20)
+```
+
+A bunch of `.diff.txt` and `.g6.csv` files were written before the
+failure, but I deleted them all, cataloged the last `.jld2` file for
+each run, and set up to re-execute.
+
+```{julia}
+#| eval: false
+phil@phil-XPS-8920:~$ julia -t8,1
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.12.7 (2026-08-15)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org release
+|__/                   |
+
+julia> include("openMD2.jl")
+Working Directory: /media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J
+Data Directory: /media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980
+Test Directory: /media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/
+   test/testtemp
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> include("./test/BaselineSpeed.jl")
+ 11.306846 seconds (19.83 M allocations: 988.664 MiB, 4.26% gc time, 
+                    132 lock conflicts)
+(initsteps, steps, runs, T, update, tlist) = (1000, 5000, 5, Float64, "VV", 
+                  [26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38])
+Total steps: 338000
+
+
+julia> snames2 = ["S5b.00010h02", "S5b.00015h02", "S5b.00020h02", 
+                  "S5b.00025h02", "S5b.00195h02", "S5b.00200h02", 
+                  "S5b.00205h02", "S5b.00210h02"]
+8-element Vector{String}:
+ "S5b.00010h02"
+ "S5b.00015h02"
+ "S5b.00020h02"
+ "S5b.00025h02"
+ "S5b.00195h02"
+ "S5b.00200h02"
+ "S5b.00205h02"
+ "S5b.00210h02"
+
+julia> runs = [26,  26,  26,  26,  26,  25,  25, 31]
+8-element Vector{Int64}:
+ 26
+ 26
+ 26
+ 26
+ 26
+ 25
+ 25
+ 31
+
+julia> @time MD2.filerun_floop( datadir, snames2, runs, 10000, 20, 
+                                diffFlag = true, deltat = 10, g6flag = true,
+                                g6skips = 20)
+Dislocation stats: (count = 200, mean = 0.0, std = 0.0, min = 0.0, max = 0.0)
+nrm = 947.6176290926662
+
+ ⋮
+
+Saving g6 data to /media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980
+   /S5b.00205h02.g6.csv
+ 46.254156 seconds (102.68 M allocations: 3.975 GiB, 3.12% gc time, 
+                    241 lock conflicts, 32.96% compilation time)
+
+```
+
+While trying to process the files, a failure alerted to
+`S5b.00195h02.0025.scalars.csv` being zero-length. While irregular, I
+will delete this file and extend that run from `S5b.00195h02.0025.jld2`,
+and then clean up any `*(1)*` files that get created. I'll also have to
+hand edit the `S5b.00195h02.txt` file as it contains a record of
+everything. Here is the *Julia* run:
+
+```{julia}
+#| eval: false
+julia> MD2.RunSystem( joinpath( datadir, "S5b.00195h02.0025"), 
+                      joinpath( datadir, "S5b.00195h02.0026t"), 10000)
+```
+
+@tbl-MD2.Ea shows the results.
+
+```{r}
+#| label: tbl-MD2.Ea
+#| tbl-cap: Results of second heating runs.
+MD2.Ea <- MD2DFfile( "../MD2DT.Ea.RDS", td,"S5b.*h02*.csv", df = MD2.E9, 
+                     verbose =TRUE)
+knitr::kable( MD2.Ea[ grepl("S5b", run) & grepl( glob2rx( '*h02*'), run),
+                      .( run, valid, T = ke.mean.rs, Et = TE.mean.rs, 
+                      Steps = total.steps)], format.args = list(big.mark = ','))
+```
+
+The following code will process the diffusion files.
+
+```{r}
+#| label: MD2.Eb
+#| warning: false
+rm( difflist)
+difflist <- procdiffiles( td, filepatt = "^S5b\\..*h02\\.diff\\.txt$", MD2.Ea)
+MD2.Eb <- difflist$newMD2
+```
+
+And this code will process the $G_6$ files.
+
+```{r}
+#| label: MD2.Ec
+rm( drn, g6dt, lfn)
+drn <- MD2.Eb[ series == "S5b" & grepl( "^.*h02", run) , run] 
+g6dt <- data.table()
+for( i in drn) {
+   g6data <- g6proc( td, MD2.Eb, i, trifitter = trifit2, ft = 1.5)
+   g6dt <- rbind( g6dt, g6data$newrow)
+}
+setkey( MD2.Eb, run)
+setkey( g6dt, run)
+MD2.Ec <- MD2.Eb[ g6dt, (names( g6dt)) := mget( paste0( "i.", names( g6dt)))]
+cat( '["', # create runs string
+      paste( drn, collapse = '", "'), '"] \n', sep = "")
+# Next line searches td for each run, grabs last, and extracts execution number
+lfn <- strsplit( sapply( drn, \(fn) last( list.files( td,
+            paste(fn, "*.jld2", sep = ".")))), "[.]")
+as.integer( sapply( seq_along( lfn), \(i) lfn[[i]][3]))
+```
+
+Next step:
+
+```{julia}
+#| eval: false
+julia> snames3 = ["S5b.00010h02.0046", "S5b.00015h02.0046", "S5b.00020h02.0046",
+       "S5b.00025h02.0046", "S5b.00195h02.0046", "S5b.00200h02.0045",
+       "S5b.00205h02.0045", "S5b.00210h02.0051"]
+8-element Vector{String}:
+ "S5b.00010h02.0046"
+ "S5b.00015h02.0046"
+ "S5b.00020h02.0046"
+ "S5b.00025h02.0046"
+ "S5b.00195h02.0046"
+ "S5b.00200h02.0045"
+ "S5b.00205h02.0045"
+ "S5b.00210h02.0051"
+
+julia> beta = 1e-5 * [2, 2, 2, 2, -1, -1, -1, -1]
+8-element Vector{Float64}:
+  2.0e-5
+  2.0e-5
+  2.0e-5
+  2.0e-5
+ -1.0e-5
+ -1.0e-5
+ -1.0e-5
+ -1.0e-5
+
+julia> @time MD2.heatcool( datadir, snames3, steps = 10000, Beta = beta)
+
+ 18.544128 seconds (29.96 M allocations: 1.168 GiB, 2.96% gc time, 
+                    98 lock conflicts, 16.36% compilation time)
+```
+
+```{r}
+#| label: MD2.Ed
+MD2.Ed <- MD2DFfile( "../MD2DT.Ec.RDS", td,"S5b.*h03*.csv", df = MD2.Ec, 
+                     verbose =TRUE)
+knitr::kable( MD2.Ed[ grepl("S5b", run) & grepl( glob2rx( '*h03*'), run),
+                      .( run, valid, T = ke.mean.rs, Et = TE.mean.rs, 
+                      Steps = total.steps)], format.args = list(big.mark = ','))
+```
+
+All are valid, so we move right to diffusion and $G_6$.
+
+```{julia}
+#| eval: false
+julia> snames2 .= replace.( snames2, "h02" => "h03")
+8-element Vector{String}:
+ "S5b.00010h03"
+ "S5b.00015h03"
+ "S5b.00020h03"
+ "S5b.00025h03"
+ "S5b.00195h03"
+ "S5b.00200h03"
+ "S5b.00205h03"
+ "S5b.00210h03"
+
+julia> runs = fill( 6, 8)
+8-element Vector{Int64}:
+ 6
+ 6
+ 6
+ 6
+ 6
+ 6
+ 6
+ 6
+
+julia> @time MD2.filerun_floop( datadir, snames2, runs, 10000, 20, 
+                                diffFlag = true, deltat = 10, g6flag = true,
+                                g6skips = 20)
+Dislocation stats: (count = 200, mean = 0.0, std = 0.0, min = 0.0, max = 0.0)
+nrm = 947.6176290926662
+ceil((4 * Ng * dr) / a) = 29.0
+(lastlpeaks, lpeaks) = (17, 17)
+Saving g6 data to /media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980
+   /S5b.00010h03.g6.csv
+
+⋮
+
+42.921270 seconds (94.36 M allocations: 3.577 GiB, 3.53% gc time, 
+                   142 lock conflicts)
+```
+
+```{r}
+#| label: MD2.Ee
+MD2.Ee <- MD2DFfile( "../MD2DT.Ee.RDS", td,"S5b.*h03*.csv", df = MD2.Ed, 
+                     verbose =TRUE)
+knitr::kable( MD2.Ee[ grepl("S5b", run) & grepl( glob2rx( '*h03*'), run),
+                      .( run, valid, T = ke.mean.rs, Et = TE.mean.rs, 
+                      Steps = total.steps)], format.args = list(big.mark = ','))
+```
+
+```{r}
+#| label: MD2.Ef
+#| warning: false
+rm( difflist)
+difflist <- procdiffiles( td, filepatt = "^S5b\\..*h03\\.diff\\.txt$", MD2.Ee)
+MD2.Ef <- difflist$newMD2
+```
+
+```{r}
+#| label: MD2.Eg
+rm( drn, g6dt, lfn)
+drn <- MD2.Ef[ series == "S5b" & grepl( "^.*h03", run) , run] 
+g6dt <- data.table()
+for( i in drn) {
+   g6data <- g6proc( td, MD2.Ef, i, trifitter = trifit2, ft = 1.5)
+   g6dt <- rbind( g6dt, g6data$newrow)
+}
+setkey( MD2.Ef, run)
+setkey( g6dt, run)
+MD2.Eg <- MD2.Ef[ g6dt, (names( g6dt)) := mget( paste0( "i.", names( g6dt)))]
+cat( '["', # create runs string
+      paste( drn, collapse = '", "'), '"] \n', sep = "")
+# Next line searches td for each run, grabs last, and extracts execution number
+lfn <- strsplit( sapply( drn, \(fn) last( list.files( td,
+            paste(fn, "*.jld2", sep = ".")))), "[.]")
+as.integer( sapply( seq_along( lfn), \(i) lfn[[i]][3]))
+```
+
+```{r}
+#| include: false
+rm( MD2S5, MD2.C, MD2.D, MD2.E, MD2.E2, MD2.E3, MD2.E4, MD2.E5, MD2.E6, MD2.E7, MD2.E8, MD2.E9, MD2.Ea, MD2.Eb, MD2.Ec, MD2.Ed, MD2.Ee, MD2.Ef)
+```
+
+### Heating Parameter Check ($\beta$)
+
+Let's try to understand what us happening here. We can look at each
+series starting with its source runs. We saw above that
+$E_t \approx E_{t,0} + 2 L \beta E_{k,0}$ which we can re-write as
+$(E_t - E_{t,0} )/ L\beta \approx 2 E_{k,0}$.
+
+```{r}
+#| label: hcseries
+#| fig-cap: Plot of $\delta E_t / (L \beta)$ (where $L = 1,000$, and $\beta = 2 \times 10^{-5}$ for the cold runs being heated and $-10^{-5}$ for the hot samples being cooled).  Each of the eight series (four heated and four cooled) is plotted in a different color.
+hcseries <- MD2.Eg[ substr( run, 1, 9) %in% EndRuns$run, ] # select runs
+hcseries[, ":="( hcser = substr( run, 1, 9), # og series
+                 hstep = substr( run, 10, 12), # heat/cool step
+                 dT = c( 0.0, diff( ke.mean.rs)), # delta temp
+                 dEt = c( 0.0, diff( TE.mean.rs)))] # delta energy
+hcseries$T0 <- shift( hcseries$ke.mean.rs, n = 1) # Temp at start of heat/cool
+hcseries$Et0 <- shift( hcseries$TE.mean.rs, n = 1) # Energy at start of h/c
+hcseries[hstep == "", ":="( dT = NA, dEt = NA)] # og runs deltas are NA
+hcseries$beta <- c( rep( c( NA, 2, 2, 
+                            2), 4), rep( c( NA, -1, -1, -1), 4)) * 1e-5
+```
+
+```{r}
+#| label: fig-dt
+lmbeta <- lm( dEt / (1000 * beta) ~ T0 - 1, data = hcseries)
+plot( dEt / (1000 * beta) ~ ke.mean.rs, data = hcseries, 
+      col = 1:length(unique( hcseries$hcser)), xlab = "T0", 
+      ylab = "dEt / L beta")
+grid()
+abline( lmbeta)
+summary( lmbeta)
+```
+
+So the coefficient of 2.3 is pretty close to the equation value of two.
+Obviously, the hot points have a large variance in the step.
+
+```{r}
+knitr::kable( hcseries[, .( run, Temp = ke.mean.rs, dT, Et = TE.mean.rs, dEt)])
+```
+
+According to the table above, the hottest cold sample (`S5b.00025h03`)
+now has $E_t$ about 0.1222, or 0.008 away from our target of 0.13. At
+steps of 0.00011 (which admittedly will increase as they warm) it will
+take about 73 steps. The coldest sample (`S5b.00010h03`) at 0.1185 will
+take 229 steps. Note that our step naming scheme (if we hold to
+numerics) can only count to 99. The coldest hot sample (`S5b.00195h01`)
+is at 0.158, only 0.008 from our target of 0.15, and at steps of
+-0.00044, will take only 18 steps.
+
+So, the $\beta$ for the cold steps will be doubled, and we will program
+in 20 new steps. I've decided to go ahead and make 2M step runs and then
+run the diffusion and $G_6$ runs. This is an easy call to `heatcool()`
+followed by a call to `filerun_floop()`, but we need a programmatic was
+of naming the steps. We can use the *Julia* `string()` function in base
+36: `string( 37, base = 36, pad = 2)` yields "11", which will allow
+1,295 steps. The sequence can be read via `parse( Int, "az", base = 36)`
+which will yield 395.
+
+On 8 September 2026, I modified the `heatcool()` *Julia* script to add a
+second call to `extendrun()` if either `diffFlag` or `g6flag` were
+`true`. Also added separate parameters for `steps` and `execs`, so we
+can run a non-zero $\beta$, then execute a number of thermalization
+steps, and then run diffusion and/or $G_6$ estimation. `heatcool()` will
+also run multiple runs simultaneously via `FLoops`. The `reps` parameter
+will control the number of repetitions of the heating/cooling cycles.
+
+Here is the starting point:
+
+```{r}
+cat( '["', # create runs string
+      paste( drn, collapse = '", "'), '"] \n', sep = "")
+# Next line searches td for each run, grabs last, and extracts execution number
+lfn <- strsplit( sapply( drn, \(fn) last( list.files( td,
+            paste( fn, "*.jld2", sep = ".")))), "[.]")
+as.integer( sapply( seq_along( lfn), \(i) lfn[[i]][3]))
+```
+
+We re-started *julia* as there were too many re-definitions during
+testing of the modifications. Here is the next trial session (after much
+effort required to upgrade to *julia* 1.13.0):
+
+```{julia}
+#| eval: false
+phil@phil-XPS-8920:~$ julia -t8,1
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.13.0 (2026-09-09)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org release
+|__/                   |
+
+julia> include("openMD2.jl")
+Working Directory: /media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J
+Data Directory: /media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980
+Test Directory: /media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testtemp
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> T = Float32
+Float32
+
+julia> include("./test/BaselineSpeed.jl")
+ 11.786971 seconds (19.15 M allocations: 917.517 MiB, 3.35% gc time, 
+                    149 lock conflicts)
+(initsteps, steps, runs, T, update, tlist) = (1000, 5000, 5, Float32, "VV", 
+                        [26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38])
+Total steps: 338000
+
+julia> snames = ["S5b.00010h03.0026", "S5b.00015h03.0026", "S5b.00020h03.0026",
+              "S5b.00025h03.0026", "S5b.00195h03.0026", "S5b.00200h03.0026",
+              "S5b.00205h03.0026", "S5b.00210h03.0026"]
+8-element Vector{String}:
+ "S5b.00010h03.0026"
+ "S5b.00015h03.0026"
+ "S5b.00020h03.0026"
+ "S5b.00025h03.0026"
+ "S5b.00195h03.0026"
+ "S5b.00200h03.0026"
+ "S5b.00205h03.0026"
+ "S5b.00210h03.0026"
+
+julia> beta = 1e-5 * [8, 8, 8, 8, -1, -1, -1, -1]
+8-element Vector{Float64}:
+  8.0e-5
+  8.0e-5
+  8.0e-5
+  8.0e-5
+ -1.0e-5
+ -1.0e-5
+ -1.0e-5
+ -1.0e-5
+
+julia> @time MD2.heatcool( datadir, snames, Beta = beta, steps = 50000, 
+            execs = 40, diffFlag = true, deltat = 10, Ng = 100, g6flag = true, 
+            g6skips = 20, diffg6steps = 10000, diffg6execs = 20, reps = 20)
+
+9754.201377 seconds (20.06 G allocations: 641.503 GiB, 
+                     1.46% gc time, 2596 lock conflicts, 0.03% compilation time)
+
+
+```
+
+Each of eight files had 20 repetitions which included a 1k step heating
+cycle, followed by forty 50k step thermalization executions, and twenty
+10k step diffusion & $G_6$ estimations executions. That is
+`r 1000*8*20*(1 + 40*50 + 20*10)` total steps in `r 9754.201377 / 60`
+minutes, `r 9754.201377 / (8*20*(1 + 40*50 + 20*10))` s/1k, which is
+pretty fast. I noticed in the system monitor that it was not always
+running eight processes, but I don't know why.
+
+```{r}
+#| label: MD2.Eh
+#| warning: false
+MD2.Eh <- MD2DFfile( "../MD2DT.Eg.RDS", td, "S5b.*h*.scalars.csv", df = MD2.Eg, 
+                     verbose =TRUE)
+```
+
+```{r}
+#| eval: false
+#| warning: false
+rm( difflist)
+system.time( difflist <- procdiffiles( td, 
+                           filepatt = "^S5b\\..*h0[4-z]\\.diff\\.txt$",
+                           MD2.Eh)) # patt is S5b.*h0?.diff.txt where ? is 4-z
+MD2.Ei <- difflist$newMD2
+```
+
+```         
+ user  system elapsed 
+  7.710   0.277   9.936 
+```
+
+Processing the $G_6$ data failed on the 179'th file. This turned out to
+be `S5b.00210h0i.g6.csv`, and it produced a "Missing value or an
+infinity produced when evaluating the model" from `numericDeriv()`. This
+led to discovering some errors in how `trifit()` and `trifit2()` handled
+the coefficients. Both simply reported the coefficients they found
+without `trifit()` converting them from their non-linear transform.
+Nevertheless, `trifit2()` was failing on `S5b.00210h0i.g6.csv`. Since
+`trifit()` does work, we can use it to retrieve the data.
+
+```{r}
+#| label: fig-g6210h0i
+g6210h0i <- g6proc( td, MD2.Eh, "S5b.00210h0i", ft = 1.5, trifitter = trifit,
+                    plotflag = TRUE, pltlog = 'xy', legpos = 'topright')
+#lapply( g6210h0i$fits, summary)
+fitdat( g6210h0i$fits)
+```
+
+I was not using the correct weights for the `lm()` call used to estimate
+the starting guesses, so rather than get the weights right, I plugged
+`trifit()` into `trifit2()`, which made sense anyway from a "dry"
+perspective. Here is the new direct call to `trifit2()`:
+
+```{r}
+#| label: g6210h0ipks
+pks <- g6210h0i$g6dt[ g6210h0i$g6dtpks]
+trifit2( pks, verbose = TRUE)
+
+```
+
+And here is a call to `g6proc()`:
+
+```{r}
+#| label: fig-g6210h0i2
+g6210h0i <- g6proc( td, MD2.Eh, "S5b.00210h0i", ft = 1.5, trifitter = trifit2,
+                    plotflag = TRUE, pltlog = 'xy', legpos = 'topright')
+#lapply( g6210h0i$fits, summary)
+fitdat( g6210h0i$fits)
+```
+
+While this particular issue has been solved, there are many ways in
+which `nls()` can fail. The next failure should cause changing
+`trifit2()` to use the `minpack.lm` package.
+
+```{r}
+#| include: false
+rm( difflist, g6210h0i, pks, MD2.Eh, MD2.Eg, hcseries)
+```
+
+Below the $G_6$ data is incorporated into `MD2.Ej`.
+
+```{r}
+#| label: MD2.Ej
+#| eval: false
+rm( drn, g6dt, lfn)
+drn <-MD2.Ei[ grepl( "^S5b\\..*h0[4-z]", run) & is.na( g6absz), run]  
+# "\\." is R for literal ".", ".*" means any number of any char, and "h0[4-z]"  
+# means "h0?" where ? is 4-z.
+g6dt <- data.table()
+for( i in drn) {
+   g6data <- g6proc( td, MD2.Ei, i, trifitter = trifit2, ft = 1.5)
+   g6dt <- rbind( g6dt, g6data$newrow)
+}
+setkey( MD2.Ei, run)
+setkey( g6dt, run)
+MD2.Ej <- MD2.Ei[ g6dt, (names( g6dt)) := mget( paste0( "i.", names( g6dt)))]
+saveRDS( MD2.Ej, "../MD2DT.Ej.RDS")
+```
+
+```{r}
+#| include: false
+MD2.Ej <- readRDS( "../MD2DT.Ej.RDS")
+```
+
+### `xyplot` Function
+
+We want to look at all the relevant scalars, and we will need to do this
+for every iteration, so let's build a function
+
+```{r}
+#| label: plotxy
+
+plotxy <- function( data, xlim = c(0.0, 0.17), N = 256, rvline = 0.1441,
+                    main = "Key Statistics Around Transition") {
+   # `data` is the data table
+   # xlim are the limits of TE that will be plotted
+   # N is the number of particles (needed for Cv)
+   # rvline is the position of the red vertical dotted line on all graphs
+   dt <- copy( data) # create a copy to shield changes.
+   Srn <- dt[, .( run, Series = newSeries, # Series re-name
+                    #itype,
+                    TE = TE.mean.rs,  
+                    # Values below are those plotted, in this order by row
+                    Temp = ke.mean.rs, # hseries, 
+                    psiavg, Cv = 1 / (1 - N * rtv^2),
+                    Pressure = Pressure.mean.rs, psiabs = psiabs.mean.rs,
+                    LogEta6 = log( pow.Estimate),
+                    D = Estimated / 4.0, dsmean, 
+                    rseRatio = pow.rse / exf.rse,
+                    LogFpD = log10( pmax( 1e-15, Fpvalued)),
+                    LogXi6 = log( exf.Estimate))
+                                   # set lower limit, drop -D
+                                   ]
+   # First select just the columns we're interested in
+   id.var = c( "run", "Series", "TE") 
+   melt1 <- melt( Srn, id.var = id.var, #direction = 'long', 
+                  variable.name = 'variable', variable.factor = TRUE,
+                  value.name = 'value') 
+   # now each variable is its own table.
+
+   pltdata <- copy( melt1[ TE %within% xlim,])
+   gps <- length( unique( pltdata$Series)) # number of series
+   pchs <- rep_len( 0:6, length.out = gps)
+   cols <- rep(  c('black', "darkred", "darkgreen", "darkblue"), each = 7, 
+                     length.out = gps) # each should be length of pchs range
+   xyplot(
+     value ~ TE | variable, 
+     data = pltdata,
+     groups = factor(Series), # use Series as groups, and drop unused levels
+     subscripts = TRUE,
+     as.table = TRUE,
+     scales = list( y = list( relation = "free")),
+     xlab = "TE / particle",
+     main = main,
+     par.settings = list( superpose.symbol = list( pch = pchs, col = cols)),
+     auto.key = list( columns = min(gps, 3)),   # <-- legend appears
+     panel = function(x, y, subscripts, groups, ...) {
+        panel.grid( h = -1, v = -1)
+         panel.superpose( x, y, subscripts = subscripts, groups = groups,
+                          panel.groups = function(x, y, ...) {
+                          panel.xyplot(x, y, ...)}, 
+                          ...)
+         panel.abline( v = rvline, col = 'red', lty = 2)
+        } # end panel = function...
+     )# end of xyplot( ...
+   } # end of plotxy()
+```
+
+We want to fill out a few values for series `S5b` now that we have
+heated and cooled runs. We also want to fill out `swoot`
+(`specwidth / dt`, where for `S5b`, `dt = 0.0177737`), remove `rv`
+(`rtv` is already there), and remove `hcser`, as it is all `NA`. Parsing
+the `energy` column is tricky, and I got some help from *Duck.ai*.
+
+That `regex` is worth an explanation. It basically matches a string with
+at lest some numbers (the group "`([0-9]+)`"). These must be there for a
+match. These number can be preceded by any number of characters (the
+"(`[A-Za-z]*)`" group). The number can be followed by either nothing, or
+either or both of the following two groups: 1) a capital letter and any
+two characters (the "`([A-Z]..)?`" group) and 2) the characters "h: or
+"c" and lowercase letters and numbers (the "`((h|c)([a-z0-9]{2}))?`"
+group).
+
+```{r}
+#| label: regex
+
+epatt <- "^([A-Za-z]*)([0-9]+)([A-Z]..)?((h|c)([a-z0-9]{2}))?$"
+t <- c( "00325H02h1w", "00225h1w", "adf00125H02h1w", "adf0025H02", "00025",
+        "abc0025", "00325H02c1w")
+m <- regexec( epatt, t, perl = TRUE)
+rm <- regmatches( t, m)
+# next line prepends the rm list with column names, and transpose will use 
+# that prepended list as column names
+tb <- setDT( transpose( append( list( c( "all", "lett", "num", "suff", "hg",
+                                         "horc","heat")), rm), make.names = 1))
+tb
+```
+
+```{r}
+#| include: false
+rm( t, m, rm, tb) # clean up regex tests
+```
+
+```{r}
+#| label: eparse
+eparse <- function( energy, series, hcthresh) {
+   # below regexec() & regatches() from Duck.ai
+   m <- regexec(epatt, energy, perl = TRUE)
+   parts <- setDT( transpose( append( list( c( "all", "lett", "num", "suff",
+                                               "hg", "horc","heat")),
+                                      regmatches( energy, m)), make.names = 1))
+   # parses any leading characters, a number, and any "hnn" suffix
+   letters <- parts[, lett]
+   number <- as.integer(parts[, num])
+   suffix <- parts[, hg]
+   itype <- fifelse( number < hcthresh, "Heat", "Cool")
+   itype <- fifelse( suffix == "", "Init", itype )
+   newSeries <- fifelse( suffix == "", series, 
+                         paste0( series, ".", parts[, num]))
+   x <- data.table( newSeries = newSeries, itype = itype)
+   #print(x)
+   x
+}
+```
+
+```{r}
+#| label: Ek
+MD2.Ek <- copy( MD2.Ej)
+MD2.Ek[, c('rv', 'hcser') := NULL] # delete unused columns
+MD2.Ek[ series == 'S5b', swoot := specwidth / 0.0177737]
+MD2.Ek[, c( 'newSeries', 'itype') := eparse( energy, series, 100)]
+```
+
+From top to bottom, left to right, @fig-tranche1 shows Temperature,
+Pressure, Diffusion, `LogFpD` is the common logarithm of the diffusion
+F-statistic probability value (the probability that the regression
+occurs randomly; note that many values are smaller than $10^{-15}$),
+`psiavg` is $|\langle \psi_6 \rangle|$ (the magnitude of the complex
+average) and `psiabs` is $\langle |\psi_6| \rangle$ (the average of the
+magnitudes), `dsmean` is the mean number of dislocations (`S5b` only),
+`Cv` is the specific heat computed as
+$C_v = 1 / \left( 1 - N  \sigma_T^2 / T^2 \right)$, where $N$ is the
+number of particles (256) and $\sigma_T^2 / T^2$ is the relative
+temperature variance (`rtv`), plotted next, and finally `rseRatio`,
+which is the ratio of the $G_6$ power-law and exponential fits residual
+standard errors (the ratio being less than one means that the power-law
+fit was better).
+
+```{r}
+#| label: fig-tranche1
+#| warning: false
+#| fig-cap: Key statistics (see text) for the current heating run.
+#| fig-height: 9
+#| fig-width: 6.5
+
+#op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+#mgp = c(1.7, 0.4, 0))
+plotxy( MD2.Ek[ grepl( "\\.*h", run) & series == "S5b",], rvline = TEtr,
+        main = "Key Statistics of Heating Run")
+```
+
+### Performance of $\beta$
+
+Remember that $(E_t - E_{t,0} )/ L\beta \approx 2 E_{k,0}$.
+Unfortunately, we have a number of different $\beta$ values, and we
+really need to fill these in by hand. All of the cooling steps used
+$\beta = -10^{-5}$. The first three heating steps (`h01` through `h03`)
+used $\beta = 2 \times 10^{-5}$. The second heating steps (`h04` through
+`h0n`; 20 `reps`) used $\beta = 8 \times 10^{-5}$. We can use the fact
+that the 23 negative steps are all the same to create a vector of
+$\beta$s.
+
+```{r}
+#| label: hcseries2
+
+hcseries2 <- MD2.Ek[ substr( run, 1, 9) %in% EndRuns$run, 
+                     .( run, ke.mean.rs, TE.mean.rs, newSeries)] # select runs
+setkey( hcseries2, run)
+hcseries2[, ":="( hcser = substr( run, 1, 9), # og series
+                 hstep = substr( run, 10, 12), # heat/cool step
+                 dT = c( 0.0, diff( ke.mean.rs)), # delta temp
+                 dEt = c( 0.0, diff( TE.mean.rs)))] # delta energy
+hcseries2$T0 <- shift( hcseries2$ke.mean.rs, n = 1) # Temp at start of heat/cool
+hcseries2$Et0 <- shift( hcseries2$TE.mean.rs, n = 1) # Energy at start of h/c
+hcseries2[hstep == "", ":="( dT = NA, dEt = NA, T0 = NA, Et0 = NA)] # og runs deltas are NA
+hcseries2$beta  <- 1e-5 * c( rep( c( NA, rep( 2, 3), rep( 8, 20)), 4), # heating
+                             rep( c( NA, rep( -1, 23)), 4)) # cooling
+```
+
+```{r}
+#| label: fig-dt2
+#| fig-cap: Plot of $\delta E_t / (L \beta)$ (where $L = 1,000$, and $\beta = 2 \times 10^{-5}$ for the cold runs being heated and $-10^{-5}$ for the hot samples being cooled).  Each of the eight series (four heated and four cooled) is plotted in a different symbol, with red beign heated and blue cooled.
+
+lmbeta <- lm( dEt / (beta * (1000 * 2)) ~ T0 - 1, data = hcseries2)
+plot( dEt / (beta * (1000 * 2)) ~ ke.mean.rs, data = hcseries2, 
+      pch = as.integer(factor(hcseries2$newSeries))-1, 
+      col = c( rep( "red", 4*24), rep( "blue", 4*24)), xlab = "T0", 
+      ylab = "dEt / 2 beta L ")
+grid()
+abline( lmbeta)
+summary( lmbeta)
+```
+
+The cooling series has a higher variance, with three outliers. These are
+`S5b.00205h01`, `S5b.00200h0e`, and `S5b.00195h0n`. There does not
+appear to be anything otherwise unusual about these runs. @fig-oddseries
+demonstrates this.
+
+```{r}
+#| label: fig-oddseries
+#| fig-cap: Final temerature vs. initial temperature for the three series that cause the three outliers. The three outliers are just a little below the other points. Note that while the series number was the requested initialization energy, series `S5b.00200` initialized at a higher energy than `S5b.00205`. The solid line is `T = T0`.
+
+with( hcseries2[ newSeries %in% c("S5b.00195", "S5b.00200", "S5b.00205"), 
+                 .(Temp = ke.mean.rs, T0, newSeries)], {
+      plot( y = Temp, x = T0, col = as.integer( factor( newSeries)), 
+            xlab = "T0", ylab = "T")})
+grid()
+abline( a = 0, b = 1)
+legend( x = "bottomright", legend = c("195", "200", "205"), col = 1:3, pch =1)
+```
+
+### Making Tranche 2
+
+Many of the colder samples crossed into the transition region.
+
+```{r}
+#| label: tbl-trans1
+#| echo: false
+#| tbl-cap: Heated and cooled runs with total energy (TE) between 0.13 and 0.15, or temperature (temp) between 0.00668 and 0.0131, ordered by increasing total energy.
+
+setkey( MD2.Ej, TE.mean.rs)
+knitr::kable( MD2.Ej[ grepl( "\\.*h\\.*", run) & series == "S5b" & 
+                      ((TE.mean.rs %within% c( 0.13, 0.15)) | 
+                       (ke.mean.rs %within% c( 0.00668, 0.0131))), 
+                      .(run, valid, temp = ke.mean.rs, TE = TE.mean.rs)],
+              format.args = list(big.mark = ',')) 
+```
+
+Only files being heated made it into the transition region, and only
+three of the four series. Picking the coldest or lowest energy runs of
+each series yields `S5b.00015h0k`, `S5b.00020h0i`, and `S5b.00025h0e`.
+The series based on `S5b.00010` had a maximum temperature of
+`r max( MD2.Ek[ grepl( "00010h", run) & series == "S5b",]$ke.mean.rs)`
+and a maximum total energy of
+`r max( MD2.Ek[ grepl( "00010h", run) & series == "S5b",]$TE.mean.rs)`
+(in run `S5b.00010h0n`), so it is right on the edge of the transition
+region.
+
+The naming system will not directly allow us to create a new heating
+series from samples in the middle of the series. We could simply discard
+the heating runs that followed the three runs listed above, but that
+would mean discarding three, five, and nine, respectively, or 17 20M
+step runs. This is about 15 minutes of run time, and includes $G_6$ and
+diffusion estimates. The key to the processing is in the *Julia*
+`heatname()` function, which looks for an "`h`" character in the third
+to last position. While perhaps a kludge, I will copy the three `.jld2`
+files into a file with the same name, but a capital "`H`". When called
+with filename of, for example, `S5b.00015H0k` this will cause
+`heatcool()` to create files of the form `S5b.00015H0kh01`.
+
+Finally, we need to compute the number of reps needed to cover the
+transition region. We want to span a total energy of 0.02 (from 0.13 to
+0.15) in about 40 steps (that is $0.5m\epsilon$). Remembering that
+$E_t \approx E_{t,0} + 2L\beta E_{k,0}$, if the initial total energy is
+$E_{t,0} = 0.13$ at an initial temperature of $E_{k,0} = 0.00668$, then
+with $L = 40,000$, $0.02 = 2L\beta0.00668$ yeilds a $\beta$ of
+`r 0.02/(2*40000*0.00668)`. So we'll use $\beta = \pm3.5 \times 10^{-5}$
+and we'll use 45 `reps`.
+
+Note that *Julia* updated to 1.13.1.
+
+```{julia}
+#| eval: false
+phil@phil-XPS-8920:~$ julia -t8,1
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.13.1 (2026-09-25)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org release
+|__/                   |
+
+julia> include("openMD2.jl")
+Working Directory: /media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J
+Data Directory: /media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980
+Test Directory: /media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testtemp
+
+julia> snames = ["S5b.00010h0n.0060", "S5b.00015H0k.0060", "S5b.00020H0i.0060",
+              "S5b.00025H0e.0060", "S5b.00195h0n.0060", "S5b.00200h0n.0060",
+              "S5b.00205h0n.0060", "S5b.00210h0n.0060"]
+8-element Vector{String}:
+ "S5b.00010h0n.0060"
+ "S5b.00015H0k.0060"
+ "S5b.00020H0i.0060"
+ "S5b.00025H0e.0060"
+ "S5b.00195h0n.0060"
+ "S5b.00200h0n.0060"
+ "S5b.00205h0n.0060"
+ "S5b.00210h0n.0060"
+
+julia> beta = 3.5e-5 * [1, 1, 1, 1, -1, -1, -1, -1]
+8-element Vector{Float64}:
+  3.5e-5
+  3.5e-5
+  3.5e-5
+  3.5e-5
+ -3.5e-5
+ -3.5e-5
+ -3.5e-5
+ -3.5e-5
+
+julia> @time MD2.heatcool( datadir, snames, Beta = beta, steps = 50000, execs = 40, diffFlag = true, deltat = 10, Ng = 100, g6flag = true, g6skips = 20, diffg6steps = 10000, diffg6execs = 20, reps = 45)
+
+
+
+21700.403393 seconds (53.06 G allocations: 1.755 TiB, 1.57% gc time, 
+                      7436 lock conflicts, 0.07% compilation time)
+
+```
+
+That's 6 hours, 1 minute and 40 seconds for
+`r prettyNum( 1000*8*45*(1 + 40*50 + 20*10), big.mark = ',')` steps, or
+`r 21700.403393/(8*45*(1 + 40*50 + 20*10))`s per 1k steps, the fastest
+yet.
+
+We should have a function that will process all the raw step data, the
+diffusion, and the $G_6$ data and update the data table.
+
+```{r}
+#| label: fullproc
+fullproc <- function( output, directory, dfpattern, diffpatt, skip = 1000,
+         skpfrac = 1/3, df = data.frame(), trifitter = trifit2, ft = 1.5,
+         clusters = parallel::detectCores() - 1, fftblock = 4096, rsblk = 500,
+         maxf = 1, verbose = FALSE) {
+   # output, directory, dfpattern, skip, skpfrac, df, clusters, fftblock, rsblk,
+   # maxf and verbose are all MD2DFfile() parms (see).  
+   # diffpatt is procdifffiles() parm.
+   # trifitter and ft are g6proc() parms.
+   # 
+   # Suggest trying patterns before calling.
+   # list.files( td, glob2rx( dfpattern))
+   # list.files( td, diffpatt)
+   # 
+   starttime <- Sys.time() - 10 # get the time for later comparison, less 10s
+   startn <- nrow( df)
+   if (verbose) cat( "fullproc(): Calling MD2DFfile() with existing dt with ",
+                     startn, " rows.\n")
+   stp1 <- MD2DFfile( output, directory, dfpattern, skip, skpfrac, df, clusters,
+                      fftblock, rsblk, maxf, verbose)
+   s1n <- nrow( stp1)
+   if (verbose) cat( "fullproc(): MD2DFfile() fnished adding ", s1n - startn, 
+                     " rows.\n")
+   difflist <- procdiffiles( td, diffpatt, stp1, verbose)
+   if (verbose) cat( "fullproc(): procdffiles() processed ", 
+                     nrow( difflist$diffproc), " files.\n")
+   stp2 <- difflist$newMD2
+   diffruns <- difflist$diffdata$run
+   rm( difflist)
+   # drn <- stp2[ lrfdt.time > starttime, run] # only times later than startime
+   # cat("diffruns: ", diffruns)
+   if( verbose) cat( "fullproc(): ", length( diffruns), " G6 possibilities.\n")
+   g6dt <- data.table()
+   for( i in diffruns){
+      #if (verbose) cat( "fullproc(): G6 file ", i, ".\n")
+      g6data <- g6proc( td, stp2, i, trifitter = trifitter, ft = ft)
+      g6dt <- rbind( g6dt, g6data$newrow)
+   }
+   if (verbose) cat( "fullproc(): ", nrow( g6dt), " files processed.\n")
+   setkey( stp2, run)
+   setkey( g6dt, run)
+   stp3 <- stp2[ g6dt, (names( g6dt)) := mget( paste0( "i.", names( g6dt)))]
+   saveRDS( stp3, output)
+   return( stp3)
+}
+```
+
+This took multiple attempts and several modifications to both the
+`fullproc()` code above and several routines in the `MD2RP` package. The
+main problem was a memory leak caused by capturing the entire list for
+files in an interior function. It appeared that memory was not being
+released between invocations of the function, which eventually filled up
+swap space and crashed the computer. Finding the culprit did bring some
+other efficiencies to the code though.
+
+```{r}
+#| label: tranche2
+#| eval: false
+
+# heating creates files like S5b.00010h01.0031.heat.scalars.csv", so 
+# pattern must be h??.????.scalars.csv
+system.time( MD2.F <- fullproc( "../MD2DT.F.RDS", td,
+                  "S5b.*h??.????.scalars.csv",
+                  "^S5b\\..*h[0-z]{2}\\.diff\\.txt$", df = MD2.Ek,
+                  verbose = TRUE))
+```
+
+As noted in the code comment above, another issue was the existence of
+the `.heat.scalar.csv` files. The processing scheme is pretty clumsy,
+and it was pretty evident that the diffusion and $G_6$ processing could
+be parallelized to good effect, but it is hard to believe that it will
+save *me* time, as I can set the processing to go and walk away, while
+designing a parallel loop will take much trial and error.
+
+```{r}
+#| include: false
+MD2.F <- readRDS( "../MD2DT.F.RDS")
+```
+
+```{r}
+#| label: F2
+
+MD2.F2 <- copy( MD2.F)
+MD2.F2[ series == 'S5b', swoot := specwidth / 0.0177737]
+MD2.F2[, c( 'newSeries', 'itype') := eparse( energy, series, 100)]
+MD2.F2[ grepl( "H", run), itype := "Heat"] # eparse won't catch these
+saveRDS( MD2.F2, "../MD2DT.F2.RDS")
+```
+
+@tbl-itypeN is breakdown of the different types.
+
+```{r}
+#| label: tbl-itypeN
+#| tbl-cap: Count of all runs by type, both series `S5` (`Init` only) and `S5b`. 
+knitr::kable( MD2.F2[ grepl( "S5", series), .N, by = itype])
+```
+
+```{r}
+#| label: fig-t2
+#| warning: false
+#| fig-cap: Key statistics for the complete series `S5` & `S5b` and `S5b`s heating and cooling runs.
+#| fig-height: 9
+#| fig-width: 6.5
+
+plotxy( MD2.F2[ grepl( "S5", series), ])
+
+```
+
+We need a new `plotxy` that will create the specific heat via
+numerically differentiating, and do this by the `newSeries` label.
+`dydx()` is copied from [2026 Init.pdf](2026%20Init.pdf), but needed to
+be modified to deal with the noise introduced by having so many
+closely-spaced samples. I added a `pad` argument which will cause the
+regression to span more points.
+
+```{r}
+#| label: dydx
+
+dydx <- function( y, x, degree = 1, pad = degree + 1) {
+   # find derivative over lag + 1 points
+   # cat( "deg: ", degree, " pad: ", pad)
+   pad = round( pad) # needs to be integer
+   stopifnot( pad > 0)
+   lx <- length( x)
+   stopifnot( length( y) == lx)
+   dlen <- degree + pad # number of points in each regression
+   data <- data.table( x = x, y = y, keyby = 'x')
+   xm <- movavg( x, dlen)[dlen:lx]
+   dydxfit <- function( i) { # get dy/dx from points i:(i + dlen)
+      c <- coef( lm( y ~ poly( x, degree, raw = TRUE), # get poly coef
+                     data = data[ i:(i + dlen),]))
+      dpc <- (1:degree) * tail( c, -1) # derivative of poly coeff
+      dd <- polyval( rev(dpc), xm[i]) # eval poly at midpoint of data & return
+      #if (is.na( dd)) browser()
+      return(dd)
+   }
+   dd <- vapply( 1:(lx - dlen + 1), dydxfit, 1.0)
+   list( dd = dd, xm = xm)
+}
+
+# test
+tx <- 1:10
+ty <- tx^2
+dydx( ty, tx)
+dydx( ty, tx, degree = 3)
+(dd <- dydx( ty, tx, 2))
+dd$dd - 2 * dd$xm # y = x^2, y' = 2x. these all ought to be zero
+rm( tx, ty, dd) # remove these variables
+```
+
+First, let's look at the raw data, The variance of the total energy is
+quite small, but the temperature fluctuates quite a bit.
+
+```{r}
+#| label: fig-tvE
+#| fig-cap: Total energy vs. temperature for all `S5` & `S5b` points.  Gray area shows the total range of temeratures observed, with the narrow light-blue region the small variance of the average temperature. Red dashed lines show the transition energy and temperature of 0.1441 and 0.01309
+plotconfMD2( MD2.F2[ grepl( "S5", series),],  y = "ke", xlab = "Total Energy",
+             ylab = "Temperature")
+abline( v = TEtr, lty = 2, col = 'red')
+abline( h = ketr, lty = 2, col = 'red')
+```
+
+The specific heat is the slope of the reverse graph ($E$ vs. $t$). In
+@fig-Cv1 we show this full plot.
+
+```{r}
+#| label: fig-Cv1
+#| fig-cap: Numerical derivative of energy with respect to temperature. The verticle red dashed line is the transition temperature of $T = 0.01309$. A quadratic fit with a pad of 8 (so a 10 point regression) is used as the full set of points has some temperatures very near each other.
+dedt <- with( MD2.F2[  grepl( "S5", series),], {
+   dydx( TE.mean.rs, ke.mean.rs, degree = 1, pad = 1)
+   })
+plot( x = dedt$xm, y = dedt$dd, panel.first = grid(), #ylim = c(0,4),
+      xlab="T", ylab = "Cv", main = "dE/dT, all S5 & S5b Data")
+abline( v = ketr, lty = 2, col = 'red')
+abline( h = 2, lty = 2, col = 'black')
+```
+
+The specific heat should be identically two in the solid, and near two
+in the fluid. This can be seen if we zoom in.
+
+```{r}
+#| label: fig-Cv2
+#| fig-cap: Zoom into @fig-Cv1.
+plot( x = dedt$xm, y = dedt$dd, panel.first = grid(),
+         ylim = c(0,4),
+         xlab="T", ylab = "Cv", main = "dE/dT, all S5 & S5b Data")
+abline( v = ketr, lty = 2, col = 'red')
+abline( h = 2, lty = 2, col = 'black')
+```
+
+So this, with all the prior analysis, verifies the data is valid.
+Further analysis wil be completed in the next document, [Series 5 Final
+Analysis.pdf](Series%205%20Final%20Analysis.pdf)
+
+{{< pagebreak >}}
+
+# References
+
+::: {#refs}
+:::
+
+{{< pagebreak >}}
+
+# R Session Info
+
+<button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOne">
+
+</button>
+
+:::: {#collapseOne .accordion-collapse .collapse}
+::: {}
+Quarto CLI Version: {{< version >}}
+
+```{r}
+sessionInfo()
+```
+:::
+::::
+

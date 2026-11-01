@@ -1,0 +1,1243 @@
+---
+title: "Series 3 Analysis"
+author: "Phil Shea"
+date: last-modified
+format:
+  pdf:
+    fig-pos: 'H'
+#mainfont: "Times New Roman"
+bibliography: ../references.bib
+link-citations: true
+monofont: "Courier 10 Pitch"
+monofontoptions: 'Scale=0.8'
+execute:
+   freeze: auto
+editor_options:
+  markdown:
+    wrap: 72
+    references: 
+      location: block
+    canonical: true
+---
+
+```{r}
+#| label: init
+#
+# NOTE: if the package has changed, it must be installed locally via:
+#
+# devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+#
+# or
+#
+# devtools::install("/home/phil/MD/MD2RP")
+#
+# You probably have to re-start r after this.
+#
+# *****************************************************
+require( MD2RP)
+require( parallel)
+require( pracma)
+require( data.table)
+require( knitr)
+require( lattice)
+num_cores <- detectCores() - 1
+options(digits=5)
+"%within%" <- function( vector, range) # define convenience function.
+   (vector > range[ 1]) & (vector < range[ 2])
+
+MD2DF.L <- readRDS( "../MD2DF.L.RDS") # read in data current for analysis start.
+S3DTdiff2 <- MD2DF.L[ series %in% c("S3", "S3b"),] # Focus only on series 3.
+```
+
+------------------------------------------------------------------------
+
+# State of the Series 3 Data
+
+Many runs were done as well as diffusion estimates for a number of the
+runs. @fig-keTE shows the current state of the runs.
+
+```{r}
+#| label: fig-keTE
+#| fig-cap: 'Kinetic energy vs. total energy for series 3.  The red triangles are points not considered validly in equilibrium. Grey band shows the total step-by-step range of the kinetic energy, and the narrow blue band shows the standard deviation.  The "rug" shows the energies at which diffusion was estimated.'
+plotconfMD2( y = "ke", 
+             df = S3DTdiff2, main = "All Series 3 Runs",
+             linethresh=200, xlab="Total Energy per Particle", 
+             ylab ="Kinetic Energy per Particle") # sets up plot)
+rug( S3DTdiff2[ !is.na( nrd), TE.mean.rs], side = 1) # add rug plot
+rpl <- recordPlot()
+png( "keTE.png", width = 600, height = 300)
+replayPlot( rpl)
+invisible( dev.off())
+```
+
+The general rule was to give 30,000 steps to runs outside the transition
+region, but when such points failed to be validly in equilibrium, they
+were run between 100K and 300K steps. Points in the transition region
+were slated to run about 4M steps, but some fell slightly short for
+various reasons. @fig-S3steps shows the total steps vs. total energy per
+particle for series 3.
+
+```{r}
+#| label: fig-S3steps
+#| fig-cap: "Total steps vs. total energy per particle for series 3.  The red triangles are points not considered validly in equilibrium."
+ with( S3DTdiff2, {
+   plotconf( y = total.steps, x = TE.mean.rs, Fval = Fval, log = 'y',
+            ylim = c( 10000, 1e7),
+            xlab = "Total Energy per Particle", ylab = "Total Steps",
+            main = "Total Steps vs. Total Energy per Particle")
+   })
+ rpl <- recordPlot()
+ png( "S3steps.png", width = 600, height = 300)
+ replayPlot( rpl)
+ invisible( dev.off())
+```
+
+The overall data frame has the following runs:
+
+```{r}
+knitr::kable(MD2DF.L[ , ( count = .N), by = series])
+```
+
+The diffusion data is plotted below in @fig-S3diff.
+
+```{r}
+#| label: fig-S3diff
+#| fig-cap: "Diffusion estimates for series 3.  The red triangles are points not considered validly in equilibrium.  The rug shows the energies at which diffusion was estimated."
+setkey( S3DTdiff2, ke.mean.rs)
+with( S3DTdiff2[ !is.na( nrd),], {
+   plotconf( y = Estimated, x = ke.mean.rs, sd = Std.Errord, xlab = 'ke',
+             ylab = "4D", main = "Diffusion vs. Temperature", Fval = Fval)
+             #xlim = c(0.012,0.014), ylim = c(0.0, 0.05))
+})
+rpl <- recordPlot()
+png( "S3diff.png", width = 600, height = 300)
+replayPlot( rpl)
+invisible( dev.off())
+```
+
+# Specific Heat
+
+The specific heat is the slope of the energy vs. temperature curve.
+
+```{r}
+#| label: fig-EvT
+#| fig-cap: "The total energy vs. temperature.  The dotted line is attempting to show the very small standard deviation of the energy points.  The red triangles are points not considered validly inequilibrium. Remember that the temperature data has significant standard deviations, but these are not displayed."
+setkey( S3DTdiff2, ke.mean.rs)
+plotconfMD2( x='ke.mean.rs', y="TE", 
+             df=S3DTdiff2[ TE.mean.rs %within% c(0.135,0.155)],
+             linethresh=200, xlab="Kinetic Energy per Particle", 
+             ylab ="Total Energy per Particle")# sets up plot
+```
+
+We need a numerical derivative function in order to compute
+$C_v = dE / dT$. We will simply fit (really, *draw*) a line or curve
+between a number of points, and compute the derivative of that line or
+curve. `lm( y ~ poly( x, n), ...)` will fit a polynomial of degree `n`
+to the values passed it, and if we pass `n + 1` values, the fit will be
+exact (i.e., pass through the supplied points). The derivative will be
+evaluated at the midpoint between the first and last point.
+
+```{r}
+#| label: dydx
+
+dydx <- function( y, x, lag = 1) {
+   # find derivative over lag + 1 points
+   lx <- length( x)
+   stopifnot( length( y) == lx)
+   data <- data.table( x = x, y = y, keyby = x)
+   xm <- (data$x[ 1:(lx - lag)] + data$x[ (lag + 1):lx]) / 2 # midpoint of eval sets
+   dydxfit <- function( i) { # get dy/dx from points i:(i + lag)
+      c <- coef( lm( y ~ poly( x, lag, raw = TRUE), # get poly coef
+                     data = data[ i:(i + lag)]))
+      dpc <- (1:lag) * tail( c, -1) # derivative of poly coeff
+      polyval( rev(dpc), xm[ i]) # evaluate polynomial at midpoint of data & return
+   }
+   dd <- vapply( 1:(lx - lag), dydxfit, 1.0)
+   list( dd=dd, xm = xm)
+}
+
+# test
+tx <- c(1, 4, 3, 3.5, 2, 5)
+ty <- tx^2
+(dd <- dydx(ty, tx, 2)) # Note the NaN in third position: 3,  5, NaN, 7, 9
+dd$dd - 2 * dd$xm
+rm( tx, ty, dd) # remove these variables
+```
+
+A few different lags are plotted in @fig-Cv1.
+
+```{r}
+#| label: fig-Cv1
+#| fig-cap: Numerical derivative at three different lags.  
+#setkey(S3DTdiff2, TE.mean.rs)
+dedt1 <- with( S3DTdiff2, {
+   dedt <- dydx( TE.mean.rs, ke.mean.rs)
+   plot( x = dedt$xm, y = dedt$dd, panel.first = grid(), #xlim=c(0.01,0.02),
+         xlab="ke", ylab = "Cv", main = "dE/dT, all points, three lags.")
+   dedt2 <- dydx( TE.mean.rs, ke.mean.rs, lag = 2)
+   points( x = dedt2$xm, y = dedt2$dd, col='red')
+   dedt3 <- dydx( TE.mean.rs, ke.mean.rs, lag = 3)
+   points( x = dedt3$xm, y = dedt3$dd, col='green')
+   legend( "bottomright", c("1", "2", "3"), pch=1, col=c('black','red','green'), 
+           title = "Lag")
+   dedt
+})
+detects <- c( maxCv1 = dedt1$xm[ which.max( dedt1$dd)]) # return xm of max value 
+detectsex <- c( maxCv1 = "Max Cv computed over all points.") 
+# explanation of detects.
+```
+
+The negative values are unrealistic, but not unsurprising due to the
+fluctuations in the transition region. While the line looks pretty flat,
+it also looks like it is zero, which is clearly a scaling issue: the
+large values returned by the first difference causes the variations in
+the rest of the line to be unnoticeable. We can also exclude the points
+not considered valid, and this generates all positive results, and with
+one very large value, so a log plot is used in @fig-Cv2.
+
+```{r}
+#| label: fig-Cv2
+#| fig-cap: Log plot of specific heat computed using only points considerd valid.
+dedt2 <- with( S3DTdiff2[ valid == 1,], {
+   dedtv <- dydx( TE.mean.rs, ke.mean.rs)
+   plot( x = dedtv$xm, y = dedtv$dd, panel.first = grid(), #xlim=c(0.01,0.02),
+         log='y', xlab="ke", ylab = "Cv")
+   dedtv2 <- dydx( TE.mean.rs, ke.mean.rs, lag = 2)
+   points( x = dedtv2$xm, y = dedtv2$dd, col='red')
+   dedtv3 <- dydx( TE.mean.rs, ke.mean.rs, lag = 3)
+   points( x = dedtv3$xm, y = dedtv3$dd, col='green')
+   legend( "topright", c("1", "2", "3"), pch=1, col=c('black','red','green'), 
+           title = "Lag")
+   dedtv
+})
+detects <- c( detects, maxCv2 = dedt2$xm[ which.max( dedt2$dd)]) 
+detectsex <- c( detectsex, maxCv2 = "Max Cv computed only over valid points." )
+```
+
+The kinetic energy has a rather large variance, and differentiating with
+respect to such a noisy variable feels odd. @fig-ooCv1 below is the
+reciprocal computed as $dT / dE$.
+
+```{r}
+#| label: fig-ooCv1
+#| fig-cap: The specific heat computed as the reciprocal of $dT / dE$ (valid points only). Note that the independent axis used here is the total energy, not the kinetic energy.
+dtde1 <- with(S3DTdiff2[ valid == 1,], {
+   # Used the same variable names as above for simplicity.
+   dedtv <- dydx( ke.mean.rs, TE.mean.rs)
+   plot( x = dedtv$xm, y = 1/dedtv$dd, panel.first = grid(), #xlim=c(0.01,0.02),
+         log='y', xlab="TE", ylab = "Cv")
+   dedtv2 <- dydx( ke.mean.rs, TE.mean.rs, lag = 2)
+   points( x = dedtv2$xm, y = 1/dedtv2$dd, col='red')
+   dedtv3 <- dydx( ke.mean.rs, TE.mean.rs, lag = 3)
+   points( x = dedtv3$xm, y = 1/dedtv3$dd, col='green')
+   legend( "topright", c("1", "2", "3"), pch=1, col=c('black','red','green'),  
+           title = "Lag")
+   dedtv
+})
+```
+
+There is no simple way to translate these points to the equivalent
+kinetic energy.
+
+Let's zoom in a bit on those plots.
+
+```{r}
+#| label: fig-Cv1z
+#| fig-cap: Zoom into @fig-Cv1 (all points) plotted on log scale (absolute value of lag 1 plotted).
+with( S3DTdiff2, {
+   dedt <- dydx( TE.mean.rs, ke.mean.rs)
+   plot( x = dedt$xm, y = abs(dedt$dd), panel.first = grid(), xlim=c(0.01,0.02),
+         xlab="ke", ylab = "Cv", log='y')
+   dedt2 <- dydx( TE.mean.rs, ke.mean.rs, lag = 2)
+   points( x = dedt2$xm, y = dedt2$dd, col='red')
+   dedt3 <- dydx( TE.mean.rs, ke.mean.rs, lag = 3)
+   points( x = dedt3$xm, y = dedt3$dd, col='green')
+   legend( "topright", c("1", "2", "3"), pch = 1, 
+           col = c('black', 'red', 'green'),     title = "Lag")
+})
+```
+
+First, let's look at the valid E vs. T plot (@fig-EvTv) with a focus on
+uncertainty in T.
+
+```{r}
+#| label: fig-EvTv
+#| fig-cap: "The total energy vs. temperature. Only points considered valid shown. The standard deviations of the temperature means are displayed with error bars.  While these increase significantly through the transition region, the large number of points in the averages reduce the standard deviations to small values."
+
+with( S3DTdiff2[ (valid == 1) & (TE.mean.rs %within% c(0.135, 0.155))],  {
+   plot( x = ke.mean.rs, y = TE.mean.rs, pch=".",
+         xlab = "Kinetic Energy per Particle", #log='y',
+         ylab = "Total Energy per Particle", panel.first = grid()) # sets up plot
+   sd <- ke.sd.rs / sqrt( nr)
+   arrows( x0 = ke.mean.rs - sd, y0 = TE.mean.rs, 
+           x1 =  ke.mean.rs + sd, y1 = TE.mean.rs, length = 0.05, angle = 90,
+           code = 3)
+   })
+```
+
+@fig-Cv2z shows the zoom into @fig-Cv2.
+
+```{r}
+#| label: fig-Cv2z
+#| fig-cap: Zoom into @fig-Cv2 (only points considered valid).
+with(S3DTdiff2[ valid==1,], {
+   dedtv <- dydx( TE.mean.rs, ke.mean.rs)
+   plot( x = dedtv$xm, y = dedtv$dd, panel.first = grid(), xlim=c(0.01,0.02),
+         log='y', xlab="ke", ylab = "Cv")
+   dedtv2 <- dydx( TE.mean.rs, ke.mean.rs, lag = 2)
+   points( x = dedtv2$xm, y = dedtv2$dd, col='red')
+   dedtv3 <- dydx( TE.mean.rs, ke.mean.rs, lag = 3)
+   points( x = dedtv3$xm, y = dedtv3$dd, col='green')
+   legend( "topright", c("1", "2", "3"), pch=1, col=c('black','red','green'),  
+           title = "Lag")
+})
+```
+
+```{r}
+#| label: fig-ooCv1z
+#| fig-cap: The reciprocal Cv on valid points, plotted on linear scale. This is essentially a zoom into @fig-ooCv1.
+with(S3DTdiff2[ valid==1,], {
+   dedtv <- dydx( ke.mean.rs, TE.mean.rs)
+   plot( x = dedtv$xm, y = dedtv$dd, panel.first = grid(),
+         xlim=c(0.135,0.17),
+         #log='y', 
+         xlab="TE", ylab = "1/Cv")
+   dedtv2 <- dydx( ke.mean.rs, TE.mean.rs, lag = 2)
+   points( x = dedtv2$xm, y = dedtv2$dd, col='red')
+   dedtv3 <- dydx( ke.mean.rs, TE.mean.rs, lag = 3)
+   points( x = dedtv3$xm, y = dedtv3$dd, col='green')
+   legend( "topright", c("1", "2", "3"), pch=1, col=c('black','red','green'),  
+           title = "Lag")
+})
+```
+
+Lastly, we will plot all the `lag = 1` specific heat values above to
+show the differences between the valid and not valid points
+(@fig-Cvvnv).
+
+```{r}
+#| label: fig-Cvvnv
+#| fig-cap: Absolute value of Cv computed on pairs (`lag = 1`) plotted on log scale.  Red circles were computed on all points, and the blue dots were computed only on points declared valid.  Note that in regions where the pairs are both valid, the blue dots cover the red circles.
+plot( dedt1$xm, abs( dedt1$dd), log='y', col='red', panel.first = grid(),
+      xlab = "T", ylab = "Cv")
+points(dedt2$xm, dedt2$dd, col='blue', pch=16)
+rpl <- recordPlot()
+png("Cvvnv.png", width = 600, height = 300)
+replayPlot(rpl)
+invisible( dev.off())
+```
+
+# Transtion Statistics
+
+## Deviation from the Mean Detection
+
+We need a function which will find when a statistic departs from its
+mean value (i.e., a step in the statistic).
+
+```{r}
+#| label: stepdet
+stepdet <- function( x, nsig = 3, nstart = 10) {
+  # x is a numeric vector
+  # nsig is the number of standard deviations from the running mean x[i] must
+  # \depart to be considered a step.
+  # nstart is the number of points to start the running mean.
+  # x <- x[ !is.na(x)] # drop any NA values before length test.
+  stopifnot( length( x) > nstart +1)
+  
+  cumdet <- function( state, new){
+    # state is a list with the following elements:
+    #   sx: cumsum of x
+    #   ss: the sum of squares
+    #   n: the number of points in the running mean
+    #   nv: the count when first detected
+    # new is a new value to add to the running mean.
+    if (state$nv == 0 ) { # only do this if we haven't detected a departure
+      meanx <- state$sx / state$n 
+      sdx <- sqrt( (state$ss - state$n * meanx^2)/ (state$n - 1)) 
+      #print(state)
+      #print( c( meanx, sdx))
+      if( abs( new - meanx) < (nsig * sdx)) { # nothing detected
+        state$sx <- state$sx + new
+        state$ss <- state$ss + new^2
+        state$n <- state$n + 1
+        state$nv <- 0
+      } else { # departure detected
+        state$nv <- state$n + 1
+      }
+    } # simply return state.
+    return( state)
+  }
+  sxs <- sum( x[ 1:nstart])
+  sss <- sum( x[ 1:nstart]^2) #sum squared start.
+  s <- list( sx = sxs, ss = sss, n = nstart, nv = 0)
+  #print( s)
+  Reduce( cumdet, x[(nstart + 1):length( x)], init = s)
+}
+
+(testcumdet <- stepdet( tx <- c( rnorm(20), 5 + rnorm(10))))
+```
+
+This works quite well to detect the start of diffusion (@fig-diffdet).
+
+```{r}
+#| label: fig-diffdet
+#| fig-cap: "Detecting the start of diffusion.  The red dashed line is the temperature at which the $3\\sigma$ detection threshold is crossed.  The blue line is the mean value of the points preceding the detection. Black circles are points considered valid, and red triangles not valid. Blue band indicates the standard error of the estimates."
+detects <- c( detects, 
+              diff = with( S3DTdiff2[ !is.na( nrd),], {
+  ps <- stepdet( Estimated)
+  kedet <- ke.mean.rs[ ps$nv]
+  cat( run[ ps$nv], ", T = ", ke.mean.rs[ ps$nv], ", 4D = ", 
+       Estimated[ ps$nv], "\n", sep = '')
+  plotconf( y = Estimated, x = ke.mean.rs, panel.first = grid(), Fval = Fval, 
+            xlab = "ke", ylab = "4D", sd = Std.Errord,
+            main = "Diffusion vs. Temperature, Detection of Diffusion Start",
+            xlim = c(0.01, 0.015), ylim = c(0.0, 0.05))
+  abline( v = kedet, col = 'red', lty = 2)
+  mx = ps$sx / ps$n
+  cat( "Mean of points before crossing: ", mx, "\n")
+  abline( h = mx, col = 'darkblue', lty = 1)
+  kedet
+}))
+rpl <- recordPlot()
+png( "diffvkez.png", width = 600, height = 300)
+replayPlot( rpl)
+invisible( dev.off())
+detectsex <- c( detectsex, diff = "Start of diffusion (stepdet)." )
+```
+
+Note that there are two hotter points with very low diffusion, one valid
+and one not. We can also detect with the F statistic (which for all
+these diffusion data has 1 and 8 degrees of freedom). @fig-Fvke shows
+the F statistic vs. temperature.
+
+```{r}
+#| label: fig-Fvke
+#| fig-cap: "F statistic vs. temperature. The red triangles are the points not considered valid. Solid black line is $F=1$."
+with( S3DTdiff2[ !is.na( nrd),], {
+   plotconf( x = ke.mean.rs, y = Fvald, 
+            panel.first = grid(), Fval = Fval, 
+            xlab = "ke", ylab = "F stat.", log = 'y',
+            main = "Diff. Regression F vs. Temperature")
+})
+abline( h = 1.0)
+```
+
+We can see in the above a sharp break. There are four points with $F$
+statistics above one but less than 10. @tbl-DiffFvals shows the runs
+meeting that criteria.
+
+```{r}
+#| label: tbl-DiffFvals
+#| tbl-cap: "Diffusion regressions with $F$-values between one and ten."
+
+knitr::kable( S3DTdiff2[Fvald %within% c(1,10), 
+                        .(run, valid, ke.mean.rs, Fvald, Fpvalued, Estimated)])
+```
+
+The first (the coldest point) has a negative regression line, even
+though it's F statistic is almost four (3.82, p-value is
+`r S3DTdiff2[run == "S3.0001", Fpvalued]`, so pretty significant, except
+that it is diffusing backward, whatever that might mean). The second one
+is run `S3.0026`, whose diffusion F statistic is just over one, for an
+insignificant p-value of `r S3DTdiff2[run == "S3.0026", Fpvalued]`, and
+a diffusion value within the range of the non-diffusing points
+(`r S3DTdiff2[run == "S3.0026", Estimated]`). The other two are likely
+hot enough to be diffusing, but the regressions are unconvincing. Note
+that the 95% confidence $F$-value for 1 and 8 degrees of freedom is
+above 5 (`r qf( 0.95, 1, 8)`).
+
+Ultimately we will use the signifcance value (the `Fpvalued` column) to
+detect the start of diffusion. @fig-Fpvke shows the F statistic p-value
+vs. temperature, and we will use a p-value of 0.01 (99% confidence) to
+detect the start of diffusion.
+
+```{r}
+#| label: fig-Fpvke
+#| fig-cap: "F statistic p- value vs. temperature. The solid black line shows the 99% significance threshold (p-value of 0.01). The vertical red dashed line is the coldest point showing diffusion.  The red triangles are the points not considered valid."
+detects <- c(detects, diffpval = with( S3DTdiff2[ !is.na( nrd),], {
+   plotconf( x = ke.mean.rs, y = Fpvalued, 
+            panel.first = grid(), Fval = Fval, 
+            xlab = "ke", ylab = "p-val", log = 'y',
+            main = "Diff. Regression p-value vs. Temperature",
+            #xlim = c(0.01, 0.015)) 
+            #ylim = ylim = c(0.0, 0.05))
+   )
+   diffp <- ke.mean.rs[Fpvalued < 0.01][1]
+   abline( v = diffp, col = 'red', lty = 2)
+   diffp
+}))
+detectsex <- c( detectsex, diffpval = "First point with p-value below 0.01 (99% confidence)")
+abline( h = 0.01)
+```
+
+@fig-Fpvkez shows that the hotter points in @fig-diffdet are really not
+actively diffusing.
+
+```{r}
+#| label: fig-Fpvkez
+#| fig-cap: "Zoom in of @fig-Fpvke.  The horizontal dashed line marks the p-val of 0.01.  The veritical dashe line is the lowest kinetic energy whos p-val wsa less than 0.01.  The two hotter points to the right for the vertical dashed line are  clearly not undergoing diffusion."
+with( S3DTdiff2[ !is.na( nrd),], {
+   plotconf( x = ke.mean.rs, y = Fpvalued, 
+            panel.first = grid(), Fval = Fval, 
+            xlab = "ke", ylab = "p-val", log = 'y',
+            main = "Diff. Regression p-value vs. Temperature",
+            xlim = c(0.01, 0.015)) 
+            #ylim = ylim = c(0.0, 0.05))
+   
+   diffp <- ke.mean.rs[Fpvalued < 0.01][1]
+   abline( v = diffp, col = 'red', lty = 2)
+})
+abline( h = 0.01, col = 'red', lty = 2)
+rpl <- recordPlot()
+png( "Fpvkez.png", width = 600, height = 300)
+replayPlot( rpl)
+invisible( dev.off())
+```
+
+The pressure and temperature curves require us to detect the change of
+slope. Use of the `dydx()` function might seem appropriate, but with
+noisy data and unevenly spaced `x` values, we can get large departures
+from mean values just due to noise.
+
+```{r}
+#| label: fig-ddPress
+#| fig-cap: "Estimated derivative of the pressure data, plotted on a logarithmic scale (three values were negative so absolute value is plotted). The red dashed line marks where the $7\\sigma$ detection linear threshold was crossed.  Thresholds lower than $7\\sigma$ would be crossed by noise at lower temperatures (found emperically)."
+ddpt <- dydx( y = S3DTdiff2$Pressure.mean.rs, x = S3DTdiff2$ke.mean.rs)
+ps <- stepdet( ddpt$dd, nsig = 7)
+col = rep( 'blue', length( ddpt$dd))
+col[ (ps$n + 1):length( col)] <- 'red'
+plot( y = abs( ddpt$dd), x = ddpt$xm, col = col, log = 'y', 
+      panel.first = grid(), 
+      xlab = "T", ylab = "<dP/dT>", 
+      main = "Derivative of Pressure vs. Temperature")
+abline( v = ddpt$xm[ ps$nv + 1], col = 'red', lty = 2)
+mx = ps$sx / ps$n
+sdx = sqrt( (ps$ss - ps$n * mx^2) / (ps$n - 1))
+cat( ps$n, ps$nv, ddpt$dd[ ps$nv], mx, sdx, mx + 5 * sdx, mx - 5 * sdx, "\n")
+abline( h = mx, col = 'darkblue', lty = 1)
+detects <- c( detects, dPdT = ddpt$xm[ ps$nv])
+detectsex <- c( detectsex, dPdT = "Estimated dPdT detection." )
+```
+
+Below in @fig-diffPress we try the simple first difference of the
+pressure data, and it takes a $5\sigma$ threshold to get a dependable
+detection.
+
+```{r}
+#| label: fig-diffPress
+#| fig-cap: "First difference of the pressure data.  The red dashed line is the $5\\sigma$ detection threshold crossing.  The blue line is the mean of points before the crossing, and the dashed lines are the $\\pm 5\\sigma$ limits."
+prdf <- diff( S3DTdiff2$Pressure.mean.rs)
+ps <- stepdet( prdf, nsig=5)
+kedet <- S3DTdiff2$ke.mean.rs[ ps$nv + 1] # +1 because of diff
+S3DTdiff2[ ps$nv, .( run, Pressure.mean.rs, ke.mean.rs)]
+col = rep( 'blue', length( prdf))
+col[ (ps$nv):length( prdf)] <- 'red'
+plot( y = prdf, x = tail( S3DTdiff2$ke.mean.rs, -1), xlim=c(0.0, 0.015),
+      main = "First difference of Pressure vs. Temperature",
+      col = col, panel.first = grid(), xlab = "ke", ylab = "diff(Pressure)")
+abline( v = kedet, col = 'red', lty = 2)
+mx = ps$sx / ps$n # mean of points before crossing
+sdx = sqrt( (ps$ss - ps$n * mx^2) / (ps$n - 1)) # STD. DEV of points bfr xing
+abline( h = mx, col = 'darkblue', lty = 1)
+abline( h = mx - 5 * sdx, col = 'darkblue', lty = 2)
+abline( h = mx + 5 * sdx, col = 'darkblue', lty = 2)
+detects <- c( detects, diffP = kedet)
+detectsex <- c( detectsex, 
+                diffP = "Detection on first difference of Isochor data." )
+```
+
+## Linear Detection
+
+This isn't satisfactory. A function that will fit a line to the data and
+detect when the next point departs significantly from the line is
+needed.
+
+```{r}
+#| label: linedet
+linedet <- function( x, y, level = 0.99, nstart = 10) {
+  # x & y are a numeric vectors of the same length
+  # nsig is the probability that a noise deviation will cause a false detection
+  #   over the total run of points.
+  # depart to be considered a step.
+  # nstart is the number of points to start the running mean.
+  lx <- length( x)
+  stopifnot( lx > nstart +1)
+  stopifnot( lx == length( y))
+  dt <- data.table( x = x, y = y)
+  for ( i in nstart:lx) { # step through looking for a departure
+    pr <- predict( lm( y ~ x, data = dt[ 1:i,]), 
+                   newdata = data.frame( x = x[ i + 1]), 
+                   interval = "prediction", level = level)
+    # cat( i, pr, "\n")
+    if (!(y[ i + 1] %within% pr[, c("lwr","upr")])) { # if departure detected
+      return( c( nv = i + 1, x = x[ i + 1], y = y[ i + 1],
+                 pred = pr[1, 1], lwr = pr[1, 2], upr = pr[1, 3]))
+      } # if (!(y...)
+  } # for ( i...)
+}
+
+tx <- 1:30
+ty <- tx + rnorm(30)
+ty[ 21:30] <- ty[ 21:30] + 5
+(testcumdet <- linedet( x = tx, y = ty))
+```
+
+```{r}
+#| include: false
+rm( tx, ty, testcumdet) # remove test variables.
+```
+
+We can try this on the isochor data (@fig-isochf1).
+
+```{r}
+#| label: fig-isochf1
+#| warning: false
+#| fig-cap: Isochor of points up to first detection, plus ten points.  Red vertical dashed line shows the detected point.
+(pr1 <- linedet(  x = S3DTdiff2$ke.mean.rs, y = S3DTdiff2$Pressure.mean.rs, 
+                 level = 0.99))
+kedet <- unname( pr1[ "x"])
+model1 <- lm( Pressure.mean.rs ~ ke.mean.rs, 
+             data = S3DTdiff2[ 1:(pr1["nv"] - 1),])
+plotconfMD2( x = "ke.mean.rs", y = "Pressure", xlab = "T", 
+             main = "Isochor of points up to first detection",
+             df = S3DTdiff2[ 1:(pr1["nv"] + 10),])
+abline( v = kedet, col = 'red', lty = 2)
+lines( S3DTdiff2$ke.mean.rs[1:(pr1["nv"] - 1)], 
+       predict( model1, interval="prediction", level = 0.99)[, "upr"], 
+       col = "blue")
+text( x = kedet, y = pr1["y"], labels = "icld1", pos = 4, cex = 0.8)
+text( x = kedet, y = pr1["y"], labels = format( kedet, width = 5), pos = 2, 
+      cex = 0.8)
+grid()
+detects <- c( detects, icld1 = kedet) # isochor linedet 1
+detectsex <- c( detectsex, icld1 = "Isochore linedet detection at 0.99." )
+```
+
+That is a surprise. Note how tight the prediction interval is: $\pm$
+`r 100 * (pr1["upr"] - pr1["lwr"]) / (2 * pr1["pred"])`% of the
+prediction. This is a result of the data being tightly clustered around
+the regression line up through the 15th point. The 16th point departs
+above the 99.99 percentile (@fig-fit1resid).
+
+```{r}
+#| label: fig-fit1resid
+#| fig-cap: "Residuals of the 15 point regression plotted to the first _16_ points. Blue dotted line is the 99% prediction interval, and the red dotted line is the 99.99% interval."
+x1 <- S3DTdiff2$ke.mean.rs[ 1:pr1["nv"]] # all points including detected.
+y1 <- predict( model1, newdata = data.frame( ke.mean.rs = x1), 
+               interval = "prediction", level = 0.99)
+plot( x = x1, y = (S3DTdiff2$Pressure.mean.rs[ 1:pr1["nv"]] - y1[, 'fit']), 
+      xlab = "T", ylab = "P - Pred(Pressure)", 
+      main = "Pressure Residuals vs. Temperature", panel.first = grid())
+lines( x1, y1[,"upr"] - y1[, 'fit'], col = 'blue', lty = 2)
+y2 <- predict( model1, newdata = data.frame( ke.mean.rs = x1), 
+               interval = "prediction", level = 0.9999)
+lines( x1, y2[,"upr"] - y2[, 'fit'], col = 'red', lty = 2)
+abline( h = 0.0)
+```
+
+The first 15 points make a tight linear model, but the 16th point makes
+a significant deviation beyond the 99.99% interval. The linear detection
+seemed to work pretty well, and the plot shows that the fitted points
+are holding no trends. While we can clearly see where the linear trend
+ends, the data gets increasingly noisy as the substance heats beyond
+$T=0.008$. Various detection thresholds will continue to detect other
+breaks that are of no obvious significance. @fig-isochf2 shows that five
+nines (99.999%) are needed to skip to the obvious departure near
+$T=0.0128$.
+
+```{r}
+#| label: fig-isochf2
+#| warning: false
+#| fig-cap: Isochor of points up to second detection (at five nines significance), plus ten points.  Red vertical dashed line shows the detected point.
+(pr2 <- linedet(  x = S3DTdiff2$ke.mean.rs, y = S3DTdiff2$Pressure.mean.rs, 
+                 nstart = 16, level = 0.99999))
+kedet2 <- unname( pr2["x"])
+model2 <- lm( Pressure.mean.rs ~ ke.mean.rs, 
+              data = S3DTdiff2[ 1:(pr2["nv"] - 1),])
+plotconfMD2( x = "ke.mean.rs", y = "Pressure", 
+             main = "Isochor of points up to second detection",
+             df = S3DTdiff2[ 1:(pr2["nv"] + 10),], xlim = c( 0.005, 0.014),
+             ylim = c( 0.095, 0.112), xlab = "T", ylab = "P")
+grid()
+abline( v = kedet2, col = 'red', lty = 2)
+lines( S3DTdiff2$ke.mean.rs[1:(pr2["nv"] - 1)], 
+       predict( model2, interval="prediction", level = 0.99)[, "upr"], 
+       col = "blue")
+text( x = kedet2, y = pr2["y"], labels = "icld2", pos = 4, cex = 0.8)
+text( x = kedet2, y = pr2["y"], labels = format( kedet2, width = 5), pos = 2, 
+      cex = 0.8)
+detects <- c( detects, icld2 = kedet2) # isochor linedet 1
+detectsex <- c( detectsex, icld2 = "Isochore linedet at 5 nines." )
+```
+
+That was point 27 at the far right. @fig-fit2resid shows the residuals
+of a model consisting of the first 26 points. Note that the residuals
+appear highly correlated, so linear detection is not really the right
+tool anyway.
+
+```{r}
+#| label: fig-fit2resid
+#| fig-cap: "Residuals of the regression fit to the first _26_ points. Blue dotted line is the 99% prediction interval, and the red dotted line is the 99.999% interval."
+x1 <- S3DTdiff2$ke.mean.rs[ 1:pr2["nv"]] # all points including detected.
+y1 <- predict( model2, newdata = data.frame( ke.mean.rs = x1), 
+               interval = "prediction", level = 0.99)
+plot( x = x1, y = (S3DTdiff2$Pressure.mean.rs[ 1:pr2["nv"]] - y1[, 'fit']), 
+      xlab = "T", ylab = "P - Pred(Pressure)", 
+      main = "Pressure Residuals vs. Temperature", panel.first = grid())
+lines( x1, y1[,"upr"] - y1[, 'fit'], col = 'blue', lty = 2)
+y2 <- predict( model2, newdata = data.frame( ke.mean.rs = x1), 
+               interval = "prediction", level = 0.99999)
+lines( x1, y2[,"upr"] - y2[, 'fit'], col = 'red', lty = 2)
+abline( h = 0.0)
+```
+
+@fig-isochf3 shows the regression of only the points between the first
+and second detections.
+
+```{r}
+#| label: fig-isochf3
+#| fig-cap: Isochor of points between first and second second detection, plus ten points.  Red vertical dashed line shows the detected point.
+
+rng <- 16:26
+pr3<- with( S3DTdiff2[ rng[1]:nrow( S3DTdiff2),], { 
+  (linedet( x = ke.mean.rs, y = Pressure.mean.rs, nstart = 7, level = 0.99))
+})
+
+pr3["nv"] <- pr3["nv"] + rng[1] - 1 # reset the count 
+kedet3 <-S3DTdiff2$ke.mean.rs[ pr3["nv"]]
+
+model3 <- lm( Pressure.mean.rs ~ ke.mean.rs, data = S3DTdiff2[ rng,])
+plotconfMD2( x = "ke.mean.rs", y = "Pressure", 
+             main = "Isochor of points between first and second detection",
+             xlab = "T", ylab = "P",
+             df = S3DTdiff2[ rng[1]:(pr3["nv"] + 10),])
+abline( v = pr3["x"], col = 'red', lty = 2)
+lines( S3DTdiff2$ke.mean.rs[rng], 
+       predict( model3, interval="prediction", level = 0.99)[, "fit"], 
+       col = "blue")
+text( x = kedet3, y = pr3["y"], labels = "icld3", pos = 4, cex = 0.8)
+text( x = kedet3, y = pr3["y"], labels = format( kedet3, width = 5), pos = 2, cex = 0.8)
+detects <- c( detects, icld3 = kedet3) # isochor linedet 1
+detectsex <- c( detectsex, icld3 = "Isochore linedet (pnts. 16-26)")
+```
+
+The residuals of that regression are shown in @fig-fit3resid, and
+perhaps show some correlation.
+
+```{r}
+#| label: fig-fit3resid
+#| fig-cap: "Residuals of the regression fit to first points 16 - 26, with residual for point 27 (the detected point) shown. Blue dotted line is the 99% prediction interval, and the red dotted line is the 99.999% interval."
+rng = 16:27
+x1 <- S3DTdiff2$ke.mean.rs[ rng] # all points including detected.
+y1 <- predict( model3, newdata = data.frame( ke.mean.rs = x1), 
+               interval = "prediction", level = 0.99)
+plot( x = x1, y = (S3DTdiff2$Pressure.mean.rs[ rng] - y1[, 'fit']), 
+      xlab = "T", ylab = "P - Pred(Pressure)", 
+      main = "Pressure Residuals vs. Temperature", panel.first = grid())
+lines( x1, y1[,"upr"] - y1[, 'fit'], col = 'blue', lty = 2)
+y2 <- predict( model3, newdata = data.frame( ke.mean.rs = x1), 
+               interval = "prediction", level = 0.99999)
+lines( x1, y2[,"upr"] - y2[, 'fit'], col = 'red', lty = 2)
+abline( h = 0.0)
+```
+
+Below are summaries of those two models.
+
+```{r}
+(cm1 <- summary( model1)$coefficients)
+(cm3 <- summary( model3)$coefficients)
+```
+
+Those are very close, but may be statistically different: the `model1`
+slope plus its standard error
+(`r cm1["ke.mean.rs", "Estimate"] + cm1["ke.mean.rs", "Std. Error"]`) is
+still less than the `model3` slope minus its standard error
+(`r cm3["ke.mean.rs", "Estimate"] - cm3["ke.mean.rs", "Std. Error"]`).
+
+Back in @fig-ddPress we asserted that $7\sigma$ threshold was needed to
+prevent noise from triggering the detection, but we were not looking for
+so fine a deviation. Zooming in, we can see the noise in using the
+derivative (@fig-ddPressz).
+
+```{r}
+#| label: fig-ddPressz
+#| fig-cap: "Zoom into @fig-ddPress (with linear axes).  The red dashed line is the $7\\sigma$ detection threshold crossing. The departure near $T = 0.008$ is evident, but there is much noise in this presentation."
+#| warning: false
+plot( y = ( ddpt$dd), x =ddpt$xm, #log ='y', 
+      panel.first = grid(), xlab ="T", ylab = "<dP/dT>",
+      xlim = c( 0.0, detects["dPdT"]), ylim = c( 1.0, 1.4),
+      main ="Derivative of Pressure vs. Temperature")
+abline(v =ddpt$xm[ ps$nv+1],col ='red',lty =2)
+```
+
+In order to complete the analysis, we should label each point, meaning
+we need to identify the fully fluid region and the transition region.
+Let's run the detection in reverse (@fig-isochf4) to find the start of
+the fluid region.
+
+```{r}
+#| label: fig-isochf4
+#| warning: false
+#| fig-cap: Detection of Isochor points in reverse.  The fit is not nearly so good (the fluid phase pressure, which has the most points, is not linear in temperature), but the detector works nevertheless. The dashed red verticle lines delinate the start of the transition region, and the start of the fluid regions.
+setorder( S3DTdiff2, -ke.mean.rs) # This will order the data in reverse.
+(pr4 <- linedet( x = S3DTdiff2$ke.mean.rs, y = S3DTdiff2$Pressure.mean.rs, 
+                 level = 0.99))
+# Since this is in reverse, we need to adjust the point number.
+pr4["nv"] <- nrow(S3DTdiff2) - pr4["nv"] + 2 
+# +2 to make the point the left-most point of the fluid region. 
+# +1 would put in in the transition region.
+setkey( S3DTdiff2, ke.mean.rs) # restore the original order.
+kedet4 <- S3DTdiff2$ke.mean.rs[ pr4["nv"]]
+rng <- pr4["nv"]:nrow(S3DTdiff2) # range of points to use
+model4 <- lm( Pressure.mean.rs ~ ke.mean.rs, data = S3DTdiff2[ rng,])
+plot( Pressure.mean.rs ~ ke.mean.rs,  data = S3DTdiff2, typ ="b",
+      xlim = c( 0.01, .015), ylim = c( 0.10, 0.115),
+      xlab = "Temperature", ylab = "Pressure"
+      )
+
+lines( S3DTdiff2$ke.mean.rs[rng], 
+       predict( model4, interval = "prediction", level = 0.99)[, "fit"], 
+       col = "blue")
+lines( S3DTdiff2$ke.mean.rs[rng], 
+       predict( model4, interval = "prediction", level = 0.99)[, "lwr"], 
+       col = "blue", lty=2)
+lines( S3DTdiff2$ke.mean.rs[rng], 
+       predict( model4, interval = "prediction", level = 0.99)[, "upr"], 
+       col = "blue", lty=2)
+grid()
+#text(x=S3DTdiff2$ke.mean.rs[rng], y=S3DTdiff2$Pressure.mean.rs[rng], 
+#     labels = format( S3DTdiff2$Pressure.mean.rs[rng], wdth = 5), pos = 4, 
+#     cex = 0.8)
+detects <- c( detects, icld4 = kedet4) # isochor linedet 3
+detectsex <- c( detectsex, icld4 = "Isochore linedet in reverse (high temp)")
+detects[ c("icld1", "icld2", "icld3", "icld4")]
+abline( v = detects[ c("icld1", "icld2", "icld3", "icld4")], col = 'red', 
+        lty = 2)
+
+```
+
+The data can be tagged with the detected state. We will distinguish two
+solid states, a transition state, and a fluid state.
+
+```{r}
+#| label: fig-State
+#| fig-cap: Isochor with points colored by state.
+#| warning: false
+S3DTdiff2[ , State := cut( ke.mean.rs, labels = c("Solid1", "Solid2", 
+                                                  "Transition", "Fluid"),
+            breaks = c( 0, detects[ c("icld1", "icld3", "icld4")], 100),
+            right = FALSE)]
+plot( Pressure.mean.rs ~ ke.mean.rs,  data = S3DTdiff2, col = State,
+      xlim = c( 0.006, .017), ylim = c( 0.095, 0.115),
+      xlab = "T", ylab = "Pressure")
+grid()
+legend( "bottomright", #col = S3DTdiff2$State, 
+        legend = levels(S3DTdiff2$State), pch = 1, col = 1:4,
+        title = "State")
+model5 <- lm( Pressure.mean.rs ~ ke.mean.rs * State, data = S3DTdiff2)
+summary( model5)
+```
+
+This is not exactly what I expected. The model does a good job of
+containing the data, even though the fluid region is clearly non-linear
+in ke (@fig-isochf5).
+
+```{r}
+#| label: fig-isochf5
+#| warning: false
+tp1 <- predict( model5, interval = "prediction", level=0.99)
+plotconfMD2( S3DTdiff2, x = "ke.mean.rs", y = "Pressure",
+             xlim = c( 0.006, .017), ylim = c( 0.095, 0.115))
+lines( x=S3DTdiff2$ke.mean.rs, y=tp1[,"fit"], col='red')
+lines( x=S3DTdiff2$ke.mean.rs, y=tp1[,"lwr"], col='red', lty=2)
+lines( x=S3DTdiff2$ke.mean.rs, y=tp1[,"upr"], col='red', lty=2)
+```
+
+Modeling just the solid state as two regions will compare just those two
+regions.
+
+```{r}
+model6 <- lm( Pressure.mean.rs ~ ke.mean.rs * State, 
+              data = S3DTdiff2[ State %in% c("Solid1", "Solid2"),])
+summary( model6)
+```
+
+That states that the two solid regions have statistically different
+specific heats, to a virtual certainty. The model above is
+$P = \alpha_0 + \beta_0 T + s(\alpha_s +\beta_s T)$, where $s$ is one in
+the `Solid2` state and zero otherwise, and $\alpha_0$, $\beta_0$,
+$\alpha_s$, and $\beta_s$ are the coefficients of the model. The
+calculation below shows that the coefficients above apply to that form
+of the equation.
+
+```{r}
+#| label: cm6
+cm6 <- coef( model6)
+with( S3DTdiff2[ State %in% c("Solid1", "Solid2")], {
+   Temp <- ke.mean.rs # use kinetic energy as temperature
+   P <- Pressure.mean.rs
+   s <- as.numeric( State == "Solid2") # 1 if Solid2, 0 otherwise
+   pred <- cm6[1] + cm6[2] * Temp + s * (cm6[3] + cm6[4] * Temp)
+   sum( pred - predict( model6)) # should be zero
+   #plot( Pressure.mean.rs ~ ke.mean.rs, col = State,
+})
+```
+
+The code below shows that `model6` (which estimates $\beta_s$) is a
+significantly better fit than `model2`.
+
+```{r}
+#| label: anova26
+anova( model2, model6)
+AIC( model2, model6)
+```
+
+So model 6 (the only one to estimate $\beta_s$ is clearly superior to
+almost ten 9's (99.99...99%) certainty. The actual value of the specific
+heats can be best garnered from the coefficients of the models of just
+those sections (see @tbl-models1). The intercepts are not important and
+so not presented in the table (most are available in the code output
+above).
+
+| Model | Data | $\beta_0 \pm \sigma_\beta$ ($\beta_s \pm \sigma_{\beta_s}$) |
+|----|----|----|
+| model1 | `Solid1` | 1.104 $\pm0.04\%$ |
+| model2 | `Solid1` & `Solid2` | 1.122 $\pm0.26\%$ |
+| model3 | `Solid2` | 1.162 $\pm0.54\%$ |
+| model6 | `Solid1` & `Solid2` | 1.104 $\pm0.22\%$, (0.0574 $\pm 8.2\%$) |
+
+: Significant model fits. All slope coefficients were highly
+significant. Model 2 included both solid regions, but treated them as as
+one block of data. Model 4 (fluid region) and model 5 (linear model of
+all four states) are not relevant to these results. {#tbl-models1}
+
+The `model6` coefficients for `Solid2` (where the two are added) differ
+from that estimated in `model3` by only
+`r 100*(cm6["ke.mean.rs"] + cm6["ke.mean.rs:StateSolid2"] - coef(model2)["ke.mean.rs"])/coef(model3)["ke.mean.rs"]`%.
+
+## Summary Statistics
+
+We will plot the various statistics and draw some lines where melting
+begins.
+
+```{r}
+#| label: trlines
+S3DTdiff2[ , ':='( rv = ke.sd.rs / ke.mean.rs)] # add relative variance column
+setkey( S3DTdiff2, ke.mean.rs) # ensure data is sorted by temperature
+# Next line will select the first run with a P-value < 0.01:
+# i.e., highly probably regression.
+(mdiff <- S3DTdiff2[ Fpvalued < 0.01, ke.mean.rs][1])
+# run with highest relative variance
+(kesd <-  S3DTdiff2[ which.max( S3DTdiff2$rv), ke.mean.rs]) 
+detects <- c( detects, mdiff = mdiff, 
+              rvmax = S3DTdiff2$ke.mean.rs[ which.max( S3DTdiff2$rv)])
+detectsex <- c( detectsex, mdiff = "First diffusion with correlation.",
+                rvmax = "Max relative variance")
+```
+
+First, we need to `melt()` the data table.
+
+```{r}
+#| label: S3DTd2m
+# First select just the columns we're interested in
+S3DTd2ss <- S3DTdiff2[,.( run, Temp = ke.mean.rs, rv, LogFp = log(Fpvalued), 
+                          D = Estimated / 4.0, 
+                          TE = TE.mean.rs,
+                          valid = fifelse( valid == 1, TRUE, FALSE), psiavg,
+                          psiabs.mean.rs, Pressure = Pressure.mean.rs)]
+id.var = c( "run", "Temp", "valid")
+S3DTd2m <- melt( S3DTd2ss, id.var = id.var, direction = 'long') 
+# now each variable is its own table.
+# The following will create a table of Log(Cv) values.
+Cvlen <- length( dedt1$xm) 
+CvTable <- data.table( run = rep( "0", Cvlen), 
+                       valid = fifelse( dedt1$xm %within% c( 0.01283, 0.014095),
+                                        FALSE, TRUE), 
+                       Temp = dedt1$xm, variable = rep( "Log(Cv)", Cvlen),
+                       value = log( dedt1$dd))
+S3DTd2m2 <- rbind( S3DTd2m, CvTable)
+head( S3DTd2m2)
+```
+
+Frankly not sure why that worked (I don't understand exactly what
+`id.var = id.var` or `varying` does), but we now have each run with its
+temperature, and the *value* of each variable.
+
+@fig-Transition below shows plots of eight statistics. The Log of the
+specific heat calculated across the whole data set as `lag = 1`;
+estimates using points where the temperature is not considered valid
+have been plotted with blue dots. TE is total energy, `rv` is the
+relative temperature variance (the variance of the 500-point re-sampled
+temperatures divided by the temperature mean), `psiavg` is the magnitude
+of the average of $\psi$ (i.e., the step-by-step average of the complex
+quantity) and `psiabs.mean.rs` is the step-by-step average of the
+magnitude of $\psi$. `D` is the estimate of diffusion computed as,
+`LogFp` is the natural log of the probability of F-value of the
+diffusion regression of $\left< R^2(t) \right> \sim t$ (where $t$ is
+time;). Low probabilities indicate that that the regression line was
+unlikely caused by random noise, and thus diffusion was present.
+`Log(Cv)` is the natural logarithm of the estimated specific heat, which
+is computed as the first difference of the total energy divided by the
+temperature. The vertical red dashed lines mark the detected
+transitions.
+
+```{r}
+#| label: fig-Transition
+#| fig-cap: "Statistics around transition plotted against temperature. Tan dots are points considered valid, blue ones not valid.  See text for description of statistics. Verticle red dashed lines are mark the transition detections." 
+#| fig-height: 9
+#| fig-width: 6.5
+xlim <- c(0.0069, 0.016)
+xyplot( value ~ Temp | variable, 
+        data = S3DTd2m2[ Temp %within% xlim,], groups = valid, 
+        #layout = c( 0, 7), 
+        pch = c(16, 16), 
+        #auto.key = list(space = "right", pch=c(16,16)),
+        scales=list( y = list( relation = "free")),
+        xlab = "Temperature",
+        Main = "Key Series Three Statistics Around Transition",
+        #par.settings = simpleTheme(pch = c(16, 16), 
+        #       col = c("peru", "cornflowerblue")),
+        panel = function(...) {
+           panel.xyplot(...)
+           panel.grid( h=-1, v=-1)
+           panel.abline( v = detects, col = "red" , lty = 2)
+         })
+rpl <- recordPlot()
+png("Transitions.png", width = 6.5, height = 9, units = "in", res = 100)
+replayPlot(rpl)
+invisible( dev.off())
+```
+
+@tbl-detects shows the detected transitions plotted as vertical lines in
+@fig-Transition and their descriptions.
+
+```{r}
+#| label: tbl-detects
+#| tbl-cap: "Detected transition temperatures and their descriptions. All of the points except for the Cv (specific heat) and dPdT are the mean kinetic energy per paricle of a particular run. Estimates using the `dydx` function can report temperatures between runs."
+detdt <- data.table( T = detects, Names = names(detects), Desc. = detectsex)
+setkey( detdt, T)
+knitr::kable( detdt)
+```
+
+# Summary
+
+As can be seen in @fig-Transition and @tbl-detects, that, excepting the
+first, most the detected transition points are either close or the same.
+The value `r detects['mdiff']` is from run `S3.00275`. The next colder
+detection is the `dPdT` whose temperature is between runs `S3.00275` and
+`S3.0026`. The hottest detected point (`maxCv2`) is not to be trusted,
+as it is based only on "valid" points. While the "not valid" points were
+showing signs of sloping temperatres with time, those slopes were very
+small, and that technique excludes so many points that the estimated
+temperature of the max Cv has a wide expected variance (not computed
+here).
+
+The Nelson-Halperin order parameter $\psi$ and the diffusion are very
+different measures of the same thing. @fig-psivD shows $\psi$ plotted
+against the logarithm of the diffusion estimate $D$. Both are reliable
+estimates of the state of the substance.
+
+```{r}
+#| label: fig-psivD
+#| fig-cap: Nelson-Halperin order parameter plotted agains the natural logarithm of the diffusion estimate. Red triangles are "not valid" points.
+with( S3DTdiff2, 
+      plotconf( y = psiavg, x = log( abs( Estimated / 4)), Fval = Fval,
+                xlab = "D", ylab = expression(psi),
+                main = "Comparing order parameter and diffusion")
+)
+```
+
+No evidence of a second transition was found.
+
+## Isotherm and Isobar
+
+We will start be reproducing the isochor plot of all points
+(@fig-pvske_eta). The isochor is a plot of pressure vs. temperature
+(constant density).
+
+The $r^{-n}$ potential allows us to create isobars (constant pressure)
+or isotherms (constant temperature) from constant density data. The
+important thermodynamic variable is
+$\eta = \rho \sigma^2 \left( \epsilon / k T \right)^{2/n}$, where $\rho$
+is the density, $T$ is the temperature, and $\sigma$, $\epsilon$ and $k$
+are the distance unit, energy unit, and Boltzmann's constant
+respectively, all are defined as one, meaning $\rho$ and $T$ are in
+scaled units [@Shea1980] [@Novaco1982].
+
+```{r}
+#| label: fig-pvske_eta
+#| eval: true
+#| output: true
+#| fig-cap: 'Isochor of all points at density $\rho = 1/\pi$. The blue dashed lines represent the temperature and pressure of the isotherm and isobar plots below.  The gray lines are lines of constant $\eta = \rho \left( \epsilon / T \right)^{2/n}$.'
+isotherm <- function( P1, T1, T2, n) {P1 * (T2 / T1)^(1 + 2/n)} # compute P2
+isot = 0.0129
+isob = 0.1075
+plotconfMD2( S3DTdiff2, x = "ke.mean.rs", y = "Pressure", 
+             xlab = "Temperature", ylab = "Pressure",
+             main = "Isochor of all points with scaling lines", 
+            ylim = c( 0.01, 0.15))
+abline( h = isob, col= "blue", lty = 2)
+abline( v = isot, col= "blue", lty = 2)
+  tr <- range( S3DTdiff2$ke.mean.rs) # T1 range
+  ts <- seq( tr[1], tr[2], length.out = 200)
+  t1s <- isot + c(-0.005, -0.01, 0, 0.005, 0.01, 0.015, 0.02,.025, .03)
+  for (T1 in t1s) {
+    lines( x = ts, y = isotherm( isob, T1, ts, 5), col = 'gray', lty = 1, 
+           lwd = 2)
+  }
+  pl <- recordPlot()
+png("pvske_eta.png", width=600, height=300)
+replayPlot(pl)
+invisible(dev.off())
+```
+
+The scaling lines show that when scaling to constant pressure,
+temperatures below the constant pressure scale up in temperature, and
+those above scale down. Conversely, when scaling to constant
+temperature, pressures below the constant temperature scale up in
+pressure, and those above scale down, both rather dramatically.
+
+The pressure and temperature scale such that
+$P_1 / \rho_1 T_1 = P_2 / \rho_2 T_2$ (this is the equivalent of the
+[Ideal Gas Law](https://en.wikipedia.org/wiki/Ideal_gas_law) in two
+dimensions). If we want to draw an isobar or isotherm curve, we need use
+the scaling to map the measurements to different scales. If we have a
+measurement $T_1$ and pressure $P_1$ at density $\rho_1$ ($1/\pi$ for
+us), we can map $T_2$ to a pressure $P_2$ via
+
+$$
+T_2 = \frac{\rho_1 T_1 P_2}{\rho_2 P_1}
+$$
+
+Then we use $\eta = \rho_1 / T_1^{2/n} = \rho_2 / T_2^{2/n}$ to replace
+$\rho_2 = \rho_1 \left(T_2/ T_1\right)^{2/n}$ in the above yielding
+
+\begin{align*}
+T_2 &= \frac{\rho_1 T_1 P_2}{P_1 \eta T_2^{2/n}} \\
+    &= \frac{\rho_1 T_1 P_2}{ P_1 \left(\rho_1 / T_1^{2/n}\right) T_2^{2/n}} \\
+T_2^{1 + 2/n} &= \frac{T_1^{1 + 2/n} P_2}{P_1} \\
+T_2 &= T_1 \left( P_2/P_1 \right)^{\left( 1 / (1 + 2/n) \right)}\\
+    &= T_1 \left( \frac{P_2}{P_1} \right)^{\left( n/ (n + 2) \right)}
+\end{align*}
+
+That's messy, but now that we have a $T_2$. Then we use
+$\rho_2 = \rho_1 \left( T_2 / T_1 \right)^{2/n}$ to compute a new
+density. @fig-isobar2507 shows the isobar at $P=0.1075$, which is near
+the transition at $1/\pi$ density (see @fig-pvske_eta).
+
+```{r}
+#| label: fig-isobar2507
+#| eval: true
+#| output: true
+#| fig-cap: 'Isobar at $P=0.1075$, the pressure near the transition at $1/\pi$ density (see @fig-pvske_eta).'
+with( S3DTdiff2, {
+  n <- 5 # current potential exponent
+  P2 <- isob # near transition pressure at 1/pi density
+  T2 <- ke.mean.rs * (P2 / Pressure.mean.rs)^(n / (n + 2))
+  den2 <- (1 / pi) * (T2 / ke.mean.rs)^(2/n)
+  plotconf( x = (1 / den2), y = T2, Fval = Fval, linethresh = 200, 
+            panel.first = grid(), xlab = "Area / Particle", 
+            ylab = "Temperature", 
+            main = " Isobar at P = 0.1075"#xlim = c( 3.0, 3.5)
+            )
+  axis( side = 1, at = pi, labels = expression(pi))
+})
+pl <- recordPlot()
+png("isobar2507.png", width=600, height=300)
+replayPlot(pl)
+invisible(dev.off())
+```
+
+Similar algebra yields the following for a constant temperature
+(Isotherm). Since we are transforming to a constant temperature, we can
+first compute the new density
+$\rho_2 = \rho_1 \left( T_2 / T_1 \right)^{2/n}$. Then:
+
+\begin{align*}
+P_2 &= \frac{P_1 \rho_2 T_2}{\rho_1 T_1} \\
+    &= \frac{P_1 \eta T_2^{1 + 2/n}}{\rho_1 T_1} \\
+    &= \frac{P_1 \left(\rho_1 / T_1^{n/2}\right)T_2^{1 + 2/n} }{\rho_1 T_1} \\
+    &= P_1 \left(\frac{T_2}{T_1}\right)^{1 + 2/n}
+\end{align*}
+
+If we have pre-computed the new density, we can stop at the first step
+above, but sometimes we don't care about the density, and so the final
+form is utilized. The code below generates @fig-isotherm2507.
+
+```{r}
+#| label: fig-isotherm2507
+#| eval: true
+#| output: true
+#| fig-cap: 'Isotherm in the tranistion region.'
+with( S3DTdiff2, {
+  n <- 5 # current potential exponent
+  #P2 <- Pressure.mean.rs * (T2 / ke.mean.rs)^(1 + 2/n)
+  den2 <- (1 / pi) * (isot / ke.mean.rs)^(2/n)
+  P2 <- isotherm( Pressure.mean.rs, ke.mean.rs, isot, n) # compute P2
+  plotconf( x = (1/den2), y = P2, Fval = Fval, linethresh = Inf, 
+            panel.first = grid(), xlab = "Area / Particle", ylab = "Pressure", 
+            xlim = c( 2.8, 3.5), ylim = c(0.08, .15), 
+            main = "Isotherm at T = 0.0129"
+            )
+  axis( side = 1, at = pi, labels = expression(pi))
+  # compare two methods to compute P2:
+  sum( (Pressure.mean.rs * den2 * pi * (isot / ke.mean.rs) - P2)^2)
+})
+pl <- recordPlot()
+png("isotherm2507.png", width=600, height=300)
+replayPlot(pl)
+invisible(dev.off())
+```
+
+With temperature as the independent variable, the isobar in
+@fig-isobaravt25072 show the expanding area-per-particle as the
+temperature increases.
+
+```{r}
+#| label: fig-isobaravt2507
+#| eval: true
+#| output: true
+#| fig-cap: 'Isobar of @fig-isobar2507 with axes reversed (temperature as independent variable).  The expansion of the substance with temperature while under constant pressure is clear.'
+with( S3DTdiff2, {
+  n <- 5 # current potential exponent
+  P2 <- isob # near transition pressure at 1/pi density
+  T2 <- ke.mean.rs * (P2 / Pressure.mean.rs)^(n / (n + 2))
+  den2 <- (1 / pi) * (T2 / ke.mean.rs)^(2/n)
+  plotconf( y = (1 / den2), x = T2, Fval = Fval, linethresh = 200, 
+            panel.first = grid(), ylab = "Area / Particle", 
+            xlab = "Temperature",  #xlim = c( 3.0, 3.5)
+            main = " Isobar at P = 0.1075"
+            )
+  axis( side = 1, at = pi, labels = expression(pi))
+})
+pl <- recordPlot()
+png("isobaravt2507.png", width=600, height=300)
+replayPlot(pl)
+invisible(dev.off())
+```
+
+# Next Steps
+
+The basics of the 1979 work have been replicated, except for heating and
+cooling. The heating-cooling code does not add any further randomness to
+the phase space sampling, although the many initializations already have
+that covered. In short, each initialization is a unique instance off
+phase space, admittedly with a start at the unlikely instance of minimum
+potential energy. There is reason to fear that this starting point may
+bias results, and heating and cooling will not change that bias.
+
+The path will be to do four series each of heating and cooling, all
+starting from configurations that are considered validly in equilibrium.
+
+# Epilog
+
+On 25 July, I realized that the initial filtering of `MD2DF.L` only
+captured the "S3" series, missing the "S3b" data. The additional data
+was mostly \~4M+ point runs just above the transition region that were
+for the most part not considered valid. The text above has been updated
+to include the "S3b" data, which is now included in the `S3DTdiff2` data
+table. The "S3b" data was not used in the original analysis, but it is
+included here for completeness.
+
+# References
+

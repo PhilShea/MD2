@@ -13,7 +13,7 @@ format: pdf
 library( parallel)
 # Calculate the number of cores
 num_cores <- detectCores() - 1
- source("C:/Users/phils/Documents/DSP/MD/MD2/R/runcombine.r")
+ #source("C:/Users/phils/Documents/DSP/MD/MD2/R/runcombine.r")
 ```
 
 # New Runs

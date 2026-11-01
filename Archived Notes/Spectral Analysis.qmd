@@ -1,0 +1,105 @@
+---
+title: "Spectral Analysis"
+author: "Phil Shea"
+date: last-modified
+format:
+  pdf:
+    fig-pos: 'H'
+    #cite-method: biblatex
+#mainfont: "Times New Roman"
+bibliography: "../Melting in Two D.bib"
+link-citations: true
+monofont: "Courier 10 Pitch"
+monofontoptions: 'Scale=0.8'
+execute:
+   freeze: auto
+editor_options:
+  markdown:
+    wrap: 72
+    references: 
+      location: block
+    canonical: true
+---
+
+```{r}
+#| label: init
+#| include: false
+#
+# NOTE: if the package has changed, it must be installed locally via:
+#
+# devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+# (for Windows)
+# or
+#
+# devtools::install("/home/phil/MD/MD2RP")
+# (for linux)
+#
+# You probably have to re-start R after this.
+#
+# *****************************************************
+require( MD2RP)
+require( parallel)
+require( pracma)
+require( data.table)
+require( knitr)
+require( lattice)
+require( JuliaCall)
+num_cores <- detectCores() - 1
+options(digits=5)
+"%within%" <- function( vector, range) # define convenience function.
+   (vector > range[ 1]) & (vector < range[ 2])
+
+td <- "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+MD2.A <- readRDS( "../MD2DT.A.RDS") # read in current data for analysis 
+```
+
+# Spectral Analysis
+
+We did a spectral analysis back when analyzing series 2 as documented in
+\[Data Overview S2.pdf\]. Unfortunately, the files on which that
+analysis was performed were lost, and the analysis did not predict and
+analyse what our averaging scheme would do to the spectrum of the
+kinetic energy (used to estimate the temperature).
+
+## Prediction
+
+The kinetic energy recorded at each step is the average per particle
+energy, or $E_k = \left( \sum_N v_i^2 \right) / 2N$, where $N$ is the
+number of particles, $v_i$ is the is the velocity squared of particle
+$i$, and the particle's mass is unity in scaled units. If the particles
+were an ideal gas, their kinetic energy in each of the two dimensions
+would be a Gaussian random variable with mean zero and variance equal to
+the temperature. There will be $2N$ such random variables
+
+```{r}
+temp <-  0.015
+N <- 256
+simke <- function( N, t) sum((rnorm( 2 * N, mean = 0, 
+                                        sd = sqrt( t))^2 / 2))
+x <- replicate( 10000, simke( N, temp))
+c(mean = mean(x), var = var(x))
+```
+
+The mean and variance are $n T$ (`r N * temp`) and $n T^2$
+(`r N * temp^2`) respectively.
+
+```{r}
+hist( x, 100, freq = FALSE)
+xm <- N * temp; xsd <- sqrt( N * temp^2)
+xi <- seq( from = -3 * xsd, to = 3 * xsd, by = xsd / 20) + xm
+lines( xi, dnorm( xi, mean = xm, sd = xsd))
+```
+
+```{r}
+y <- x / 256
+c( mean(y), sd( y))
+```
+
+To show a spectrum of 4M samples, we would do something like this.
+
+```{r}
+x <- rnorm( 4000000, mean = xm, sd = xsd) / 256
+x <- filter( x, .999, method = "recursive")
+plot( x[1:500])
+```

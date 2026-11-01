@@ -1,0 +1,682 @@
+---
+title: "MD2j V1.3"
+author: "Phil Shea"
+date: last-modified
+format:
+  pdf:
+    fig-pos: 'h'
+bibliography: ../references.bib
+link-citations: true
+editor: source
+---
+
+```{r}
+#| label: init
+#
+# NOTE: if the package has changed, it must be installed locally via:
+#
+# devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+#
+# You probably have to re-start r after this.
+#
+# *****************************************************
+require( MD2RP)
+require( parallel)
+require( pracma)
+require( data.table)
+num_cores <- detectCores() - 1
+options(digits=5)
+```
+
+# Plans for Next Runs
+
+This documents the creation of the Julia code version 1.3
+
+While all data collected thus far is valid, there are enough difficulties to suggest re-running it all. The *Julia* `MD2` code needs to be upgraded with the following changes.
+
+1.  Make steps a count from the initialization at step zero.\
+2.  Remove potential step (count the number of particles interacting and subtract step for PE calculation).
+3.  Report the number of particles interacting.
+4.  Report stats in correlation calculation.
+5.  Add diffusion calculation and report.
+6.  Add heating/cooling.
+
+The runs themselves need to be better organized.
+
+a)  Come up with a plan for the distribution of initial energies, taking specific heat calculations into consideration,
+b)  Make the run length dependent on energy, so the temperature variance remains the same.
+c)  make uniform 4M point runs through the transition region.
+
+## Self Diffusion
+
+The diffusion estimation is given by $\left< r^2 \right>_t = \left< \frac{1}{N} \sum_{i = 1}^N \left[ \vec{r}_i(t + s) -  \vec{r}_i(s)\right]^2 \right>$
+
+> ...where $N$ is the number of particles, and $s$ is a time used as an initial time. The brackets on the right hand side are meant to indicate an average over different $s$ (typically, 20 different $s$ are used, spaced by 250 steps). $\left< r^2 \right>$ is plotted as a function of time, and then examined to see if the self diffusion is behaving in a linear fashion at long times. If it is, a linear regression is performed on this linear portion. The distinction between linear and nonlinear diffusion is quite obvious and the portion of a configuration showing linear diffusion is easily discerned. The three different results which are likely are shown in Figure 2. It is shown in appendix B that $\frac{d}{d t} \left< r^2 \right> = 4 D$ in two dimensions. [@Shea1980]
+
+In programmatic terms, we will want to parameterize the number of $s$ used, the spacing between the $s$, the number of $t$ estimated, and the spacing between the $t$. The 1980 paper looks as if there were eleven times estimated over a time of about $t = 44 \tau$ so $t_i \approx 4.4 i \tau$. The step size in the 1980 work was not recorded[^1] in the thesis, but was between $0.01768 \tau$ and $0.01786 \tau$, so $44 \tau$ is the equivalent of about 2,476.1 steps. With $s$ spaced at about $4.44 \tau$ and twenty used, that means that $s$ spans about $89 \tau$. Estimating the last $t$ requires data out to about $133 \tau$, or about 7,500 steps in 1980. This is why only four diffusion values were estimated, as 1,000 steps then took about an hour to execute. We'll recast the equation as the following:
+
+[^1]: Memory was that is that $\Delta \tau \approx 0.02 \tau$. The current work was done with a step size of $0.01 \tau$ to ensure proper integration of the equations of motion.
+
+$$
+\left< r^2(t_j) \right>_{s_k} = \left< \frac{1}{N} \sum_{i = 1}^N \left[ \vec{r}_i(t_j + s_k) -  \vec{r}_i(s_k)\right]^2 \right>
+$$ {#eq-rsq}
+
+The diffusion calculation requires retention of all particle positions for every $s_k$ and an additional calculation made at each combination of $t_j$ and $s_k$. Of course, the two particle positions in any calculation must be corrected for boundary conditions. We will assume that the distance of any pair or particles will be much less than half the size of space, and we can check that this is so in the calculation.
+
+# Modifications and testing
+
+## Making steps count between runs.
+
+The `MDRecord.totalsteps` item is an int32. I think that originally this was envisioned as the number of steps in an execution but is now being used as a total in the run. This limits the run size to about 2 billion steps. Here is a record of running under Ubuntu Linux:
+
+``` julia
+phil@phil-XPS-8920:~/MD/dev/MD2J$ julia --threads 7
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.11.3 (2025-01-21)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org/ release
+|__/                   |
+
+julia> pwd()
+"/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J"
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> include("./test/Test MD2.jl")
+MD2 included.
+Test 1: MDRecord main constructor.
+subtest 1: typeof x: Vector{StaticArraysCore.SVector{2, Float64}}; x is correct size: (9,)
+Main.TestMD2.MD2.MDRecord{Float64}(9, 5, 0, 0.01, 1.1, 1.0, "x->x^-5", "x->6 * x^-7", 2, 9.0, 7.794228634059947, StaticArraysCore.SVector{2, Float64}[[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]], StaticArraysCore.SVector{2, Float64}[[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
+InitMDRecord----
+Density: 0.03207501495497921, Grid: 6.0, Columns: 3, Rows: 3
+Initial Total Kinetic Energy: 2.6999999999999997, Temp: 0.3
+Linear Momentum: [0.3069952897715641, -0.24696833876455238]
+Corrected Linear Momentum: [1.850371707708594e-17, 1.850371707708594e-17]
+Angular Momentum: -5.177382658092253
+Moment of Inertia: 56.312668502154146
+Corrected Angular Momentum: 4.440892098500626e-16
+Final Linear Momentum: [0.0, 0.0011300159975478495]
+Final Total Kinetic Energy: 1.9881141530512954
+StaticArraysCore.SVector{2, Float64}[[-7.5, -5.196152422706631], [-1.5, -5.196152422706631], [4.5, -5.196152422706631], [-4.5, 8.881784197001252e-16], [1.5, 8.881784197001252e-16], [7.5, 8.881784197001252e-16], [-7.5, 5.196152422706633], [-1.5, 5.196152422706633], [4.5, 5.196152422706633]]
+norm(x.p - s) = 5.934395044256738e-6
+Testing Angular Momentum
+Testing Float32 versions
+InitMDRecord----
+Density: 0.032075014, Grid: 6.000000092559049, Columns: 3, Rows: 3
+Initial Total Kinetic Energy: 2.700000286102295, Temp: 0.30000003178914386
+Linear Momentum: Float32[0.11385037, -0.18442191]
+Corrected Linear Momentum: Float32[-2.6490953f-8, -1.3245477f-8]
+Angular Momentum: 15.5258045
+Moment of Inertia: 56.312668
+Corrected Angular Momentum: 0.0
+Final Linear Momentum: Float32[-2.4835268f-8, -0.0033886665]
+Final Total Kinetic Energy: 2.077314853668213
+StaticArraysCore.SVector{2, Float32}[[-7.5, -5.196152], [-1.4999999, -5.196152], [4.5, -5.196152], [-4.5, 2.005257f-7], [1.5000001, 2.005257f-7], [7.5000005, 2.005257f-7], [-7.5, 5.1961527], [-1.4999999, 5.1961527], [4.5, 5.1961527]]
+StaticArraysCore.SVector{2, Float32}[[0.14770897, 0.375993], [0.0777877, -0.57657653], [-0.5351836, -0.929922], [0.8228708, 0.7503201], [0.32098857, 0.7064196], [-0.0913366, 0.3590219], [-0.43075603, -0.36922514], [-0.117119014, -0.3838936], [-0.19496094, 0.03736475]]
+Press Enter to continue:
+
+Testing CorrShell!
+cv = Main.TestMD2.MD2.CorrVec(36, Int32[0, 4, 7, 9, 12, 14, 15, 17, 18], Int32[2, 3, 4, 7, 3, 5, 8, 6, 9, 5, 6, 7, 6, 8, 9, 8, 9, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+Tests Finished
+Main.TestMD2
+
+julia> include("./test/TestForce.jl")
+MD2 included.
+Testing rn
+funs = (PE = "r::Float64 -> r^(-5)", force = "r::Float64 -> 5 * r^(-5-2)")
+5.0
+  0.000005 seconds (1 allocation: 16 bytes)
+InitMDRecord----
+Density: 1.0, Grid: 1.074569931823542, Columns: 3, Rows: 3
+Initial Total Kinetic Energy: 0.0009000000000000002, Temp: 0.00010000000000000002
+Linear Momentum: [0.005604941508524022, -0.0045090043376974295]
+Corrected Linear Momentum: [-9.637352644315594e-20, 0.0]
+Angular Momentum: -0.01692906884363654
+Moment of Inertia: 10.152425915861594
+Corrected Angular Momentum: -8.673617379884035e-18
+Final Linear Momentum: [0.00012130124607389396, 8.293789901799695e-5]
+Final Total Kinetic Energy: 0.000663211257169056
+MD2State: Pe(rskn) = 1.6935087808430285, Force(rskn) = 10.453757906438447
+Density: 1.0, Shell: 1.1, NHOPr: 1.4678898250138706
+Mean # in shell: 3.8013271108436504, Min Mmax: 34.211943997592854
+Testing GetForce
+state.cv = Main.TestForce.MD2.CorrVec(36, Int32[0, 4, 7, 9, 12, 14, 15, 17, 18], Int32[2, 3, 4, 7, 3, 5, 8, 6, 9, 5, 6, 7, 6, 8, 9, 8, 9, 9, 8, 9, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+state.pn = StaticArraysCore.SVector{2, Float64}[[1.0, 1.0], [1.0, 2.0], [1.0, 3.0], [2.0, 1.0], [2.0, 2.0], [2.0, 3.0], [3.0, 1.0], [3.0, 2.0], [3.0, 3.0]]
+(pe, psi) = (18.0, 0.0 - 3.0616169978683826e-16im)
+state.forces = StaticArraysCore.SVector{2, Float64}[[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
+Main.TestForce
+
+julia> include("./test/TestMove.jl")
+MD2 included.
+┌ Warning: Gtk4 may freeze the REPL if there is more than one thread in its thread pool. Please set JULIA_NUM_THREADS to N,1 (for N default threads) and restart Julia.
+└ @ Gtk4 ~/.julia/packages/Gtk4/EKtR2/src/Gtk4.jl:147
+InitMDRecord----
+Density: 1.0, Grid: 1.074569931823542, Columns: 3, Rows: 3
+Initial Total Kinetic Energy: 2.6999999999999997, Temp: 0.3
+Linear Momentum: [0.3069952897715641, -0.24696833876455238]
+Corrected Linear Momentum: [1.850371707708594e-17, 1.850371707708594e-17]
+Angular Momentum: -0.9272432883217634
+Moment of Inertia: 10.152425915861594
+Corrected Angular Momentum: -8.326672684688674e-17
+Final Linear Momentum: [0.006643942872815661, 0.0045426958164242965]
+Final Total Kinetic Energy: 1.9896337715071677
+MD2State: Pe(rskn) = 1.6935087808430285, Force(rskn) = 10.453757906438447
+Density: 1.0, Shell: 1.1, NHOPr: 1.4678898250138706
+Mean # in shell: 3.8013271108436504, Min Mmax: 34.211943997592854
+  0.116894 seconds (188.12 k allocations: 9.068 MiB, 10.75% gc time, 99.98% compilation time)
+Press Enter to continue:
+
+funs = (PE = "r::Float64 -> r^(-5)", force = "r::Float64 -> 5 * r^(-5-2)")
+InitMDRecord----
+Density: 0.3183098861837907, Grid: 1.9046256137279147, Columns: 16, Rows: 16
+Initial Total Kinetic Energy: 0.7679999999999998, Temp: 0.002999999999999999
+Linear Momentum: [0.0007347923231194622, 0.004666266267503327]
+Corrected Linear Momentum: [2.425902360936316e-18, -8.131516293641283e-19]
+Angular Momentum: -4.353774586243986
+Moment of Inertia: 2786.8074511813747
+Corrected Angular Momentum: 3.552713678800501e-15
+Final Linear Momentum: [-4.0657581468206416e-19, -1.3552527156068805e-18]
+Final Total Kinetic Energy: 0.7648530949787806
+Press Enter to continue:
+
+pefcsize = 38
+MD2State: Pe(rskn) = 0.0032243875163311076, Force(rskn) = 0.001624785848491362
+Density: 0.3183098861837907, Shell: 5.0, NHOPr: 2.601766973050859
+Mean # in shell: 25.0, Min Mmax: 6400.0
+  0.035825 seconds (1.23 M allocations: 23.651 MiB, 20.93% gc time)
+Scalars saved in test.scalars.csv
+  1.124586 seconds (4.41 M allocations: 186.192 MiB, 3.10% gc time, 96.22% compilation time: 2% of which was recompilation)
+pefcsize = 38
+MD2State: Pe(rskn) = 0.0032243875163311076, Force(rskn) = 0.001624785848491362
+Density: 0.3183098861837907, Shell: 5.0, NHOPr: 2.601766973050859
+Mean # in shell: 25.0, Min Mmax: 6400.0
+  0.314067 seconds (12.24 M allocations: 235.433 MiB, 8.24% gc time)
+Scalars saved in test(1).scalars.csv
+  0.337990 seconds (12.47 M allocations: 244.962 MiB, 10.58% gc time, 0.99% compilation time)
+Main.TestMove
+
+julia> Threads.nthreads()
+7
+```
+
+There was a warning about Gtk freezing the REPL, so I restarted as recommended.
+
+``` julia
+phil@phil-XPS-8920:~/MD/dev/MD2J$ julia --threads 7,1
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.11.3 (2025-01-21)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org/ release
+|__/                   |
+
+julia> Threads.nthreads()
+7
+
+julia> cd("/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J")
+
+julia> pwd()
+"/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J"
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> include("./test/TestMove.jl")
+WARNING: replacing module TestRun.
+MD2 included.
+InitMDRecord----
+Density: 0.3183098861837907, Grid: 1.9046256137279147, Columns: 16, Rows: 16
+Initial Total Kinetic Energy: 76.8, Temp: 0.3
+Linear Momentum: [0.019974241917531423, 0.0047573281206514575]
+Corrected Linear Momentum: [-5.594483210025203e-17, 1.6046192152785466e-17]
+Angular Momentum: 239.44716312823007
+Moment of Inertia: 2786.8074511813747
+Corrected Angular Momentum: 5.3512749786932545e-14
+Final Linear Momentum: [-3.848917712323541e-17, 1.7184604433895245e-17]
+Final Total Kinetic Energy: 76.21489244296329
+System state saved in test1.jld2 at 2025-03-01T14:08:07.420
+Restoring system on 2025-03-01T14:08:07.675
+System State restored from test1.jld2, timestamp: 2025-03-01T14:08:07.420
+Total Kinetic Energy: 76.21489244296329
+Linear Momentum: [-3.848917712323541e-17, 1.7184604433895245e-17]
+Angular Momentum: 5.3512749786932545e-14
+MD2State: Pe(rskn) = 0.0032243875163311076, Force(rskn) = 0.001624785848491362
+Density: 0.3183098861837907, Shell: 5.0, NHOPr: 2.601766973050859
+Mean # in shell: 25.0, Min Mmax: 6400.0
+System state saved in test2.jld2 at 2025-03-01T14:08:08.361
+Scalars saved in test1.scalars.csv
+Restoring system on 2025-03-01T14:08:08.439
+System State restored from test2.jld2, timestamp: 2025-03-01T14:08:08.361
+Total Kinetic Energy: 46.27902641378505
+Linear Momentum: [-5.4539706084710815e-15, 1.5334955527634975e-14]
+Angular Momentum: 24.09397706686844
+MD2State: Pe(rskn) = 0.0032243875163311076, Force(rskn) = 0.001624785848491362
+Density: 0.3183098861837907, Shell: 5.0, NHOPr: 2.601766973050859
+Mean # in shell: 25.0, Min Mmax: 6400.0
+System state saved in test3.jld2 at 2025-03-01T14:08:08.762
+Scalars saved in test2.scalars.csv
+  0.360680 seconds (11.70 M allocations: 229.958 MiB, 7.47% gc time)
+temp = 0.03
+basename = "Temporary.0030"
+System state saved in Temporary.0030.0000.jld2 at 2025-03-01T14:08:09.489
+  1.712633 seconds (10.20 M allocations: 248.269 MiB, 3.14% gc time, 75.08% compilation time)
+  1.005451 seconds (34.49 M allocations: 544.544 MiB, 7.22% gc time, 1.70% compilation time)
+temp = 0.02
+temp = 0.01
+basename = "Temporary.0020"
+basename = "Temporary.0010"
+System state saved in Temporary.0020.0000.jld2 at 2025-03-01T14:08:11.965
+System state saved in Temporary.0010.0000.jld2 at 2025-03-01T14:08:11.965
+  1.163468 seconds (16.86 M allocations: 372.062 MiB, 6.31% gc time, 16 lock conflicts, 79.54% compilation time)
+  1.068559 seconds (31.66 M allocations: 617.934 MiB, 13.48% gc time, 18 lock conflicts, 40.47% compilation time)
+Main.TestRun
+```
+
+Examination of the `csv` files provedd that the step now is continuos between executions.
+
+It is apparent that the various repeating run functions have evolved a little different, and should be regularized. `filefun_thread` is the most sophisticated, and it's function wil simply be replicated in `filerun_serial` and `filerun_floops`. Then `TestRun.jl` will be updated to test the three of them. This was done, tested and checked in on 3/2/25.
+
+## Removing potential step
+
+The `rskn` value had to be added to the `rn()` function, which will compute the step and subtract it. This rippled into the testing functions of course, which were upgraded and checked in on 3/2/25.
+
+## Looking at mximum us of `CorrVec.corr`
+
+Getting stats out of `CorrVec()` is not simple. It is a called for every 50 steps, and in a 4M step run it would have 80,000 calls. I didn't want another log file, so I elected to simply record the maximum use of `corr` for every call to `ExecuteSteps!()` and print that value. Also printed the value of `Mmax` used. In the few trials used for testing, `Mmax` was 9,728, but The `maxmt` was only 3,117. This makes sense, as about have of the density would be a unique interaction. Each particle can have, on average, $m=\rho \pi r^2$ particles in the shell, where $\rho$ is the density ($1/\pi$ in the current work) and $r$ is the shell radius (currently 5). A particle at the center of the shell then could be expected to have $m-1$ interactions (since the particle cannot interact with itself). Since each interaction is recorded only once, we might expect $N (m-1)/2$ total interactions (where $N$ is the number of particles, and this number would be 3,072, below what we observed). At higher temperatures, one can imagine local density fluctuations where there are more particles in the shell (if you examine the rest positions, there are 6 particles sitting just outside the shell, for 31). A better `minMmax` might be some small factor above this.
+
+Files were checked in on 3/2/25.
+
+## Speed Testing
+
+Made a simple `BaselineSpeed.jl` script in the `test` directory. It executes a 1,000 step initialization followed by five 5,000 steps executions for each of 13 temperatures, for a total of `13 * 26k = 338k` steps. The following result was obtained
+
+```         
+63.401271 seconds (3.89 G allocations: 73.612 GiB, 20.42% gc time, 
+50 lock conflicts)
+```
+
+64.4s for 78k steps is 0.191s per 1k steps. This is a lot slower than was measured in October of 2025 (0.109s per 1k step), but the condition were different. First, October's data was run from existing files, and we had to initialize today. Second, in October, we saved the data to a solid-state disk. Today, we saved to rotating media, and the 5k step file is almost 1MB in size. This required a small change to `runn()` as it was not handling directories correctly.
+
+This was all precipitated by the realization that `MoveParts!()` squares`tau` for every particle move. Place a `tausq` in `MD2State` so it need only be computed once, and re-ran the speed test. This executed in 57.08 s, so, a bit faster. Files checked in 3/5/25 (Ash Wednesday).
+
+Added several `@inline` and baseline speed ran at 38.71s (0.115s/1k). Actually, added too many (I tried to add the `@inline` to the force and PE functions in `GetForce`, which is ridiculous because they are run-time generated; I had to back these changes out).
+
+## Heating and Cooling
+
+We start with the Verlet algorithm derivation:
+
+$$
+x_{n + 1} = x_n + v_n \Delta t + \frac{1}{2} a_n \Delta t^2 \\
+\text{where } v_n = \frac{x_{n + 1} - x_{n - 1}}{2 \Delta t}
+$$
+
+substituting this into the equation and solving for $x_{n+1}$ a simple result is obtained:
+
+$$
+x_{n + 1} = 2 x_n - x_{n-1} + a_n \Delta t^2
+$$
+
+If we let the acceleration be velocity dependent such that $\alpha_n = a_n + \beta v_n$ we can derive the following:
+
+\begin{align*}
+x_{n + 1} &= x_n + v_n \Delta t + \frac{a_n  + \beta v_n}{2} \Delta t^2\\
+   &= x_n + \frac{x_{n + 1} - x_{n - 1}}{2} + 
+      \frac{a_n  + \beta \frac{x_{n + 1} - x_{n - 1}}{2 \Delta t}}{2} \Delta t^2\\
+   &= x_n + \frac{1}{2} x_{n+1} - \frac{1}{2} x_{n-1} + \frac{1}{2}a_n \Delta t^2      + \frac{1}{4}\beta x_{n+1} \Delta t - \frac{1}{4}\beta x_{n-1} \Delta t
+\end{align*}
+
+This follows:
+
+\begin{align*}      
+x_{n + 1} (\frac{1}{2} - \frac{1}{4}\beta \Delta t) &= 
+      x_n - \frac{1}{2} x_{n-1} + \frac{1}{2}a_n \Delta t^2 - 
+         \frac{1}{4}\beta x_{n-1} \Delta t\\
+x_{n + 1} (1 - \frac{1}{2}\beta \Delta t) &= 
+      2x_n - x_{n-1} + a_n \Delta t^2 - \frac{1}{2}\beta x_{n-1} \Delta t\\
+x_{n + 1} &= 
+   \frac{2x_n - \left(1 + \frac{1}{2}\beta \Delta t \right)x_{n-1} + a_n \Delta t^2}
+            {1 - \frac{1}{2}\beta \Delta t}
+\end{align*}
+
+This matches [@Levy1977] result and code, which used `heat1 = 1 / (1 - beta * dt / 2)` and `heat2 = 1 + beta dt / 2` making the update equation `xp1 = (2*xn - heat2 * xnm1 + an dt^2) * heat1`. We'll stuff these in `MD2State` and expose the parameter to `RunSystem()`, the idea being that only one run of heating will ever be executed before many long runs to attain equilibrium (`RunSystem()` will read a `.jld2` file and only make one execution).
+
+While the average acceleration of the particles is zero, the average speed, i.e., $\langle |v_i| \rangle$ is going to be the square root of the temperature ($T=k_B \langle v^2 \rangle$ in two dimensions), and by the above procedure, this will grow by a factor of $\beta \Delta t$ every time step. So, if the temperature (mean kinetic energy) is 0.01, and $\beta = 0.01$ and $\Delta t = 0.01$, then after 1,000 steps, we would expect the average speed to go from 0.1 to \$0.1*(1 + 0.01* 0.01)\^{1,000} = \$ `r 0.1*(1 + 0.01* 0.01)^1000`, and the temperature then to climb to 0.122.
+
+``` julia
+julia> tddir = abspath("/media/phil/Original/Users/phils/Documents/DSP/MD/dev/testdata")
+
+julia> MD2.runn(tddir, 20, "htest.", 1000, 5000, 2)
+temp = 0.02
+basename = "/media/phil/Original/Users/phils/Documents/DSP/MD/MD2/Archived Notes/heattestdata/htest.0020"
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/MD2/Archived Notes/heattestdata/htest.0020.0000.jld2 at 2025-03-11T13:35:53.265
+Current Steps: 0
+
+julia> MD2.RunSystem( tddir * "/htest.0020.0003", tddir * "/htest.0020h1.0000", 1000, Beta = 0.01)
+-----
+Restoring system on 2025-03-11T13:36:27.466
+System State restored from /media/phil/Original/Users/phils/Documents/DSP/MD/MD2/Archived Notes/heattestdata/htest.0020.0003.jld2, timestamp: 2025-03-11T13:35:56.617
+Current total steps: 11000
+Total Kinetic Energy: 2.4995621952511855
+Linear Momentum: [-4.6968939154679035e-14, 3.8947230857067083e-13]
+Angular Momentum: -26.841070502735818
+MD2State: Pe(rskn) = 0.0013204189318127522, Force(rskn) = 0.001624785848491362
+Density: 0.3183098861837907, Shell: 5.0, NHOPr: 2.601766973050859
+Mean # in shell: 25.0, Min Mmax: 6400.0, Mmax: 9728
+stebskip: 20, Beta: 0.01, Heat1-1: 5.0002500125101434e-5, Heat2-1: 5.0000000000105516e-5
+Max number of interactions: 2976
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/MD2/Archived Notes/heattestdata/htest.0020h1.0000.jld2 at 2025-03-11T13:36:27.753
+Current Steps: 12000
+Scalars saved in /media/phil/Original/Users/phils/Documents/DSP/MD/MD2/Archived Notes/heattestdata/htest.0020.0003.heat.scalars.csv
+false
+```
+
+The last `false` is the result of evaluating the `plotflag` argument in `RunSystem()`, which defaults to `false` (this should be returned silently).
+
+```{r}
+td = "./heattestdata"
+x <- combineruns( td, "htest", "0020", verbose=TRUE)
+plotMD2( tail( x$rundt, -1000))
+```
+
+The naming convention used is causing the heating file to be grouped with the rest of the files in that series, and that won't do. Here is the heating execution by itself:
+
+```{r}
+readplot( "./heattestdata/htest.0020.0003.heat.scalars.csv")
+```
+
+The total energy went from about 0.1360 to 0.1380. As energy is moving between kinetic and potential, it is hard to tell what the temperature increase might really result.
+
+### Runtime dispatch speedtest
+
+The code is currently applying the heating parameters `heat1` & `heat2` for each particle on each step. Generally, that means two multiplies by what amounts to unity. Here is a current timing run. The run script is as follows:
+
+``` julia
+include( joinpath( @__DIR__, "..", "src", "MD2.jl"))
+
+using .MD2
+using Printf
+
+td = "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/testdata"
+tlist = [i for i=26:38]
+sname = "st." # speed test
+initsteps = 1000
+steps = 5000
+runs = 5
+
+# quickrun to force compile
+MD2.newruns( td, [1,2,3], sname, 1000, 1000, 3)
+
+@time MD2.newruns( td, tlist, sname, initsteps, steps, runs)
+```
+
+To recap, `tlist` will be `[26, 27, ..., 37, 38]`, or 13 items. Five runs of 5,000 steps each, plus the initialization run of 1,000 steps means 26,000 steps for each of the thirteen temperatures, or 338k steps.
+
+``` julia
+phil@phil-XPS-8920:/media/phil/Original/Users/phils/Documents/DSP/MD/dev$ julia --threads 7,1
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.11.4 (2025-03-10)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org/ release
+|__/                   |
+
+julia> cd("MD2J")
+
+julia> include("./src/MD2.jl")
+Precompiling StaticArrays...
+
+   {... much precompilation output redacted}
+
+Main.MD2
+
+julia> include("./test/BaselineSpeed.jl")
+WARNING: replacing module MD2.
+MD2 included.
+temp = 0.003
+
+   {... much initialization output redacted}
+
+ 34.247488 seconds (3.89 G allocations: 73.590 GiB, 19.72% gc time, 51 lock conflicts)
+```
+
+This was run around 11 March. So 34.247s for 338k steps, or 0.102s/1k steps, about the same as back in October 2024 (0.109/1k). Placed some code in `MD2State` (both the structure and the function) to define the `Move1Part()` function. There were widely varying results, and all closures were removed from the code, the `RuntimeGenereatedFunctions` were dropped, and allocations traced and substantially removed. Finally, by 24 March, we get the following:
+
+``` julia
+ 11.809498 seconds (20.15 M allocations: 1.573 GiB, 3.32% gc time, 56 lock conflicts)
+```
+
+That's down to 0.035s/1k steps, an improvement factor of 2.9. There is still a rather large variance in performance, and I cannot locate the source of the remaining allocations, although it appears to be related to the `MDState.Move1Part()` function, which is, of course, where the heating/cooling take place.
+
+## Self Diffusion Computation
+
+We'll remind ourselves of the equation used to estimate self-diffusion (@eq-rsq).
+
+$$
+\left< r^2(t_j) \right>_{s_k} = \left< \frac{1}{N} \sum_{i = 1}^N \left[ \vec{r}_i(t_j + s_k) -  \vec{r}_i(s_k)\right]^2 \right>
+$$
+
+The index $i$ covers the particles $N$, the $s_k$ will cover $K$ samples (such that $s_k = s_0 + k\Delta s$), and we will compute the quantity at $M$ instances of $t_j$. While not what we did in 1979, there is now no good reason to let the estimation time ranges overlap. Therefore, $\Delta s > M \Delta t$. The other constraint we'll put on the calculation is to to make $\Delta t$ and $\Delta s$ be multiples of the *Skip* number (the number of steps between calling `CorrShell!()`, currently 50 steps, or $0.5 \tau$). Given our current time step is about half of that used in '79, we'll double the step counts used there.
+
+| Parameter  | Value |     Time |
+|:----------:|------:|---------:|
+| $t_{max}$  | 5,000 | $50\tau$ |
+|    $M$     |    10 |          |
+| $\Delta t$ |   500 |  $5\tau$ |
+| $\Delta s$ | 5,500 | $55\tau$ |
+|    $K$     |    20 |          |
+
+The procedure will be to record the positions of all particles, then execute the $\Delta t$ steps, and then compute $r^2(t_1)$, run $\Delta t$ steps, and so forth until $r^2(t_{max})$ is computed. This will be one of $K$ executions. Once all $K$ estimates have been made, they will be averaged (in R), and the $M$ distance squared estimates reported. There will be $(20 \times 5,000) + (19 \times 500) = 109,500$ steps required. This would have been prohibitive in 1979, as each such estimate would require over 100 hours of computer time, and we need 20 to 30. Today, even on this 7 year old pc (Core i7-7700 \@ 3.60GHz), this will take less than 4 s (after coming to equilibrium, and if run in parallel with other such computations).
+
+110k step runs make for a very long execution, so we will want to break these up into each estimate of $R^(t_j)$ (about 5k steps each). The software works with a call to `RunSystem()`, which can put the diffusion parameters in `MD2State`, and `ExecuteSteps()` will do the work. This will result in one estimate of $R^(t_j)$ (at each of the $t_j$). The entire estimate will be orchestrated by `extendrun()`, which will receive the diffusion parameters $M$, $\Delta t$ (as a multiplier of *Skip*), and $K$. The $\Delta s$ will be implemented by simply one $\Delta t$ worth of steps run before starting the estimates. `extendrun()` is the natural place for this because there must have been equilibrium executions preceding the diffusion estimates. Test runs of twenty 5,000 step executions took about 13s (single diffusion executions cannot be run in parallel).
+
+``` julia
+julia> @time "***extendrun diffusion" MD2.extendrun( td, tname * "0030", 7, 
+        steps=5000, runs=20, diffFlag=true, Mtau=10, deltat=10, Ks=20)
+        
+***extendrun diffusion: 12.946641 seconds (5.86 M allocations: 362.085 MiB, 0.36% gc time)
+```
+
+We can read in the diffusion data via something like the following (assumes `data.table` is available).
+
+```{r}
+require( 'data.table')
+dd <- data.table::fread("/media/phil/Original/Users/phils/Documents/DSP/MD/dev/testdata/Temporary.0030.diff.txt")
+str(dd)
+```
+
+Each row is an execution (and confusingly, the rows in the above display are the data columns, and vice-versa) and the columns are either three text columns, and then repeating triplets of the time, $\langle D^2 \rangle$, and $\text{max}(D^2)$. That is a clumsy format, although putting an execution number ties too many things in the *Julia* `MD2` code together that would otherwise be independent. The following will unravel the format. Each row is an execution, so we will reshape the table:
+
+```{r}
+ddcols <- colnames( dd)
+# find column names of the three data types
+timecols <- ddcols[ seq.int( from=4, to=length(ddcols), by=3)]
+dscols <- ddcols[ seq.int( from=5, to=length(ddcols), by=3)]
+dmxcols <- ddcols[ seq.int( from=6, to=length(ddcols), by=3)]
+dd[, row := 1:nrow(dd)] # adds row number as last column
+ddlong <- reshape( dd, list( timecols, dscols, dmxcols), 
+                   v.names=c("Time", "D2", "Dmax"), timevar="group",
+                   idvar="row", drop=c("time","d^2", "max d^2"),
+                   direction="long")
+str(ddlong)
+```
+
+The `group` actually groups together the same times, so it is a useless field, but the expression fails if omitted. We can plot the diffusion estimated for each execution by:
+
+```{r}
+#| label: PlotDiffusion
+#| echo: true
+#| fig-cap: "Sample import and plot of diffusion estimates. Each dotted line is an execution, and the solid black line is the average.  The execution number of each line is in the margin. This plot is taken from testdata, and there is no reason to expect the system to be in equilibrium."
+# setup the plot window
+mxD2 <- max(ddlong$D2) # Find and remember the maximum
+plot(NULL, xlim=c(0,50),ylim=c(0.0, mxD2), xlab="Time", ylab=expression(sigma),
+     main="Estimate of D^2")
+# apply a plot to each row
+grid() # add the grid before the lines
+invisible( lapply( unique( ddlong$row), 
+        function(r) lines( D2 ~ Time, data=ddlong[row == r,], typ="b", col=r,
+                           lty=2)))
+# plot the means
+lines( D2 ~ Time, data=ddlong[, lapply( .SD, mean), by = Time], typ="o", 
+       lwd = 2)
+ddlast <- ddlong[Time==max(Time), .(row,D2)]
+mtext( as.character( ddlast$row), side=4, at=ddlast$D2, cex=0.7, las=1)
+```
+
+The maximum diffusion is also important to look at, as it is possible for a particle in a hot system to move far enough to be confused by the periodic boundary conditions, which simply check if the particle distance is more than have the boundary length. While this length is different for the x and y dimensions, the y dimension is the shortest, and is given by
+
+$$
+b_x = \sqrt{\frac{N}{2\rho \sqrt{3}}}\\
+b_y = \sqrt{3} b_x/2
+$$
+
+where $\rho=1/\pi$ is the density, and $N$ is the number of particles (256 in this example), and the dimensions are $\pm b_z$. Therefore, we can write $b_y = \sqrt{\sqrt{3}N\pi/8}$, which is about 13.196. The `Dmax` column is the the maximum of the squared distance, so the maximum distance is `r sqrt(max(ddlong$Dmax))` which is less than the half-y side of `r  sqrt(sqrt(3)*256*pi/8)`, so no particles exceeded that in the estimate.
+
+# Run Errors
+
+Made 71 additional runs on 6 April 2025, but there were steps in the total energy at the execution boundaries.  Here are the results.
+
+``` julia
+julia>  td ="/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+julia> tlist = vcat([i for i in 1:50], [i for i in 52:2:72], [i for i in 75:3:100], [100])
+julia> @time MD2.newruns( td, tlist, "S3", 1000, 5000, 6)
+julia> @time MD2.newruns( td, tlist, "S3", 1000, 5000, 6)
+
+ 80.608085 seconds (131.21 M allocations: 10.197 GiB, 3.50% gc time, 108 lock conflicts)
+```
+
+71 runs, each of 31k steps in 80.6s yielding 0.0366s/1k steps. The
+`sname` should have been "S3.", so the Unix command
+`rename 's/S3(.*)/S3.$1/' S3*` renamed all of the files.
+
+Here was the problem in the TE plots.
+
+```{r}
+datadir = "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+xn30 <- combineruns( datadir, "S3", "0030")
+plotMD2( as.data.frame( xn30$rundt), dt=0.01)
+```
+
+Also at energy `0100`:
+
+```{r}
+xn100 <- combineruns( datadir, "S3", "0100", verbose=TRUE)$rundt
+plotMD2( as.data.frame( tail( xn100, -1000)), dt=0.01)
+```
+
+Examining the files in *LibreOffice Calc* it was apparent that the the first step of each eecution has a small change in the kinetic energy (looked only at `S3.0100.0002.scalars.csv` and `S3.0100.0003.scalars.csv.`, but the discontinuities really look like one at 1,000 steps and regular at 5,000 steps). The source of this must be the change from velocity to `pnm1` (the `*.jld2` files store positions and velocities, but the program propagates the particles using the current {`pn`} and the prior position {`pnm1`} -- when a `.jld2` file is read in the `pnm1` positions are calculated.)
+
+While examining this code, I discovered that the boundary positions are not applied properly. Starting back on 18 July 2024, when the `MoveParts!()` routine was modified to use `FLoops`.  This may have been a typo, but it makes any run after July 18 suspect (at least until this is resolved).  The reversal test was run 11/22/24, and the version checked in the next day (tagged `v1.2`) had the error.
+
+Regardless of this though, there is an error when writing and reading an `MDRecord`, likely due to the translation of the velocity. This requires that the `.jld2` files need to store not the positions and velocities, but the current and the prior positions. This is a rather major change, and will require a reversal test.
+
+Reversal test results 
+
+``` julia
+phil@phil-XPS-8920:/media/phil/Original/Users/phils/Documents/DSP/MD/dev$ julia --threads 7,1
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.11.4 (2025-03-10)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org/ release
+|__/                   |
+
+julia> cd("MD2J")
+
+julia> pwd()
+"/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J"
+
+julia> td = abspath( @__DIR__, "test/testdata")
+"/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testdata"
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> using .MD2
+
+julia> MD2.revtest( td, 30, "revt2.0030.", 1000)
+temp = 0.03
+basename = "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testdata/revt2.0030.0030"
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testdata/revt2.0030.0030.0000.jld2 at 2025-04-09T11:04:31.968
+Current Steps: 0
+Maximum Speed: 0.5086510074787971)
+0.002701503583664995
+
+julia> MD2.revtest( td, 40, "revt2.0040.", 5000)
+temp = 0.04
+basename = "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testdata/revt2.0040.0040"
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testdata/revt2.0040.0040.0000.jld2 at 2025-04-09T11:11:11.420
+Current Steps: 0
+Maximum Speed: 0.6639981224956745)
+4884.502174278141
+
+julia> MD2.revtest( td, 40, "revt2.0040b.", 1000)
+temp = 0.04
+basename = "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testdata/revt2.0040b.0040"
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testdata/revt2.0040b.0040.0000.jld2 at 2025-04-09T11:11:43.604
+Current Steps: 0
+Maximum Speed: 0.7716689824960441)
+0.006662817632832589
+
+julia> MD2.revtest( td, 60, "revt2.0060.", 2000)
+temp = 0.06
+basename = "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testdata/revt2.0060.0060"
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testdata/revt2.0060.0060.0000.jld2 at 2025-04-09T11:12:06.212
+Current Steps: 0
+Maximum Speed: 0.9765540322396988)
+6.6009926367077885
+
+julia> MD2.revtest( td, 60, "revt2.0060b.", 1000)
+temp = 0.06
+basename = "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testdata/revt2.0060b.0060"
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testdata/revt2.0060b.0060.0000.jld2 at 2025-04-09T11:12:22.132
+Current Steps: 0
+Maximum Speed: 0.7550889765669403)
+0.04126822015333624
+
+julia> MD2.revtest( td, 60, "revt3.0060b.", 1000, T=Float32)
+
+temp = 0.06
+basename = "/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testdata/revt3.0060b.0060"
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testdata/revt3.0060b.0060.0000.jld2 at 2025-04-09T11:13:22.389
+Current Steps: 0
+Maximum Speed: 0.9914849)
+0.047657385f0
+
+```
+
+So let's summarize those results:
+
+| Run | Temperature | Steps | Squared Error |
+|-----|:-----------:|------:|--------------:|
+| 1   | 30          | 1,000 | 0.0027015     |
+| 2   | 40          | 5,000 | 4884.5021     |
+| 3   | 40          | 1,000 | 0.0066628176  |
+| 4   | 60          | 2,000 | 6.60099263    |
+| 5   | 60          | 1,000 | 0.0412682     |
+| 6   | 60 {Float32}| 1,000 | 0.047657      |
+
+
+The last run was a Float32; all the rest were Float64. The lower precision had about 15% higher total squared error.  2k steps did not work, which means that these processes are reversible on short time scales, but not longer ones.
+
+Note that the S3 data is considered to be in error and will be deleted (so this document will not be able to be regenerated). The S1 and S2 data likely has the same error, but as a lot of effort was put into its analysis, those files will be retained.
+
+# References

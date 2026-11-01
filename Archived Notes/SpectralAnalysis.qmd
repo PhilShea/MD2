@@ -1,0 +1,239 @@
+---
+title: "Spectral Analysis"
+author: "Phil Shea"
+date: last-modified
+format:
+  pdf:
+    fig-pos: 'H'
+    #cite-method: biblatex
+#mainfont: "Times New Roman"
+bibliography: "../Melting in Two D.bib"
+link-citations: true
+monofont: "Courier 10 Pitch"
+monofontoptions: 'Scale=0.8'
+execute:
+   freeze: auto
+editor_options:
+  markdown:
+    wrap: 72
+    references: 
+      location: block
+    canonical: true
+---
+
+```{r}
+#| label: init
+#| include: false
+#
+# NOTE: if the package has changed, it must be installed locally via:
+#
+# devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+# (for Windows)
+# or
+#
+# devtools::install("/home/phil/MD/MD2RP")
+# (for linux)
+#
+# You probably have to re-start R after this.
+#
+# *****************************************************
+require( MD2RP)
+require( parallel)
+require( pracma)
+require( signal)
+require( data.table)
+require( knitr)
+require( lattice)
+require( JuliaCall)
+num_cores <- detectCores() - 1
+options(digits=5)
+"%within%" <- function( vector, range) # define convenience function.
+   (vector > range[ 1]) & (vector < range[ 2])
+
+td <- "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+MD2.A <- readRDS( "../MD2DT.A.RDS") # read in current data for analysis 
+```
+
+# Spectral Analysis
+
+We did a spectral analysis back when analyzing series 2 as documented in
+\[Data Overview S2.pdf\]. Unfortunately, the files on which that
+analysis was performed were lost, and the analysis did not predict and
+analyse what our averaging scheme would do to the spectrum of the
+kinetic energy (used to estimate the temperature).
+
+## Prediction
+
+The kinetic energy recorded at each step is the average per particle
+energy, or $E_k = \left( \sum_N v_i^2 \right) / 2N$, where $N$ is the
+number of particles, $v_i$ is the is the velocity squared of particle
+$i$, and the particle's mass is unity in scaled units. If the particles
+were an ideal gas, their kinetic energy in each of the two dimensions
+would be a Gaussian random variable with mean zero and variance equal to
+the temperature. There will be $2N$ such random variables
+
+```{r}
+temp <-  0.015
+N <- 256
+simke <- function( N, t) sum((rnorm( 2 * N, mean = 0, 
+                                        sd = sqrt( t))^2 / 2))
+x <- replicate( 10000, simke( N, temp))
+c(mean = mean(x), var = var(x))
+```
+
+The mean and variance are $n T$ (`r N * temp`) and $n T^2$
+(`r N * temp^2`) respectively. Here is a histogram and associated
+density.
+
+```{r}
+hist( x, 100, freq = FALSE)
+xm <- N * temp; xsd <- sqrt( N * temp^2)
+xi <- seq( from = -3 * xsd, to = 3 * xsd, by = xsd / 20) + xm
+lines( xi, dnorm( xi, mean = xm, sd = xsd))
+```
+
+The kinetic energy per particle is that estimate divided by $N$.
+
+```{r}
+y <- x / 256
+c( mean(y), sd( y))
+```
+
+This variance is $T/\sqrt{n}$ (`r temp/sqrt(N)`). To develop a
+correlated set of 4M samples with a comparable spectrum, we would do
+something like this.
+
+```{r}
+x <- rnorm( 4000000, mean = xm, sd = xsd) / 256
+fl <- 200
+filt <- rep( 1 / fl, fl)
+# we have to drop the first fl -1 points as filter will return them as NA
+y <- tail( stats::filter( x, filt, method = "convolution", sides = 1),
+           -(fl - 1))
+ps <- (-4500:4500) + 1000000 # move in 1M steps
+plot( ps, y[ps - fl + 1], type = 'l', panel.first = grid())
+#points( y[1:50+1000000])
+```
+
+That doesn't look right. Let's try an exponential filter.
+
+```{r}
+a <- 1 - (2 / (fl + 1)) # mimics the MA above
+b <- 1 - a
+z <- stats::filter( b * x, a, method = "recursive", init = x[1])
+
+plot( ps,  z[ps], type = 'l', panel.first = grid(), main = "Exponential Avereage")
+#points( z[1:500 + 1000000])
+```
+
+That's not quite right either. Let's look at the spectrums.
+
+```{r}
+qsdf( x, dt = 0.01, blocksize = 4096, panel.first = grid(), 
+      normalize = TRUE, main = "Original Signal")
+```
+
+No correlation there.
+
+```{r}
+qsdf( y, dt = 0.01, blocksize = 4096, yrange = 60, panel.first = grid(), 
+      normalize = TRUE, main = "Moving Avereage")
+```
+
+```{r}
+qsdf( z, dt = 0.01, blocksize = 4096, yrange = 60, panel.first = grid(),
+      normalize = TRUE, main = "Exponential Average")
+```
+
+So the spectrum from S2 in `Data Overview S2.nb.htlm` was more-or-less
+flat topped at frequencies between $\pm 0.8/\tau$ and down 80 dB at at
+$2.15\tau$. This would correspond to the $0.01\tau$ sample rate and a
+Nyquist band of \[0, 50\]. The stop band would then be 0.08/50 or
+`r 0.08/50`
+
+```{r}
+Fs <- 1/0.01
+bo <- buttord( 0.8 / (Fs/2), 2.15 / (Fs/2), 10, 80)
+bf <- butter( bo,  0.8 / (Fs/2), type = "low", plane = "z")
+freqz( bf, fs = 1/0.01)
+```
+
+```{r}
+v <- filter( bf, x)
+plot(ps, v[ps], type = 'l', panel.first = grid(), main = "Butterworth")
+```
+
+```{r}
+qsdf( v, dt = 0.01, blocksize = 4096, yrange = 110, normalize = TRUE)
+```
+
+The `rsmpavg()` function will perform a block average and re-sample the
+signal with one sample for each block.
+
+```{r}
+rm( x, y, z)
+rs <- rsmpavg( v, 500)
+nps <- ps[seq( from = 250, to = 9000, by = 500)]
+plot(ps, v[ps], type = 'l', panel.first = grid(), main = "Butterworth")
+points(nps, rs[(nps / 500) - 1] )
+```
+
+The variable `rs` is now `r length( rs)`, so we can't do 4k FFTs.
+`qsdf()` will default to 1K, which will be sufficient.
+
+```{r}
+qsdf( rs)
+```
+
+# Real Data
+
+Below we read in `S5b.00150`, and plot the spectrum one-sided.
+
+```{r}
+x <- combineruns( td, "S5b", "00150", verbose = TRUE)
+xsdf <- qsdf( tail(x$rundt$ke, -1000), dt = 0.0177737, blocksize = 4096, 
+              yrange = 110, normalize = TRUE, panel.first = grid(), 
+              main = "S5b.00150", spectype = "onesided")
+```
+
+The code below computes the frequency below which contains 99% of the
+energy (plotted in @fig-S5b00150LL.
+
+```{r}
+#| label: fig-S5b00150LL
+#| fig-cap: Log-Log plot of the spectrum, with the 99% energy line (blue) plotted (the red verticle line is the Nyquist frequency). The green line is the frequency response of the 500 point resample filter.  There is a verticle green line at the first null which will be the aliasing point (the Nyquist frequency of the resampled data).
+xsdflin <- undB( xsdf$sdf[1:(length(xsdf$sdf)/2)]) # qsdf returns Decibels
+xtp <- sum( xsdflin) # total power.
+xsdfsum <- cumsum(xsdflin) / xtp
+p99  <- which.max( xsdfsum > 0.99)
+(freq <- xsdf$freqs[p99])
+Fn <- 1/(2 * attr( xsdf, "dt"))
+plot( xsdf, panel.first=grid(), xlim = c(xsdf$freqs[2], Fn), ylim = c( -60, 0),
+      log = "x")
+abline( v=freq, col='blue')
+abline( v = Fn, col = "red")
+abline( v = Fn/500, col = "green")
+sincfreqs <- tail( c( seq( from = 0, to = freq, by = xsdf$freqs[2]/200), 
+                xsdf$freqs[p99:length( xsdf$freqs)]), -1)
+(function(x, n) lines( x, dB( abs(sin(pi*x*n/Fn)/(n*sin(pi*x/Fn)))), 
+                       col="green"))(sincfreqs, 500)
+```
+
+The resapled data and its spectrum are below.
+
+```{r}
+rs <- rsmpavg( x$rundt$ke, 500)
+nps <- seq( from = 250, to = length( x$rundt$ke), by = 500)
+plot(x$rundt$ke, type = 'l', panel.first = grid(), main = "Resampled S5b.00150")
+points(nps, rs, col = "red")
+abline( v = 1000, col = "red")
+abline( v = length( x$rundt$ke)/3, col = "blue")
+```
+
+The variable `rs` is now `r length( rs)`, so we can't do 4k FFTs.
+`qsdf()` will default to 1K, which will be sufficient.
+
+```{r}
+qsdf( rs, blocksize = 128, main = "Resampled S5b.00150")
+```

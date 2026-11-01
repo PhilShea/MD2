@@ -1,0 +1,1570 @@
+---
+title: "HeatCool"
+author: "Phil Shea"
+date: last-modified
+format:
+  pdf:
+    fig-pos: 'H'
+#mainfont: "Times New Roman"
+bibliography: ../references.bib
+link-citations: true
+monofont: "Courier 10 Pitch"
+monofontoptions: 'Scale=0.8'
+execute:
+   freeze: auto
+editor_options:
+  markdown:
+    wrap: 72
+    references: 
+      location: block
+    canonical: true
+---
+
+```{r}
+#| label: init
+#
+# NOTE: if the package has changed, it must be installed locally via:
+#
+# devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+#
+# or
+#
+# devtools::install("/home/phil/MD/MD2RP")
+#
+# You probably have to re-start r after this.
+#
+# *****************************************************
+require( MD2RP)
+require( parallel)
+require( pracma)
+require( data.table)
+require( knitr)
+require( lattice)
+num_cores <- detectCores() - 1
+options(digits=5)
+"%within%" <- function( vector, range) # define convenience function.
+   (vector > range[ 1]) & (vector < range[ 2])
+
+td <- "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+MD2DF.L <- readRDS( "../MD2DF.L.RDS") # read in data current for analysis start.
+S3DTdiff2 <- MD2DF.L[ series %in% c("S3", "S3b"),] # focus only on series 3 & 3b
+```
+
+------------------------------------------------------------------------
+
+# Heat and Cool Series
+
+As of 20 July 2025, we have a complete simulation with 85
+initializations, each starting with particles in their minimum potential
+energy positions, with kinetic energy defined but randomly distributed.
+The next series will create heating and cooling from the end of runs in
+equilibrium.
+
+I am clearing the environment on 21 July 2025, but I have saved it just
+in case via the statement:
+`save.image("/media/phil/Original/Users/phils/Documents/DSP/MD/MD2/250721.RData")`
+
+We would like to create eight new series: four heating through the
+transition (and through the `Solid1/Solid2` transition), and four
+cooling through it. Looking through the data, it appear the following
+runs are of interest.
+
+```{r}
+#| label: newruns
+newruns <- c("S3.0008", "S3.0009","S3.0010","S3.0011", "S3.0043",
+             "S3.0044","S3.0045","S3.0046")
+knitr::kable( S3DTdiff2[ run %in% newruns, 
+                        .(run, Temp=ke.mean.rs, valid, total.steps)])
+```
+
+We also need to define a method to track the heat/cool series. We would
+like to track the origin of each heat/cool run. Note that the program
+always writes the scalar file with the same name as the state file from
+which it starts, but adds "heat" to the name (regardless of the value of
+`Beta`). The state will be saved original "energy" number will be kept,
+with `hnn` appended to it. So the first heated execution from
+`S3.0008.0007` will result in the scalar file `S3.0008.0007.heat.csv`,
+and the state file `S3h.0008h01.0001.jld2`. Once `S3h.0008h01` reaches
+equilibrium (or 4M steps), it can be the source for the next heating or
+cooling execution. For example, if it takes five executions to reach
+equilibrium, the last execution's scalars will be in
+`S3h.0008h01.0005.scalars.csv`, and the state will be saved in
+`S3h.0008h01.0006.jld2`. The next heating execution will be
+`S3h.0008h02.0000`. Care will be needed to perform diffusion calculation
+before heating/cooling, as we are not overtly recording the starting
+file, although it will show up in the `.txt` log file.
+
+I created `heatcool()` in `RunScripts.jl` to regularize running
+heating/cooling cycles. We want to heat the cold runs until they reach
+$T = 0.0208$ and cool the hot runs until they reach $T = 0.004$The first
+successful run is below.
+
+``` julia
+phil@phil-XPS-8920:~$ julia --threads=4
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.11.6 (2025-07-09)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org/ release
+|__/                   |
+
+julia> cd("/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J")
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> td ="/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+julia> snames = ["S3.0008.0007", "S3.0009.0007", "S3.0010.0007",
+"S3.0011.0007","S3.0043.0013", "S3.0044.0007", "S3.0045.0007", "S3.0046.0061"]
+8-element Vector{String}:
+ "S3.0008.0007"
+ "S3.0009.0007"
+ "S3.0010.0007"
+ "S3.0011.0007"
+ "S3.0043.0013"
+ "S3.0044.0007"
+ "S3.0045.0007"
+ "S3.0046.0061"
+
+julia> beta = 0.1 * [ 0.1, 0.1, 0.1, 0.1, -0.1, -0.1, -0.1, -0.1]
+8-element Vector{Float64}:
+  0.010000000000000002
+  0.010000000000000002
+  0.010000000000000002
+  0.010000000000000002
+ -0.010000000000000002
+ -0.010000000000000002
+ -0.010000000000000002
+ -0.010000000000000002
+
+julia> MD2.heatcool( td, snames, Beta = beta)
+
+julia> 
+```
+
+The coldest file is `S3.0008` and we can see the heating run via the
+following:
+
+![Initial run from `S3.0008.0007.heat.csv` showing the Steps increasing
+from 32,000 instead of
+1.](./Screenshot%20from%202025-07-25%2010-20-05.png)
+
+We also realized that neither angular momentum nor linear momentum was
+corrected after the heating/cooling cycle. The update will extract the
+momentum correction to a function, which means we must re-test the
+initialization. Below is a record of the second attempt (all previous
+files were deleted).
+
+``` julia
+phil@phil-XPS-8920:~$ julia --threads=4
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.11.6 (2025-07-09)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org/ release
+|__/                   |
+
+julia> cd("/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J")
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> using .MD2
+
+julia> td = "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+julia> snames = ["S3.0008.0007", "S3.0009.0007", "S3.0010.0007",
+"S3.0011.0007","S3.0043.0013", "S3.0044.0007", "S3.0045.0007", "S3.0046.0061"]
+8-element Vector{String}:
+ "S3.0008.0007"
+ "S3.0009.0007"
+ "S3.0010.0007"
+ "S3.0011.0007"
+ "S3.0043.0013"
+ "S3.0044.0007"
+ "S3.0045.0007"
+ "S3.0046.0061"
+
+julia> beta = 0.1 * [ 0.1, 0.1, 0.1, 0.1, -0.1, -0.1, -0.1, -0.1]
+8-element Vector{Float64}:
+  0.010000000000000002
+  0.010000000000000002
+  0.010000000000000002
+  0.010000000000000002
+ -0.010000000000000002
+ -0.010000000000000002
+ -0.010000000000000002
+ -0.010000000000000002
+
+
+julia> @time MD2.heatcool( td, snames, Beta = beta)
+ 16.292131 seconds (14.77 M allocations: 1.151 GiB, 1.78% gc time, 
+ 29 lock conflicts)
+```
+
+Second run following the code update.
+
+```{r}
+td = "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+readplot( paste( td, "/", "S3.0008.0007.heat.scalars.csv", sep=""))
+```
+
+We can see the equalization runs below.
+
+```{r}
+x <- combineruns( td,"S3","0008h01",verbose=TRUE)
+plotMD2( x$rundt)
+```
+
+Note that the `Steps` now start at zero. Let's put the disturbing change
+in TE to rest:
+
+```{r}
+ter <- range( x$rundt$TE)
+100 * (ter[2] - ter[1]) / mean(x$rundt$TE)
+rm(x)
+```
+
+So that's less than 0.001% change in total energy, which is acceptable.
+The following will process the files.
+
+```{r}
+#| label: DFfile1
+MD2DF.M <- MD2DFfile( "../MD2DF.M.RDS", td, "S3.*h01.*.csv", df = MD2DF.L,
+                      verbose = TRUE)
+```
+
+```{r}
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.M[grepl( "h01", run), ], linethresh = 200)
+par(op)
+```
+
+```{r}
+cruns <- c( newruns, paste( newruns, "h01", sep=""))
+knitr::kable( MD2DF.M[run %in% cruns, .(run, TE=TE.mean.rs, Temp=ke.mean.rs,
+                                        valid, total.steps)])
+```
+
+So the temperature change is about 0.0005, which was what we previously
+sought at cold temperatures via initialization. All of the runs reached
+equilibrium criteria in 30,000 steps except for the last. It is curious
+that run `S3.0046` took 381k steps to reach equilibrium, and now its
+heated version requires more than its near brothers. The following Julia
+call will double the number of steps.
+
+``` julia
+@time MD2.extendrun( td, "S3.0046h01", 6, steps=5000, runs=6)
+  4.983818 seconds (1.79 M allocations: 139.412 MiB, 0.55% gc time, 
+  0.07% compilation time)
+30000
+
+julia> 
+```
+
+The results can be examined with the following:
+
+```{r}
+#| label: er0046
+#| fig.cap: "Extended run for `S3.0046h01` to 60,000 steps."
+x <- combineruns( td,"S3","0046h01",verbose=TRUE)
+plotMD2( x$rundt)
+xproc <- procMD2DF(x, 1000)
+xproc[ , .(total.steps, steps.avg, TE.mean.rs, ke.mean.rs, valid)]
+rm(x)
+```
+
+Now all the runs are in equilibrium, and a new heating/cooling cycle can
+be executed.
+
+``` julia
+julia> snames2 = ["S3.0008h01.0006", "S3.0009h01.0006", "S3.0010h01.0006",
+"S3.0011h01.0006","S3.0043h01.0006", "S3.0044h01.0006", "S3.0045h01.0006",
+"S3.0046h01.0012"]
+8-element Vector{String}:
+ "S3.0008h01.0006"
+ "S3.0009h01.0006"
+ "S3.0010h01.0006"
+ "S3.0011h01.0006"
+ "S3.0043h01.0006"
+ "S3.0044h01.0006"
+ "S3.0045h01.0006"
+ "S3.0046h01.0012"
+
+julia> @time MD2.heatcool( td, snames2, Beta = beta)
+ 16.239921 seconds (14.77 M allocations: 1.151 GiB, 3.41% gc time, 
+ 57 lock conflicts)
+
+julia> 
+```
+
+We will create multiple `.M` files.
+
+```{r}
+#| label: DFfile2
+MD2DF.M2 <- MD2DFfile( "../MD2DF.M2.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, clusters=1, verbose = TRUE)
+```
+
+```{r}
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.M2[grepl( "h0", run), ], linethresh = 200)
+par(op)
+```
+
+We can see that one run has not reached equilibrium.
+`r MD2DF.M2[grepl( "h0", run)&valid==0, run]` is the one. As before,
+more steps are easy.
+
+``` julia
+ @time MD2.extendrun( td, "S3.0043h02", 6, steps=5000, runs=6)
+  5.359594 seconds (1.79 M allocations: 139.262 MiB, 0.35% gc time)
+30000
+
+julia> 
+```
+
+```{r}
+#| label: er0043
+#| fig.cap: "Extended run for `S3.0043h02` to 60,000 steps.  Note that only the last 51,250 steps are used in the avereages."
+x <- combineruns( td,"S3","0043h02",verbose=TRUE)
+plotMD2( x$rundt)
+xproc <- procMD2DF(x, 1000)
+xproc[ , .(total.steps, steps.avg, TE.mean.rs, ke.mean.rs, valid)]
+rm(x)
+```
+
+So again all results are in equilibrium. We will operate on the string
+in julia vs. re-typing everything.
+
+``` julia
+julia> snames3 = replace.( snames2, "46h01.0012"=>"46h02.0006",
+"43h01.0006"=>"43h02.0012","h01"=>"h02")
+8-element Vector{String}:
+ "S3.0008h02.0006"
+ "S3.0009h02.0006"
+ "S3.0010h02.0006"
+ "S3.0011h02.0006"
+ "S3.0043h02.0012"
+ "S3.0044h02.0006"
+ "S3.0045h02.0006"
+ "S3.0046h02.0006"
+
+julia> @time MD2.heatcool( td, snames3, Beta = beta)
+ 15.458558 seconds (14.77 M allocations: 1.151 GiB, 2.09% gc time, 
+ 28 lock conflicts)
+
+julia> 
+```
+
+```{r}
+#| label: DFfile3
+MD2DF.M3 <- MD2DFfile( "../MD2DF.M3.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, verbose = TRUE)
+```
+
+```{r}
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.M3[grepl( "h0", run), ], linethresh = 200)
+par(op)
+```
+
+One run has not reached equilibrium:
+`r MD2DF.M3[grepl( "h0", run)&valid==0, run]`.
+
+``` julia
+julia> @time MD2.extendrun( td, "S3.0044h03", 6, steps=5000, runs=6)
+  5.562815 seconds (1.79 M allocations: 139.262 MiB, 0.34% gc time)
+30000
+
+julia>
+```
+
+```{r}
+#| label: er0044h03
+#| fig.cap: "Extended run for `S3.0044h03` to 60,000 steps."
+x <- combineruns( td,"S3","0044h03",verbose=TRUE)
+plotMD2( x$rundt)
+xproc <- procMD2DF(x, 1000)
+xproc[ , .(total.steps, steps.avg, TE.mean.rs, ke.mean.rs, valid)]
+rm(x)
+```
+
+Note that below, I replaced the original `snames2` instead of `snames3`.
+
+``` julia
+julia> snames4 = replace.( snames2, "46h01.0012"=>"46h03.0006",
+"44h01.0006"=>"44h03.0012","h01"=>"h03")
+8-element Vector{String}:
+ "S3.0008h03.0006"
+ "S3.0009h03.0006"
+ "S3.0010h03.0006"
+ "S3.0011h03.0006"
+ "S3.0043h03.0006"
+ "S3.0044h03.0012"
+ "S3.0045h03.0006"
+ "S3.0046h03.0006"
+
+julia> @time MD2.heatcool( td, snames4, Beta = beta)
+ 15.519330 seconds (14.77 M allocations: 1.151 GiB, 1.92% gc time, 
+  500023 lock conflicts)
+
+julia> 
+```
+
+```{r}
+#| label: DFfile4
+MD2DF.M4 <- MD2DFfile( "../MD2DF.M4.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, verbose = TRUE)
+```
+
+```{r}
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.M4[grepl( "h0", run), ], linethresh = 200)
+par(op)
+```
+
+There are three files this time:
+`r MD2DF.M4[grepl( "h0", run)&valid==0, run]`.
+
+``` julia
+julia> @time MD2.filerun_floop( td, ["S3.0044h04", "S3.0045h04", "S3.0046h04"],
+                              6, 5000, 6)
+  7.197041 seconds (5.58 M allocations: 429.715 MiB, 2.93% gc time, 
+  14 lock conflicts, 1.18% compilation time)
+
+julia> 
+```
+
+```{r}
+#| label: DFfile5
+MD2DF.M5 <- MD2DFfile( "../MD2DF.M5.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, verbose = TRUE)
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.M5[grepl( "h0", run), ], linethresh = 200)
+par(op)
+```
+
+And now only `r MD2DF.M5[grepl( "h0", run)&valid==0, run]`remains.\`
+
+``` julia
+julia> @time MD2.extendrun( td, "S3.0045h04", 12, steps=10000, runs=6)
+ 10.436939 seconds (3.59 M allocations: 253.016 MiB, 0.36% gc time)
+60000
+
+julia> 
+```
+
+```{r}
+#| label: er004504
+#| fig.cap: "Extended run for `S3.0045h04` to 120k steps."
+x <- combineruns( td,"S3","0045h04",verbose=TRUE)
+plotMD2( x$rundt)
+xproc <- procMD2DF(x, 1000)
+xproc[ , .(total.steps, steps.avg, TE.mean.rs, ke.mean.rs, valid)]
+rm(x)
+```
+
+It is time consuming to generate each set executions by manually fixing
+the start numbers. the following *Julia* regex can be used to
+filterm\[1\] filenames into useable groups.
+
+```{r}
+#| label: fnames
+jld <- paste( "^[A-Za-z0-9]+\\.[A-Za-z0-9]+", 
+              "h04", # change these to the desired heating/cooling group
+              "\\.[0-9]+\\.jld2$", sep = "")
+fnames <- function( td, jld) {
+# Creates string that can be pasted directly into julia for MD2.heatcool()
+  # td is the target directory, jld is the regex to match
+  # jld <- paste( "^[A-Za-z0-9]+\\.[A-Za-z0-9]+", 
+  #           "h04", # change these to the desired heating/cooling group
+  #           "\\.[0-9]+\\.jld2$", sep = "")
+
+   f <- dir( td, jld)
+   ll <- t( vapply( f, function(x) unlist(strsplit( x, "\\.")), 
+                   c("series","energy","exec","ext")))
+   #rownames( ll) <- NULL
+   colnames( ll) <- c("Series","Energy","Exec","Ext")
+   f2 <- data.table( ll, keep.rownames=TRUE)
+   #er <- unique( f2$energy)
+   f2$EN <- as.numeric( f2$Exec) # convert Exec to numbers
+   f3 <- f2[ f2[ , .I[EN == max(EN)], by = Energy]$V1]$rn
+   # above line find the max EN by Energy, and returns rowname.
+   cat( '["', 
+        paste( substring( f3, 1, nchar( f3) - 5), collapse = '", "'), 
+        '"]', sep="")
+}
+fnames( td, jld)
+```
+
+The explanation of the regex is as follows. `^[A-Za-z0-9]+` identifies
+the *series* group that must start the string. While it can contain
+anything, the three groups must all exist, ending with ".jld2". Each
+"\\." requires a "dot" to be present, and the `[A-Za-z0-9]+` identifies
+the *energy* group (which also can contain anything) followed by
+`[0-9]+` which identifies the *exec* group, which can only contain
+number characters. Thus "abcd.a1b2.1234.jld2" is a proper name, while
+"abcd.a1b2.jld2" is not (the "exec" group is missing.) In the above, the
+characters "h04" are added to the energy group to filter only those
+files with those characters in the energy group.
+
+Using this, we get:
+
+``` julia
+julia> sname5 = ["S3.0008h04.0006", "S3.0009h04.0006", "S3.0010h04.0006",
+"S3.0011h04.0006", "S3.0043h04.0006", "S3.0044h04.0012", "S3.0045h04.0018",
+"S3.0046h04.0012"]
+8-element Vector{String}:
+ "S3.0008h04.0006"
+ "S3.0009h04.0006"
+ "S3.0010h04.0006"
+ "S3.0011h04.0006"
+ "S3.0043h04.0006"
+ "S3.0044h04.0012"
+ "S3.0045h04.0018"
+ "S3.0046h04.0012"
+
+julia> @time MD2.heatcool( td, snames5, Beta = beta)
+ 21.074604 seconds (14.77 M allocations: 1.151 GiB, 1.50% gc time, 
+ 41 lock conflicts)
+
+julia> 
+```
+
+```{r}
+#| label: DFfile6
+MD2DF.M6 <- MD2DFfile( "../MD2DF.M6.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, verbose = TRUE)
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.M6[grepl( "h0", run), ], linethresh = 200)
+par(op)
+MD2DF.M6[grepl( "h0", run)&valid==0, run]
+```
+
+Two more to extend. These struggled to converge, and ended up,
+eventually, getting to 4M steps.
+
+``` julia
+julia> @time MD2.filerun_thread( td, ["S3.0045h05", "S3.0046h05"], 6, 5000, 6)
+  6.436866 seconds (4.70 M allocations: 337.496 MiB, 0.83% gc time, 
+  8 lock conflicts, 10.93% compilation time)
+
+julia> @time MD2.filerun_thread( td, ["S3.0045h05", "S3.0046h05"], 12, 10000,
+  6)
+ 12.502694 seconds (7.18 M allocations: 506.035 MiB, 1.61% gc time, 16 lock conflicts)
+
+julia> @time MD2.filerun_thread( td, ["S3.0045h05", "S3.0046h05"], 18, 10000,
+12)
+
+ 23.678518 seconds (14.35 M allocations: 1012.058 MiB, 1.15% gc time, 
+ 7 lock conflicts)
+
+julia> 
+
+julia> @time MD2.filerun_thread( td, ["S3.0045h05", "S3.0046h05"], 30, 50000, 20)
+177.326780 seconds (119.92 M allocations: 7.572 GiB, 1.39% gc time, 
+20 lock conflicts)
+
+julia> @time MD2.filerun_thread( td, ["S3.0045h05", "S3.0046h05"], 50, 50000,
+50)
+442.513234 seconds (299.80 M allocations: 18.930 GiB, 1.55% gc time, 
+3 lock conflicts)
+
+julia> @time MD2.filerun_thread( td, ["S3.0045h05", "S3.0046h05"], 100, 50000,
+6)
+ 52.395592 seconds (35.98 M allocations: 2.272 GiB, 1.28% gc time, 
+ 3 lock conflicts)
+```
+
+```{r}
+#| label: er004505
+#| fig.cap: "Extended run for `S3.0045h05` to 4M steps. Although technically 'valid', the run looks like its temperature is creeping up at the end."
+x <- combineruns( td,"S3","0045h05",verbose=TRUE)
+plotMD2( x$rundt)
+xproc <- procMD2DF(x, 1000)
+xproc[ , .(total.steps, steps.avg, TE.mean.rs, ke.mean.rs, valid)]
+rm(x)
+```
+
+```{r}
+#| label: er004605
+#| fig.cap: "Extended run for `S3.0046h05` to 4M steps."
+x <- combineruns( td,"S3","0046h05",verbose=TRUE)
+plotMD2( x$rundt)
+xproc <- procMD2DF(x, 1000)
+xproc[ , .(total.steps, steps.avg, TE.mean.rs, ke.mean.rs, valid)]
+rm(x)
+```
+
+```{r}
+jld <- paste( "^[A-Za-z0-9]+\\.[A-Za-z0-9]+", 
+              "h05", # change these to the desired heating/cooling group
+              "\\.[0-9]+\\.jld2$", sep = "")
+fnames( td, jld)
+```
+
+``` julia
+
+julia> sname6 = ["S3.0008h05.0006", "S3.0009h05.0006", "S3.0010h05.0006",
+"S3.0011h05.0006", "S3.0043h05.0006", "S3.0044h05.0006", "S3.0045h05.0106",
+"S3.0046h05.0106"]
+8-element Vector{String}:
+ "S3.0008h05.0006"
+ "S3.0009h05.0006"
+ "S3.0010h05.0006"
+ "S3.0011h05.0006"
+ "S3.0043h05.0006"
+ "S3.0044h05.0006"
+ "S3.0045h05.0106"
+ "S3.0046h05.0106"
+
+julia> @time MD2.heatcool( td, sname6, Beta = beta, steps = 10000, runs = 12)
+ 55.668390 seconds (57.88 M allocations: 4.017 GiB, 2.50% gc time, 
+ 29 lock conflicts, 0.02% compilation time)
+```
+
+We ran 120,000 steps for all runs this time.
+
+```{r}
+#| label: DFfile7
+MD2DF.M7 <- MD2DFfile( "../MD2DF.M7.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, verbose = TRUE)
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.M7[grepl( "h0", run), ], linethresh = 200)
+par(op)
+MD2DF.M7[grepl( "h06", run) & valid==0, run]
+```
+
+Interestingly, `S3.0045h06` appears to be valid. We will extend the
+remaining three to 4M steps. We need to run
+`r  (4000000 - 120000)/50000` 50k step executions, so we'll run 78.\`
+
+``` julia
+julia> @time MD2.filerun_thread( td, ["S3.0043h06", "S3.0044h06", "S3.0046h06"],
+12, 50000, 78)
+734.529886 seconds (701.53 M allocations: 44.296 GiB, 2.18% gc time, 
+22 lock conflicts)
+
+julia> 
+```
+
+Since we ran to 4M steps, we really don't need to check these, but we
+will look at the first, just to check what may have happened.
+
+```{r}
+#| label: er004306
+#| fig.cap: "Extended run for `S3.0043h06` to 4M steps."
+x <- combineruns( td,"S3","0043h06",verbose=TRUE)
+plotMD2( x$rundt)
+xproc <- procMD2DF(x, 1000)
+xproc[ , .(total.steps, steps.avg, TE.mean.rs, ke.mean.rs, valid)]
+rm(x)
+```
+
+`S3.0043h06` appears to be solidifying (($\psi_6$ is bouncing around
+0.6). Let's take an inventory of the `h06` runs.
+
+```{r}
+#| label: DFfile8
+MD2DF.M8 <- MD2DFfile( "../MD2DF.M8.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, verbose = TRUE)
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.M8[grepl( "h0", run), ], linethresh = 200)
+par(op)
+knitr::kable( MD2DF.M8[grepl( "h06", run), 
+                       .(run, TE=TE.mean.rs, Temp=ke.mean.rs, valid,
+                         total.steps, steps.avg)])
+```
+
+The colder runs are clearly not in the solid/fluid transition region
+yet, so we don't need to run these to 120K steps yet. Since essentially
+all runs are in the solid region, the cadence will be to run to 60K
+steps, check validity, and then double the steps of runs not vald.
+
+```{r}
+jld <- paste( "^[A-Za-z0-9]+\\.[A-Za-z0-9]+", 
+              "h06", # change these to the desired heating/cooling group
+              "\\.[0-9]+\\.jld2$", sep = "")
+fnames( td, jld)
+```
+
+``` julia
+ulia> snames7 = ["S3.0008h06.0012", "S3.0009h06.0012", "S3.0010h06.0012",
+"S3.0011h06.0012", "S3.0043h06.0090", "S3.0044h06.0090", "S3.0045h06.0012",
+"S3.0046h06.0090"]
+8-element Vector{String}:
+ "S3.0008h06.0012"
+ "S3.0009h06.0012"
+ "S3.0010h06.0012"
+ "S3.0011h06.0012"
+ "S3.0043h06.0090"
+ "S3.0044h06.0090"
+ "S3.0045h06.0012"
+ "S3.0046h06.0090"
+
+julia> @time MD2.heatcool( td, snames7, Beta = beta, steps = 10000, runs = 6)
+ 29.520658 seconds (29.17 M allocations: 2.040 GiB, 2.04% gc time, 
+ 22 lock conflicts)
+
+julia> 
+```
+
+```{r}
+#| label: DFfile9
+MD2DF.M9 <- MD2DFfile( "../MD2DF.M9.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, verbose = TRUE)
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.M9[grepl( "h0", run), ], linethresh = 200)
+par(op)
+knitr::kable( MD2DF.M9[grepl( "h07", run), 
+                       .(run, TE=TE.mean.rs, Temp=ke.mean.rs, valid,
+                         total.steps, steps.avg)])
+```
+
+```{r}
+#| label: er004607
+#| fig.cap: "Extended run for `S3.0046h07` to 60,000 steps."
+x <- combineruns( td,"S3","0046h07",verbose=TRUE)
+plotMD2( x$rundt)
+xproc <- procMD2DF(x, 1000)
+xproc[ , .(total.steps, steps.avg, TE.mean.rs, ke.mean.rs, valid)]
+rm(x)
+```
+
+Very nice solidification behavior.
+
+```{r}
+jld <- paste( "^[A-Za-z0-9]+\\.[A-Za-z0-9]+", 
+              "h07", # change these to the desired heating/cooling group
+              "\\.[0-9]+\\.jld2$", sep = "")
+fnames( td, jld)
+```
+
+``` julia
+julia> snames8 = ["S3.0008h07.0006", "S3.0009h07.0006", "S3.0010h07.0006",
+"S3.0011h07.0006", "S3.0043h07.0006", "S3.0044h07.0006", "S3.0045h07.0006",
+"S3.0046h07.0012"]
+8-element Vector{String}:
+ "S3.0008h07.0006"
+ "S3.0009h07.0006"
+ "S3.0010h07.0006"
+ "S3.0011h07.0006"
+ "S3.0043h07.0006"
+ "S3.0044h07.0006"
+ "S3.0045h07.0006"
+ "S3.0046h07.0012"
+
+julia> @time MD2.heatcool( td, snames8, Beta = beta, steps = 10000, runs = 6)
+ 29.050929 seconds (29.17 M allocations: 2.040 GiB, 2.44% gc time, 
+ 21 lock conflicts)
+
+julia> 
+```
+
+```{r}
+#| label: DFfilea
+MD2DF.Ma <- MD2DFfile( "../MD2DF.Ma.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, verbose = TRUE)
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.Ma[grepl( "h0", run), ], linethresh = 200)
+par(op)
+knitr::kable( MD2DF.Ma[grepl( "h08", run), 
+                       .(run, TE=TE.mean.rs, Temp=ke.mean.rs, valid,
+                         total.steps, steps.avg)])
+```
+
+```{r}
+jld <- paste( "^[A-Za-z0-9]+\\.[A-Za-z0-9]+", 
+              "h08", # change these to the desired heating/cooling group
+              "\\.[0-9]+\\.jld2$", sep = "")
+fnames( td, jld)
+```
+
+``` julia
+julia> snames9 = ["S3.0008h08.0006", "S3.0009h08.0006", "S3.0010h08.0006", "S3.0011h08.0006", "S3.0043h08.0006", "S3.0044h08.0006", "S3.0045h08.0006", "S3.0046h08.0006"]
+8-element Vector{String}:
+ "S3.0008h08.0006"
+ "S3.0009h08.0006"
+ "S3.0010h08.0006"
+ "S3.0011h08.0006"
+ "S3.0043h08.0006"
+ "S3.0044h08.0006"
+ "S3.0045h08.0006"
+ "S3.0046h08.0006"
+
+julia> @time MD2.heatcool( td, snames9, Beta = beta, steps = 10000, runs = 6)
+ 28.913931 seconds (29.17 M allocations: 2.040 GiB, 2.00% gc time, 19 lock conflicts)
+
+julia> 
+```
+
+```{r}
+#| label: DFfileb
+MD2DF.Mb <- MD2DFfile( "../MD2DF.Mb.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, verbose = TRUE)
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.Mb[grepl( "h0", run), ], linethresh = 200)
+par(op)
+knitr::kable( MD2DF.Mb[grepl( "h09", run), 
+                       .(run, TE=TE.mean.rs, Temp=ke.mean.rs, valid,
+                         total.steps, steps.avg)])
+```
+
+```{r}
+jld <- paste( "^[A-Za-z0-9]+\\.[A-Za-z0-9]+", 
+              "h09", # change these to the desired heating/cooling group
+              "\\.[0-9]+\\.jld2$", sep = "")
+fnames( td, jld)
+```
+
+``` julia
+julia> snamesa = ["S3.0008h09.0006", "S3.0009h09.0006", "S3.0010h09.0006",
+"S3.0011h09.0006", "S3.0043h09.0006", "S3.0044h09.0006", "S3.0045h09.0006",
+"S3.0046h09.0006"]
+8-element Vector{String}:
+ "S3.0008h09.0006"
+ "S3.0009h09.0006"
+ "S3.0010h09.0006"
+ "S3.0011h09.0006"
+ "S3.0043h09.0006"
+ "S3.0044h09.0006"
+ "S3.0045h09.0006"
+ "S3.0046h09.0006"
+
+julia> @time MD2.heatcool( td, snamesa, Beta = beta, steps = 10000, runs = 6)
+ 29.188814 seconds (29.17 M allocations: 2.040 GiB, 2.51% gc time, 
+ 15 lock conflicts)
+
+julia>
+```
+
+```{r}
+#| label: DFfilec
+MD2DF.Mc <- MD2DFfile( "../MD2DF.Mc.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, verbose = TRUE)
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.Mc[grepl( "h0", run), ], linethresh = 200)
+par(op)
+knitr::kable( MD2DF.Mc[grepl( "h10", run), 
+                       .(run, TE=TE.mean.rs, Temp=ke.mean.rs, valid,
+                         total.steps, steps.avg)])
+```
+
+Finally, some of the cold runs have started melting. We will take a few
+steps to get `S3.0010h10` and `S3.0011h10` to 4M steps.
+
+``` julia
+@time MD2.filerun_thread( td, ["S3.0010h10", "S3.0011h10"], 6, 10000, 12)
+ 22.389530 seconds (14.35 M allocations: 1012.058 MiB, 1.31% gc time, 
+ 11 lock conflicts)
+ 
+julia> @time MD2.filerun_thread( td, ["S3.0010h10", "S3.0011h10"], 18, 50000,
+12)
+105.957629 seconds (71.95 M allocations: 4.543 GiB, 1.65% gc time, 
+3 lock conflicts)
+
+julia> @time MD2.filerun_thread( td, ["S3.0010h10", "S3.0011h10"], 30, 50000,
+65)
+515.217536 seconds (389.74 M allocations: 24.609 GiB, 1.73% gc time, 
+1 lock conflict)
+```
+
+Only the colder one is declared valid
+
+```{r}
+#| label: er00101110
+x <- combineruns( td,"S3","0010h10",verbose=TRUE)
+#plotMD2( x$rundt)
+xproc <- procMD2DF(x, 1000)
+x <- combineruns( td,"S3","0011h10",verbose=TRUE)
+#plotMD2( x$rundt)
+xproc <- rbindlist( list( xproc, procMD2DF(x, 1000)))
+xproc[ , .(total.steps, steps.avg, TE.mean.rs, ke.mean.rs, valid)]
+rm(x)
+```
+
+```{r}
+jld <- paste( "^[A-Za-z0-9]+\\.[A-Za-z0-9]+", 
+              "h10", # change these to the desired heating/cooling group
+              "\\.[0-9]+\\.jld2$", sep = "")
+fnames( td, jld)
+```
+
+Bumping the initial run to 120k steps as many runs are in the transition
+region.
+
+``` julia
+julia> snamesb = ["S3.0008h10.0006", "S3.0009h10.0006", "S3.0010h10.0095",
+"S3.0011h10.0095", "S3.0043h10.0006", "S3.0044h10.0006", "S3.0045h10.0006",
+"S3.0046h10.0006"]
+8-element Vector{String}:
+ "S3.0008h10.0006"
+ "S3.0009h10.0006"
+ "S3.0010h10.0095"
+ "S3.0011h10.0095"
+ "S3.0043h10.0006"
+ "S3.0044h10.0006"
+ "S3.0045h10.0006"
+ "S3.0046h10.0006"
+
+julia> @time MD2.heatcool( td, snamesb, Beta = beta, steps = 10000, runs = 12)
+ 45.759894 seconds (57.88 M allocations: 4.017 GiB, 2.20% gc time, 
+ 76 lock conflicts)
+```
+
+```{r}
+#| label: DFfiled
+MD2DF.Md <- MD2DFfile( "../MD2DF.Md.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, verbose = TRUE)
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.Md[grepl( "h0", run), ], linethresh = 200)
+par(op)
+knitr::kable( MD2DF.Md[grepl( "h11", run), 
+                       .(run, TE=TE.mean.rs, Temp=ke.mean.rs, valid,
+                         total.steps, steps.avg)])
+```
+
+Perhaps suspicious, but all but `S3.0009h11` are considered valid.
+Extended to 4M steps in two `extendrun()` executions. Running s single
+file to 4M steps takes about ten minutes.
+
+``` julia
+julia> @time MD2.extendrun( td, "S3.0009h11", 12, steps=20000, runs=24)
+ 73.171139 seconds (28.75 M allocations: 1.877 GiB, 0.42% gc time)
+480000
+
+julia> @time MD2.extendrun( td, "S3.0009h11", 36, steps=50000, runs=68)
+
+521.917985 seconds (203.86 M allocations: 12.872 GiB, 0.80% gc time)
+3400000
+```
+
+```{r}
+#| label: er000911
+x <- combineruns( td,"S3","0009h11",verbose=TRUE)
+#plotMD2( x$rundt)
+xproc <- procMD2DF(x, 1000)
+xproc[ , .(total.steps, steps.avg, TE.mean.rs, ke.mean.rs, valid)]
+rm(x)
+```
+
+```{r}
+jld <- paste( "^[A-Za-z0-9]+\\.[A-Za-z0-9]+", 
+              "h11", # change these to the desired heating/cooling group
+              "\\.[0-9]+\\.jld2$", sep = "")
+fnames( td, jld)
+```
+
+``` julia
+julia> snamesc = ["S3.0008h11.0012", "S3.0009h11.0104", "S3.0010h11.0012",
+"S3.0011h11.0012", "S3.0043h11.0012", "S3.0044h11.0012", "S3.0045h11.0012",
+"S3.0046h11.0012"]
+8-element Vector{String}:
+ "S3.0008h11.0012"
+ "S3.0009h11.0104"
+ "S3.0010h11.0012"
+ "S3.0011h11.0012"
+ "S3.0043h11.0012"
+ "S3.0044h11.0012"
+ "S3.0045h11.0012"
+ "S3.0046h11.0012"
+
+julia> @time MD2.heatcool( td, snamesc, Beta = beta, steps = 5000, runs = 12)
+ 25.622566 seconds (29.08 M allocations: 2.239 GiB, 1.81% gc time, 
+ 114 lock conflicts)
+```
+
+```{r}
+#| label: DFfilee
+MD2DF.Me <- MD2DFfile( "../MD2DF.Me.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, verbose = TRUE)
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.Me[grepl( "h0", run), ], linethresh = 200)
+par(op)
+knitr::kable( MD2DF.Me[grepl( "h12", run), 
+                       .(run, TE=TE.mean.rs, Temp=ke.mean.rs, valid,
+                         total.steps, steps.avg)])
+```
+
+``` julia
+julia> @time MD2.filerun_thread( td, ["S3.0008h12", "S3.0009h12", "S3.0010h12"],
+12, 10000, 12)
+ 22.704551 seconds (21.53 M allocations: 1.483 GiB, 9.59% gc time, 
+ 19 lock conflicts)
+
+julia> 
+```
+
+```{r}
+#| label: DFfilef
+MD2DF.Mf <- MD2DFfile( "../MD2DF.Mf.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, verbose = TRUE)
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.Mf[grepl( "h0", run), ], linethresh = 200)
+par(op)
+knitr::kable( MD2DF.Mf[grepl( "h12", run), 
+                       .(run, TE=TE.mean.rs, Temp=ke.mean.rs, valid,
+                         total.steps, steps.avg)])
+```
+
+Extending to 4M steps. Note that two files also takes about 10 minutes.
+
+``` julia
+julia> @time MD2.filerun_thread( td, ["S3.0008h12", "S3.0009h12"], 24, 50000,
+77)
+624.514570 seconds (461.69 M allocations: 29.152 GiB, 1.33% gc time, 
+9 lock conflicts)
+
+julia> 
+```
+
+```{r}
+#| label: er00080912
+x <- combineruns( td,"S3","0008h12",verbose=TRUE)
+#plotMD2( x$rundt)
+xproc <- procMD2DF(x, 1000)
+x <- combineruns( td,"S3","0009h12",verbose=TRUE)
+#plotMD2( x$rundt)
+xproc <- rbindlist( list( xproc, procMD2DF(x, 1000)))
+xproc[ , .(total.steps, steps.avg, TE.mean.rs, ke.mean.rs, valid)]
+rm(x)
+```
+
+Neither reached validity.
+
+```{r}
+jld <- paste( "^[A-Za-z0-9]+\\.[A-Za-z0-9]+", 
+              "h12", # change these to the desired heating/cooling group
+              "\\.[0-9]+\\.jld2$", sep = "")
+fnames( td, jld)
+```
+
+``` julia
+julia> snamesd = ["S3.0008h12.0101", "S3.0009h12.0101", "S3.0010h12.0024",
+"S3.0011h12.0012", "S3.0043h12.0012", "S3.0044h12.0012", "S3.0045h12.0012", "S3.0046h12.0012"]
+8-element Vector{String}:
+ "S3.0008h12.0101"
+ "S3.0009h12.0101"
+ "S3.0010h12.0024"
+ "S3.0011h12.0012"
+ "S3.0043h12.0012"
+ "S3.0044h12.0012"
+ "S3.0045h12.0012"
+ "S3.0046h12.0012"
+
+julia> 
+
+julia> @time MD2.heatcool( td, snamesd, Beta = beta, steps = 5000, runs = 12)
+ 25.957410 seconds (29.08 M allocations: 2.239 GiB, 3.60% gc time, 
+ 116 lock conflicts)
+```
+
+A lot of lock conflicts occured, not sure why.
+
+```{r}
+#| label: DFfileg
+MD2DF.Mg <- MD2DFfile( "../MD2DF.Mg.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, verbose = TRUE)
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.Mg[grepl( "h0", run), ], linethresh = 200)
+par(op)
+knitr::kable( MD2DF.Mg[grepl( "h13", run), 
+                       .(run, TE=TE.mean.rs, Temp=ke.mean.rs, valid,
+                         total.steps, steps.avg)])
+```
+
+``` julia
+julia> @time MD2.extendrun( td, "S3.0008h13", 12, steps=10000, runs=12)
+ 21.805452 seconds (7.18 M allocations: 506.028 MiB, 1.34% gc time)
+120000
+
+julia> @time MD2.extendrun( td, "S3.0008h13", 24, steps=50000, runs=12)
+ 94.254277 seconds (35.98 M allocations: 2.272 GiB, 1.26% gc time)
+600000
+```
+
+It took a few try's, but we got a valid run.
+
+```{r}
+#| label: er000813
+#| fig.cap: "Extended run for `S3.0008h13` to 780k steps. The run is valid, but not stable."
+x <- combineruns( td,"S3","0008h13",verbose=TRUE)
+plotMD2( x$rundt)
+xproc <- procMD2DF(x, 1000)
+xproc[ , .(total.steps, steps.avg, TE.mean.rs, ke.mean.rs, valid)]
+rm(x)
+```
+
+```{r}
+jld <- paste( "^[A-Za-z0-9]+\\.[A-Za-z0-9]+", 
+              "h13", # change these to the desired heating/cooling group
+              "\\.[0-9]+\\.jld2$", sep = "")
+fnames( td, jld)
+```
+
+``` julia
+julia> snamese = ["S3.0008h13.0036", "S3.0009h13.0012", "S3.0010h13.0012", "S3.0011h13.0012", "S3.0043h13.0012", "S3.0044h13.0012", "S3.0045h13.0012", "S3.0046h13.0012"]
+8-element Vector{String}:
+ "S3.0008h13.0036"
+ "S3.0009h13.0012"
+ "S3.0010h13.0012"
+ "S3.0011h13.0012"
+ "S3.0043h13.0012"
+ "S3.0044h13.0012"
+ "S3.0045h13.0012"
+ "S3.0046h13.0012"
+
+julia> @time MD2.heatcool( td, snamese, Beta = beta, steps = 5000, runs = 12)
+ 25.731492 seconds (29.08 M allocations: 2.239 GiB, 2.41% gc time, 115 lock conflicts)
+```
+
+```{r}
+#| label: DFfileh
+MD2DF.Mh <- MD2DFfile( "../MD2DF.Mh.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, verbose = TRUE)
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.Mh[grepl( "h0", run), ], linethresh = 200)
+par(op)
+knitr::kable( MD2DF.Mh[grepl( "h14", run), 
+                       .(run, TE=TE.mean.rs, Temp=ke.mean.rs, valid,
+                         total.steps, steps.avg)])
+```
+
+All runs are valid.
+
+```{r}
+jld <- paste( "^[A-Za-z0-9]+\\.[A-Za-z0-9]+", 
+              "h14", # change these to the desired heating/cooling group
+              "\\.[0-9]+\\.jld2$", sep = "")
+fnames( td, jld)
+```
+
+``` julia
+julia> snamesf = ["S3.0008h14.0012", "S3.0009h14.0012", "S3.0010h14.0012",
+"S3.0011h14.0012", "S3.0043h14.0012", "S3.0044h14.0012", "S3.0045h14.0012",
+"S3.0046h14.0012"]
+8-element Vector{String}:
+ "S3.0008h14.0012"
+ "S3.0009h14.0012"
+ "S3.0010h14.0012"
+ "S3.0011h14.0012"
+ "S3.0043h14.0012"
+ "S3.0044h14.0012"
+ "S3.0045h14.0012"
+ "S3.0046h14.0012"
+
+julia> @time MD2.heatcool( td, snamesf, Beta = beta, steps = 5000, runs = 12)
+ 36.040320 seconds (29.08 M allocations: 2.239 GiB, 3.24% gc time, 123 lock conflicts)
+```
+
+```{r}
+#| label: DFfilei
+MD2DF.Mi <- MD2DFfile( "../MD2DF.Mi.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, verbose = TRUE)
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.Mi[grepl( "h0", run), ], linethresh = 200)
+par(op)
+knitr::kable( MD2DF.Mi[grepl( "h15", run), 
+                       .(run, TE=TE.mean.rs, Temp=ke.mean.rs, valid,
+                         total.steps, steps.avg)])
+```
+
+I had been running for some time, and the morning of Friday 1 August,
+*Ubuntu* crashed. I didn't looks like I lost anything.
+
+``` julia
+
+phil@phil-XPS-8920:~$ julia --threads=4
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.11.6 (2025-07-09)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org/ release
+|__/                   |
+
+julia> using OhMyREPL
+
+julia> td = "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+julia> cd("/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J")
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> using .MD2
+
+julia> @time MD2.extendrun( td, "S3.0008h15", 12, steps=10000, runs=12)
+ 26.303295 seconds (22.01 M allocations: 1.222 GiB, 1.43% gc time, 
+ 26.23% compilation time: 11% of which was recompilation)
+120000
+```
+
+```{r}
+#| label: er000815
+#| fig.cap: "Extended run for `S3.0008h15` to 180k steps. The run is valid, but not stable."
+x <- combineruns( td,"S3","0008h15",verbose=TRUE)
+plotMD2( x$rundt)
+xproc <- procMD2DF(x, 1000)
+xproc[ , .(total.steps, steps.avg, TE.mean.rs, ke.mean.rs, valid)]
+rm(x)
+```
+
+```{r}
+jld <- paste( "^[A-Za-z0-9]+\\.[A-Za-z0-9]+", 
+              "h15", # change these to the desired heating/cooling group
+              "\\.[0-9]+\\.jld2$", sep = "")
+fnames( td, jld)
+```
+
+``` julia
+julia> snamesg = ["S3.0008h15.0024", "S3.0009h15.0012", "S3.0010h15.0012",
+"S3.0011h15.0012", "S3.0043h15.0012", "S3.0044h15.0012", "S3.0045h15.0012",
+"S3.0046h15.0012"]
+8-element Vector{String}:
+ "S3.0008h15.0024"
+ "S3.0009h15.0012"
+ "S3.0010h15.0012"
+ "S3.0011h15.0012"
+ "S3.0043h15.0012"
+ "S3.0044h15.0012"
+ "S3.0045h15.0012"
+ "S3.0046h15.0012"
+
+julia> beta = 0.1 * [ 0.1, 0.1, 0.1, 0.1, -0.1, -0.1, -0.1, -0.1]
+8-element Vector{Float64}:
+  0.010000000000000002
+  0.010000000000000002
+  0.010000000000000002
+  0.010000000000000002
+ -0.010000000000000002
+ -0.010000000000000002
+ -0.010000000000000002
+ -0.010000000000000002
+
+julia> @time MD2.heatcool( td, snamesg, Beta = beta, steps = 5000, runs = 12)
+ 26.748426 seconds (30.50 M allocations: 2.309 GiB, 4.48% gc time, 
+ 131 lock conflicts, 7.89% compilation time)
+```
+
+```{r}
+#| label: DFfilej
+MD2DF.Mj <- MD2DFfile( "../MD2DF.Mj.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.M, verbose = TRUE)
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.Mj[grepl( "h0", run), ], linethresh = 200)
+par(op)
+knitr::kable( MD2DF.Mj[grepl( "h16", run), 
+                       .(run, TE=TE.mean.rs, Temp=ke.mean.rs, valid,
+                         total.steps, steps.avg)])
+```
+
+``` julia
+julia> @time MD2.extendrun( td, "S3.0010h16", 12, steps=10000, runs=12)
+ 18.818923 seconds (7.18 M allocations: 506.028 MiB, 0.48% gc time)
+120000
+
+julia> @time MD2.extendrun( td, "S3.0010h16", 24, steps=20000, runs=12)
+ 37.498901 seconds (14.38 M allocations: 961.045 MiB, 1.17% gc time)
+240000
+```
+
+```{r}
+#| label: er001016
+#| fig.cap: "Extended run for `S3.0010h16` to 420k steps. The run is valid, but not stable."
+x <- combineruns( td,"S3","0010h16",verbose=TRUE)
+plotMD2( x$rundt)
+xproc <- procMD2DF(x, 1000)
+xproc[ , .(total.steps, steps.avg, TE.mean.rs, ke.mean.rs, valid)]
+rm(x)
+```
+
+Runs `S3.0010h16` and `S3.0011h16` are both above the target
+$T = 0.0208$, so we won't run those anymore. We'll do that simply by
+editing the string below after it's pasted into *julia*, and by
+redefining `beta` to be of length six.
+
+```{r}
+jld <- paste( "^[A-Za-z0-9]+\\.[A-Za-z0-9]+", 
+              "h16", # change these to the desired heating/cooling group
+              "\\.[0-9]+\\.jld2$", sep = "")
+fnames( td, jld)
+```
+
+``` julia
+julia> snamesh = ["S3.0008h16.0012", "S3.0009h16.0012", "S3.0043h16.0012",
+"S3.0044h16.0012", "S3.0045h16.0012", "S3.0046h16.0012"]
+6-element Vector{String}:
+ "S3.0008h16.0012"
+ "S3.0009h16.0012"
+ "S3.0043h16.0012"
+ "S3.0044h16.0012"
+ "S3.0045h16.0012"
+ "S3.0046h16.0012"
+
+julia> beta = beta[3:8]
+6-element Vector{Float64}:
+  0.010000000000000002
+  0.010000000000000002
+ -0.010000000000000002
+ -0.010000000000000002
+ -0.010000000000000002
+ -0.010000000000000002
+
+julia> @time MD2.heatcool( td, snamesh, Beta = beta, steps = 5000, runs = 12)
+ 19.406526 seconds (21.81 M allocations: 1.679 GiB, 3.71% gc time, 
+ 63 lock conflicts)
+```
+
+We have been reprocessing everything from `MD2DF.M`, but that includes a
+lot of 4M point files, and it cheing though a lot of memery and swap
+(and likely led to this morning's crash). So we will process the files
+from `MD2DF.Mj` instead.
+
+```{r}
+#| label: DFfilek
+MD2DF.Mk <- MD2DFfile( "../MD2DF.Mk.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.Mj, verbose = TRUE)
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.Mk[grepl( "h0", run), ], linethresh = 200)
+par(op)
+knitr::kable( MD2DF.Mk[grepl( "h17", run), 
+                       .(run, TE=TE.mean.rs, Temp=ke.mean.rs, valid,
+                         total.steps, steps.avg)])
+```
+
+Now `S3.0009h17` is above $T = 0.208$, so we will not run it anymore.
+
+``` julia
+julia> snamesi = replace.( snamesh[[1,3,4,5,6]], "h16" => "h17")
+5-element Vector{String}:
+ "S3.0008h17.0012"
+ "S3.0043h17.0012"
+ "S3.0044h17.0012"
+ "S3.0045h17.0012"
+ "S3.0046h17.0012"
+
+julia> beta = beta[2:6]
+5-element Vector{Float64}:
+  0.010000000000000002
+ -0.010000000000000002
+ -0.010000000000000002
+ -0.010000000000000002
+ -0.010000000000000002
+
+julia> @time MD2.heatcool( td, snamesi, Beta = beta, steps = 5000, runs = 12)
+ 22.146781 seconds (18.17 M allocations: 1.399 GiB, 3.56% gc time,
+ 63 lock conflicts)
+```
+
+```{r}
+#| label: DFfilel
+MD2DF.Ml <- MD2DFfile( "../MD2DF.Ml.RDS", td, "S3*.????h??.????.scalars.csv",
+                       df = MD2DF.Mk, verbose = TRUE)
+
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2(MD2DF.Ml[grepl( "h0", run), ], linethresh = 200)
+par(op)
+knitr::kable( MD2DF.Ml[grepl( "h18", run), 
+                       .(run, TE=TE.mean.rs, Temp=ke.mean.rs, valid,
+                         total.steps, steps.avg)])
+```
+
+And, we're done creating runs.
+
+# Quick Analysis
+
+We now have nine initialization series to examine: the first with an
+initialization for each point, four which have been heated, and four
+which have been cooled.
+
+`S!` and `S2` series are all individual initializations. The `S3` and
+`S3b` series whose energies do not have an "h" in the field are also
+individual initializations. Those with the "h" are heated or cooled for
+the initialization energy in the name. Thus `S3.0008h12` is the twelfth
+heating of `S3.0008`. We did not distinguish in the names which were
+heating and which were cooling. The code below will add a tag `itype`
+(initialization type) to call the series as `Init`, `Heat`, or `Cool`.
+
+```{r}
+#| label: MD2DFN
+MD2DF.N <- data.table::copy(MD2DF.Ml)
+MD2DF.N$itype <- with( MD2DF.N, 
+      ifelse( series %in% c("S1","S2"), "Init",
+            ifelse( !grepl( "h", energy), "Init",
+                    ifelse( grepl( "0008|0009|0010|0011", energy), 
+                            "Heat", "Cool")
+                    )
+            )
+      )
+saveRDS( MD2DF.N, "../MD2DF.N.RDS" )
+```
+
+The heated and cooled files track the raw initialization files very
+well(#fig-MD2DFKplot).
+
+```{r}
+#| label: fig-MD2DFKplot
+#| fig.cap: "Plot of the kinetic energy vs. pressure for all `S3` runs between $T = 0.004$ and $T = 0.02$. Red points are those not considered valid."
+pchlu <- c( Init = 1, Heat = 0, Cool = 2) # pch lookup
+with( MD2DF.N[ grepl( "S3", series, fixed = TRUE) & 
+                  ke.mean.rs %within% c( 0.004, 0.02),], {
+   col = ifelse( valid, "black", "red")
+   plot( y = Pressure.mean.rs, x = ke.mean.rs, col = col,
+      xlab = "T", ylab = "Pressure", pch =  pchlu[ itype],
+      main = "Pressure vs Temperature for S3 runs",
+      panel.first = grid())
+   })
+legend( "bottomright", legend = names( pchlu), pch = pchlu)
+```
+
+#fig-MD2DFKplotz zooms into the transition region.
+
+```{r}
+#| label: fig-MD2DFKplotz
+#| fig.cap: "Zoom into #fig-MD2DFKplot. Red points are those not considered valid."
+with( MD2DF.N[ grepl( "S3", series, fixed = TRUE) & 
+                  ke.mean.rs %within% c( 0.007, 0.015),], {
+   col = ifelse( valid, "black", "red")
+   plot( y = Pressure.mean.rs, x = ke.mean.rs, col = col,
+      xlab = "T", ylab = "Pressure", pch =  pchlu[ itype],
+      main = "Pressure vs Temperature for S3 runs",
+      panel.first = grid())
+   })
+legend( "bottomright", legend = names( pchlu), pch = pchlu)
+```
+
+#fig-Kpsivt shows the Nelson Halperin order parameter vs. temperature
+around the transition region.
+
+```{r}
+#| label: fig-Kpsivt
+#| fig.cap: "Nelson Halperin order parameter vs. temperature. Red points are those not considered valid."
+with( MD2DF.N[ grepl( "S3", series, fixed = TRUE) & 
+                  ke.mean.rs %within% c( 0.007, 0.015),], {
+   col = ifelse( valid, "black", "red")
+   plot( y = psiabs.mean.rs, x = ke.mean.rs, col = col,
+      xlab = "T", ylab = expression( psi), pch =  pchlu[ itype],
+      main = "NHOP vs Temperature for S3 runs",
+      panel.first = grid())
+   })
+legend( "bottomleft", legend = names( pchlu), pch = pchlu)
+```
+
+#fig-Kesdvt shows the variance of the temperature vs. temperature around
+the transition region.
+
+```{r}
+#| label: fig-Kesdvt
+#| fig.cap: "Variance of T vs. temperature. Red points are those not considered valid."
+with( MD2DF.N[ grepl( "S3", series, fixed = TRUE) & 
+                  ke.mean.rs %within% c( 0.007, 0.015),], {
+   col = ifelse( valid, "black", "red")
+   plot( y = ke.sd.rs, x = ke.mean.rs, col = col,
+      xlab = "T", ylab = expression( sigma), pch =  pchlu[ itype],
+      main = "Variance of T vs Temperature for S3 runs",
+      panel.first = grid())
+   })
+legend( "topleft", legend = names( pchlu), pch = pchlu)
+```
+
+```{r}
+#| label: fig-tvTE
+#| fig.cap: "Temperature vs total energy . Red points are those not considered valid."
+with( MD2DF.N[ grepl( "S3", series, fixed = TRUE) & 
+                  ke.mean.rs %within% c( 0.007, 0.015),], {
+   col = ifelse( valid, "black", "red")
+   plot( y = ke.mean.rs, x = TE.mean.rs, col = col,
+      xlab = "Total Energy", ylab = "T", pch =  pchlu[ itype],
+      main = "Temperature Total Energy for S3 runs",
+      panel.first = grid())
+   })
+legend( "topleft", legend = names( pchlu), pch = pchlu)
+```
+
+# Compressing Old Files.
+
+The operations below were executed on Thursday 7/31/25.
+
+``` bash
+phil@phil-XPS-8920:~/MD/Data/1980$ tar czf tar.S1.gz S1*
+phil@phil-XPS-8920:~/MD/Data/1980$ du -ch tar.S1.gz
+690M    tar.S1.gz
+690M    total
+phil@phil-XPS-8920:~/MD/Data/1980$ tar -t -f tar.S1.gz | wc -l
+2400
+phil@phil-XPS-8920:~/MD/Data/1980$ ls S1* | wc -l
+2400
+phil@phil-XPS-8920:~/MD/Data/1980$ rm S1*
+phil@phil-XPS-8920:~/MD/Data/1980$ tar czf tar.S2.gz S2*
+phil@phil-XPS-8920:~/MD/Data/1980$ ls S2* | wc -l
+3895
+phil@phil-XPS-8920:~/MD/Data/1980$ tar -t -f tar.S2.gz | wc -l
+3895
+```
+
+The remainder was executed on Saturday 8/2/25.
+
+``` bash
+phil@phil-XPS-8920:~/MD/Data/1980$ du -ch S2* | grep "total"
+13G     total
+phil@phil-XPS-8920:~/MD/Data/1980$ du -ch tar.S2.gz
+6.5G    tar.S2.gz
+6.5G    total
+phil@phil-XPS-8920:~/MD/Data/1980$ rm S2*
+phil@phil-XPS-8920:~/MD/Data/1980$ du -ch S3* | grep "total"
+39G     total
+phil@phil-XPS-8920:~/MD/Data/1980$ du -ch * | grep "total"
+46G     total
+```

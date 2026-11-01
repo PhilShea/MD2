@@ -1,0 +1,2905 @@
+---
+title: "2026 Update"
+author: "Phil Shea"
+date: last-modified
+number-sections: true
+pdf-engine: xelatex
+format:
+  pdf:
+    fig-pos: 'H'
+    toc: true
+    toc-depth: 2
+#mainfont: cambria
+execute:
+  sanitize: false
+  freeze: auto
+crossref:
+  fig-title: '**Figure**'
+  fig-labels: arabic
+  title-delim: "**.**"
+    #cite-method: biblatex
+#mainfont: "Latin Modern Roman"
+bibliography: "../Melting in Two D.bib"
+link-citations: true
+monofont: "Courier"
+monofontoptions: 'Scale=0.8'
+editor_options:
+  markdown:
+    wrap: 72
+    references: 
+      location: block
+    canonical: true
+---
+
+```{r}
+#| label: init
+#| include: false
+#
+# NOTE: if the package has changed, it must be installed locally via:
+#
+# devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+# (for Windows)
+# or
+#
+# devtools::install("/home/phil/MD/MD2RP")
+# (for linux)
+#
+# You probably have to re-start R after this.
+#
+# *****************************************************
+require( MD2RP)
+require( parallel)
+require( pracma)
+require( data.table)
+require( knitr)
+require( lattice)
+require( JuliaCall)
+require( latex2exp)
+num_cores <- detectCores() - 1
+options(digits=5)
+"%within%" <- function( vector, range) # define convenience function.
+   (vector > range[ 1]) & (vector < range[ 2])
+
+td <- "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+MD2.B <- readRDS( "../MD2DT.B.RDS") # read in current data for analysis 
+```
+
+# 2026
+
+Having completed the series 5 analysis and confident in the use of
+`Float32` and higher $\Delta t$ integration steps using the Velocity
+Verlet algorithm, we need to address a few things:
+
+1.  Series 5 *Julia* code (mostly run with version 1.6.11) does not have
+    the ability to heat or cool using the Velocity Verlet algorithm, so
+    the hysteresis was not identified.
+2.  The the bond orientation order parameter given by
+    $G_6(r) = |\langle \psi^*(\vec{r}) \psi(\vec{0}) \rangle|$ can now
+    be estimated in *Julia* code by using a number of system record
+    (`.jld2`) files, but the rate of decay is needed, and this is not
+    trivial to estimate.
+3.  The box dimensions limit the range over which $G_6(r)$ may be
+    calculated. We have always used a "square" matrix of particles, such
+    that the number of rows and columns were the same (i.e., 16) and $y$
+    dimension was $y = x\sqrt{3}/2$ (i.e., $0.866x$). This means that
+    the maximum $r$ would be half the length of the $y$ dimension (`by`
+    is half this length in `MD2` parlance). We should square this
+    rectangle.
+
+## Nomenclature
+
+The following is the nomenclature of equations:
+
+- $T$ is generic temperature
+- $E_t$ is total energy
+- $E_k$ is kinetic energy
+- $\rho$ is density (almost always $\rho = 1/\pi$)
+- $U$ is potential energy, and $U_0$ is the potential energy of the
+  system in the rest position.
+- $\tau$ is the unit of time.
+- $\Delta t$ is the time step (in units of $\tau$)
+
+## *Squaring* the Box
+
+The box dimensions are an input to `MD2`, but if the periodic boundary
+conditions are to fit the solid crystal, the $x$ and $y$ dimensions must
+be such than an integer number of rows and columns fit, and that the
+number of rows bust be an even number. The `MD2` program's fundamental
+inputs are `bx`, `by` (each is half the length of the respective sides:
+the box has corners at $\{-b_x, -b_y\}$ and $\{b_x, b_y\}$), and the
+number of particles $N$. The density is computed as
+$\rho = N/(4 b_x b_y)$. The inter-particle spacing is computed as
+$a = \sqrt{2/\rho \sqrt{3}}$.
+
+Next, the number of columns is computed as $N_c = 2b_x/a$ and the number
+of rows is then simply $N_r = N / N_c$ (in *Julia*, all computations
+that ought to result in an integer are rounded). If $N$ is a perfect
+square, then the number of rows and columns can be the same. As we have
+been using $\rho = 1/\pi$ and $N = 256$, these worked out to a 16 by 16
+matrix with $a \approx 1.905$, $b_x \approx 15.237$ and
+$b_y \approx 13.196$. The `InitSystem()` function (which is called by
+`runn()`) has density as an input, and sports a default of $1/\pi$. It
+then computes $b_x = \sqrt{ N / (2\rho \sqrt{3})}$ and locks the ratio
+of $b_x$ and $b_y$ to $\sqrt{3}/2$.
+
+To square the rectangle, we want to have more rows than columns, as the
+row spacing is only about 87% of the column spacing. The periodic
+boundary conditions demand that there be an even number of rows, so that
+the top row particles will be imaged between the bottom row particles.
+If we want to simulate $N$ particles, we should compute
+$N_c \approx \sqrt{2N/\sqrt{3}}$, and typically take the ceiling of that
+fraction. For example for roughly 256 particles:
+
+```{r}
+c <- sqrt( 3) / 2
+(Ncfr <- sqrt(256 / c)) # raw fraction
+(Nc <- ceiling( Ncfr)) # estimated number of columns
+(Nr <- round( c * Nc)) # rows
+(N <- Nr * Nc) # new particle number
+(c * Nc/Nr) # box ratio
+```
+
+The `InitSystem()` function needs to modified such that *squarer* boxes
+can be specified. The number of particles is the key here, as the
+density will set the inter-particle spacing. The `InitSystem()`
+computation of `bx` and are what needs to change. The relationship we
+are looking for is $N = N_r N_c \approx 2 N_c^2/\sqrt{3}$. So we can set
+the number of columns as
+$N_c = \text{Round}\left( \sqrt{2 N / \sqrt{3}} \right)$. Then we can
+make the number of rows
+$N_c = \text{RndEven}\left( 2N_r / \sqrt{3} \right)$ (where the
+`RndEven()` function will round to the next highest even integer) and
+then make $N_{r2} = \text{RndEven}(2N_c / \sqrt{3})$. So, for $N = 256$,
+we get $N_c = 18$ and $Nr = 15$, resulting in $N_r N_c = 270$.
+
+```{r}
+#| label: tbl-N2
+#| tbl-cap: Power of two column numbers (Nc) and $N^2$ particle count (Ns) and suggested squared rectagles column and row counts (Nc2 and Nr2, respectively) to reach roughly the same number (N2). The Ratio of the resulting box dimensions is the last column. Some rows include odd Nc values (which are not possible due to the requirement of an even number of rows), but these generate squared rectangle sizes with power of two Nc2 values.
+
+oddQ <- function( x) ( (x %% 2) != 0)
+makeven <- function( x) ifelse( oddQ(x), x + 1, x)
+Nc <- c(16, 17, 32, 34, 64, 69, 128, 138, 256, 275, 512, 550, 1024, 1100)
+(rho <- 1/pi) # density
+(a <- sqrt( 1/ (rho * c))) # particle spacing
+NN <- data.table( Nc = Nc, Ns = Nc^2, 
+                  Nc2 = round( Nc * sqrt( c)))
+NN[, Nr2 := makeven( round( Nc2 / c))]
+knitr::kable(NN[, c("N2", "Ratio") := .(Nr2 * Nc2, Nc2 / (Nr2*c))], 
+             format.args = list(big.mark = ","))
+```
+
+While we want to make this change, we also want to retain the ability to
+duplicate the 1979 work, which used a rectangle. We made the input `N` a
+`Union` type which will also accept a *Julia* `Tuple` like `(15, 18)`,
+which will then specify the rows and columns.
+
+## File Counts for Post-Processing {#sec-filecntpp}
+
+In order to post process only files considered in equilibrium, or at
+least those representing the recorded temperature, we need a function
+which will return the number of files and the number of steps in each
+file. This information is conveniently stored in `rfdt.RDS` files by
+`combineruns()` (called in `MD2RP::createdf()` processing). We can use
+the `MD2DF` column `steps.avg` to read the number of steps in the
+temperature estimation and find the file in which these steps start (it
+might be within a file). The `rfdt` file has two components: a data
+frame of the raw scalars (`$rundt`) and a data frame describing the
+contents of each file (`$rfdt`, with columns `file`, `time`, and
+`steps`; it is this last column which is of interest).
+
+```{r}
+fn <- "S5b.00122"
+steps <- cumsum( # each element has total step count each file reached
+   readRDS(  paste0( td, "/", fn, ".rfdt.RDS"))$rfdt$steps)
+savg <- MD2.B[ run == fn, steps.avg] # steps in the average
+(filenumber <- which( steps > (last( steps) - savg))[1]) # file num avg started
+length( steps) - filenumber + 1 # file N, N-1,..., N-filenumber, ie, zero-up
+```
+
+So we can see that the above file has 12 of 31 files involved in the
+average. We typically execute a new initialization or heating/cooling
+file for 1,000 steps, and then run thirty 5,000 step executions for an
+additional 150,000 steps. In clearly solid or fluid states, this is more
+than enough, and is verified by checking the temperature profile.
+Initialization in the transition region are run to a time of about
+$40,000\tau$ (three to four million steps).
+
+Crafting the above into a function, we can call it on all of the `S5b`
+runs.
+
+```{r}
+#| label: pdfilecnt
+pdfilecnt <- function( fn, savg) {
+   fullname <- paste0( td, "/", fn, ".rfdt.RDS")
+   if (file.exists( fullname)) {
+      steps <- cumsum( readRDS( fullname)$rfdt$steps)
+   } else {
+      print( fullname)
+   }
+   filenumber <- which( steps > (last( steps) - savg))[1]
+   length( steps) - filenumber + 1
+}
+# pdcnt <- MD2.B[ series == "S5b", pdfilecnt( run, steps.avg), by = run]
+```
+
+The last line (commented out because it reads 105 large files and takes
+26s to complete, and we don't want to delay the document render) creates
+a `data.table` with the run name and the file count. There were
+filecounts between 20 and 72. The command
+`sapply( 20:72, \(x) c( x, length( pdcnt[ V1 == x, V1])))` creates a
+table of these (most of which are zero). There are 22 runs with 20
+files, two with 29, 58 with 30 files, 16 with 48 files, one with 52, and
+five with 72 files.
+
+## Pair Distribution Function
+
+In December of 2025, the `PairDist.jl` set of subroutines was added to
+the *Julia* code base. These functions process saved `MDRecord` files to
+estimate the pair distribution function $G_6(r)$ (equations 4 & 5 in
+@Gasser2010)
+
+$$G_6(|\vec{r}_j - \vec{r}_k|) = \langle g_6(\vec{r}_j)g_6^*(\vec{r}_k)\rangle $$ {#eq-G6def}
+
+where
+
+$$g_6(\vec{r}_j) = \frac{1}{N_j}\sum_{k=1}^{N_j}e^{-i6\theta_{jk}}$$ {#eq-g6def}
+
+where $g_6$ measures the angle $\theta_{jk}$ between particle $j$ and
+its $N_j$ nearest neighbors ($i$ is the imaginary unit). Since we have a
+constant density, we define these nearest neighbors **not** with Voronoi
+cells (@Aurenhammer1991) but as those within a ring half-way between the
+nearest neighbor distance $a$ and the next-nearest neighbor (which is
+not at a distance of $2a$ but $a\sqrt{3}$), so all particles within a
+radius of $a(1 + \sqrt{3}) / 2$ (referred to as `NHOPr` in the `MD2`
+code).
+
+The way we estimate $G_6(r)$ is to first estimate $G(r)$: the number of
+particles at range $r$. To estimate $G(r)$, we define an array `P[i]` of
+$N_g$ bins with each bin representing $\Delta r =$ `min( bx, by) / Ng`
+(where `bx` & `by` are half the $x$ & $y$ box dimensions, respectively),
+and then walk through all particle pairs, computing the distance
+$r_{ij}$ between the two particles, and add a count to the array
+location given by `floor( r / dr) + 1`, where `dr`$= \Delta r$. Thus,
+two particles nearly touching would be in bin 1, and particles separated
+by the max distance would be in bin $N_g$. (Note that a particle farther
+than the max distance would soon be wrapped back by periodic boundary
+conditions.) So each bin $i$ of the array counts the particles in a
+swath of width $\Delta r$ starting at $(i-1)\Delta r$ and ending at
+$i \Delta r$ thus area
+$\pi(i\Delta r)^2 - \pi \left[ \delta r (i - 1)\right]^2= (2i -1)\pi {\Delta r}^2)$.
+
+The quantity should be further normalized by the density of particles,
+i.e., the number of particles expected in the swath, such that for a
+uniform distribution of particles, a normalized bin would be unity
+(thus, a swath with fewer than uniform particles predicts would be less
+than one, and one with a higher density would be greater than one). We
+will also process this over a number of files $N_f$, and, finally, we
+will only add one to a bin when we count it (although 2 would be account
+for particle pairs $i,j$ and $j,i$), so we will divide by half the
+number of particles ($N_p/2$). So the normalization of bin `i`, would be
+$2 / ( \Delta r^2 \pi N_p N_f (2i - 1)$. Now we have an estimate of
+$G(r)$, and we can perform the same process to compute $G_6(r)$, except
+instead of adding one for each particle pair, we compute and add the
+$g_6$ products, and then normalize this complex sum by `P[i]`.
+
+The *Julia* function `avgpairdist()` will take a directory and a file
+name base string, along with the number of files to process and the
+number of bins in which to split values of $|\vec{r}_i - \vec{r}_j|$
+into, and will then return a `tuple` of the bin width, , the average
+number of dislocations, and the standard deviation of that average, the
+simple pair count function (i.e., the average number of pairs at $r$),
+and $G_6(r)$. The function can also plot those estimated functions.
+
+```{julia}
+#| eval: false
+julia> MD2.avgpairdist(datadir, "S5b.00100*", 10, 100)
+(fname, tfiles) = ("S5b.00100*.jld2", 32)
+First file system state:
+-----ReadMDRecord(), Current MD2 Version 1.6.11
+Restoring system on 2026-01-21T15:31:13.630
+System State restored from
+/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980/S5b.00100.0022.jld2,
+timestamp: 2025-11-17T12:52:19.278, Restored from MD2 Version: 1.6.6
+Current total steps: 106000
+Total Kinetic Energy: 2.7970748, T = 0.010926073
+Type of MDRecord: Main.MD2.MDRecordVV{Float32}
+Linear Momentum: Float32[2.0829611f-7, 2.0157313f-7]
+Angular Momentum: -7.9479256
+----MD2State initializing with type: Float32
+Density: 0.31830987, Shell: 5.0, NHOPr: 2.601767
+Mean # in shell: 25.0, Min Mmax: 6400.0, Mmax: 9472
+PE Offset: 0.0019039686
+stebskip: 0, Beta is Zero
+Average number of disloactions: 4.8, Std Dev: 2.9933259094191533
+nrm = 44.57594f0
+
+(0.13195634f0, 4.8, 2.9933259094191533, Float32[0.0, 0.0, 0.0, 0.0, 0.0,  … 
+```
+
+The array output is redacted from above. The data is also written to the
+data directory as `filebaseapd.csv`. The above code resulted in a file
+`S5b.00100apd.csv`, and @fig-S5b100apd below.
+
+![Log-log plots of pair distribution functions from
+`S5b.00100apd.csv`.](../LabNotebook/images/S5b.00100apd.png){#fig-S5b100apd}
+
+While $N_g$ was set to 100 above, it makes sense to ensure that
+multiples of the lattice spacing fall in the center of bins. This means
+that $(i + \tfrac{1}{2}) \delta r = a$ for some $i$. With $N_g = 100$,
+and $b_y = 13.196$, so $\delta r = 0.13196$. Since $b_y$ is not an
+integer number of lattice spacings ($b_x$ is, and
+$b_y = b_x \sqrt{3}/2$), and with the current calculation, there is no
+way to make an integer. Therefore, we will modify the calculation of
+`dr` to meet our criteria. We will still input $Ng$, but will adjust
+`dr = a / floor((a / dr1 - 0.5) + 0.5)` where `dr1 = min(bx, by) / Ng`.
+
+## Refining the $G_6(r)$ Estimate
+
+$G_6(r)$ is the expected value of the correlation between particle
+nearest neighbor count and positions. As of 26 January 2026, the program
+performs the estimate as below:
+
+$$\langle G_6(r) \rangle = \frac{1}{N_f N_p} \sum_{i=1}^{N_f} \sum_{j=1}^{Np -1} \frac{1}{N_{r_{i,j}}}\sum_{k=1}^{N_{r_{i,j}}} g_6^{i,j} {g_6^*}^{i,k}$$ {#eq-G6est}
+
+where $N_f$ is the number of files, $N_p$ the number of particles, and
+$N_{r_{i,j}}$ is the number of particles at range $r$ from particle $j$,
+$g_6^{i,j}$ is the NHOP for particle $j$ from file $i$, and $g_6^{i,k}$
+is the NHOP of the $k$'th particle in the range $r$ from particle $j$.
+This estimate will be lower if the orientation changes over time (i.e.,
+over the files), and our procedure puts 5,000 steps or more between each
+file. The alternate form is to take the absolute value of each result by
+file.
+
+$$\langle G_6(r) \rangle = \frac{1}{N_f N_p} \sum_{i=1}^{N_f} \left| \sum_{j=1}^{Np -1} \frac{1}{N_{r_{i,j}}}\sum_{k=1}^{N_{r_{i,j}}} g_6^{i,j} {g_6^*}^{i,k} \right|$$
+
+The resulting plot of the hot system shows why this is wrong. In the
+cold and transition systems, the peaks are the same, but the valleys are
+somewhat filled in, making this form less sensitive. @fig-S5b210apd
+shows the result.
+
+![Log-log plots of pair distribution functions from `S5b.00210apd.csv`.
+The `y2` line in the lower plot is the alternate form of
+$G_6(r)$.](S5b.210apd.png){#fig-S5b210apd}
+
+In addition, @Keim2007 indicates that they averaged both over the
+particles and over statistically independent configurations (Keim,
+et.al, performed a physical simulation of colloidal particles). The code
+that performed the alternate form of the estimate was never checked in.
+
+### Expected Minimum of $|G_6|$ {#sec-g6expmin}
+
+While true zero or very near zero values of $|G_6|$ occur, hot systems
+will have noisy values with random angles. There are two cases to
+consider in the limit of completely uncorrelated $g_6(\vec{r}_j)$: one
+in which particle $j$ has six evenly spaced nearest neighbors, and one
+in which there are not six. With six neighbors, $|g_6| = 1$. If it is
+not six but evenly spaced, it is zero. The worst case is if the angles
+between the neighbors are random uniform around their evenly spaced
+positions of $2 \pi / n$. In @eq-g6def,
+$\theta_{jk} = (k-1)(2 \pi/n) + \xi_k$ where $\xi_k$ is a normal random
+variable with a standard deviation much less than $\pi / n$. Each term
+in the sum has a magnitude of one, but the real and imaginary parts of
+the sum appear normal with mean zero and standard deviation of about
+0.289 or variance about 0.0832 (empirically derived from an R function
+defined as `g6rn <- function(n) sum( exp( 12i*pi*rnorm(n)/n))/n` with
+`n = 6`; this generates angular noise with a standard deviation about
+equal to $pi / 6$). The expected value of @eq-G6def ($G_6$) in the limit
+will be the average of $N$ such complex normal variables. Each real and
+imaginary part will then be normal with mean zero and standard deviation
+$0.289 / \sqrt{N}$ therefore will have a Rayleigh distribution with mean
+$0.289 \sqrt{\pi / 2N}$. For $N = 70 * 8000$ that's about
+`r 0.289*sqrt( pi / (2*70*8000))`.
+
+## Finding the Peaks {#sec-findpeaks}
+
+A search of the literature did not reveal much on the peaks of the pair
+distribution function for a hexagonal lattice. @Kaatz2006 did the first
+eight, and, other than the multiples of the lattice spacing, all were
+roots of integers:
+$\left[ \sqrt{3}, \sqrt{7}, \sqrt{12}, \sqrt{13} \right]$. We could do a
+search in *Mathematica* of the exact locations of each ring of particles
+in their at-rest positions, but it there is no reason to believe that
+the as-rest peaks will remains the same at higher temperatures, and thus
+it seems easier, and just as effective, to do the search in *Julia*.
+
+### First Peaks Attempt
+
+Here is an example for a 30 x 36 particle system with 200 bins ($N_g$):
+
+```{julia}
+#| eval: false
+
+julia> MD2.InitSystem( joinpath( testdir, "T1"), temp = 0.0, N = (30, 36))
+----InitMDRecord() MD2 Version: 1.6.13
+Record Type: Main.MD2.MDRecordVV{Float64}
+bx: 34.283261047102464, by: 24.741812492803522, N: 1080
+Density: 0.3183098861837907, Grid: 1.9046256137279147, Columns: 36, Rows: 30
+Initial Total Kinetic Energy: 0.0, Temp: 0.0
+Linear Momentum: [0.0, 0.0]
+Corrected Linear Momentum: [0.0, 0.0]
+Angular Momentum: 0.0
+Moment of Inertia: 24577.87825996904
+Corrected Angular Momentum: 0.0
+Final Linear Momentum: [0.0, 0.0]
+Final Total Kinetic Energy: 0.0
+-----saveMDRecord()
+System state saved in
+/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testtemp/
+   T1.jld2
+at 2026-01-29T08:00:17.277
+Current Steps: 0
+Maximum Speed: 0.0
+
+julia> (dr, nds, graw, g, g6) = MD2.readpairplot(joinpath(testdir, "T1.jld2"), 
+                                                 200)
+-----ReadMDRecord(), Current MD2 Version 1.6.13
+Restoring system on 2026-01-29T10:18:33.707
+System State restored from
+/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testtemp/T1.jld2,
+timestamp: 2026-01-29T08:00:17.277, Restored from MD2 Version: 1.6.13
+Current total steps: 0
+Total Kinetic Energy: 0.0, T = 0.0
+Type of MDRecord: Main.MD2.MDRecordVV{Float64}
+Linear Momentum: [0.0, 0.0]
+Angular Momentum: 0.0
+ss = Main.MD2.MDRecordVV{Float64} with parameters:
+ N: 1080
+ n: 5
+ total steps: 0
+ tau: 0.01
+ shell: 5.0
+ rskn: 3.5
+ skip: 50
+ bx: 34.283261047102464
+ by: 24.741812492803522
+ Calculated Density: 0.3183098861837907
+ Hexagonal grid spacing: 1.9046256137279147
+ NHOPr: 2.601766973050859
+
+----MD2State initializing with type: Float64
+Density: 0.3183098861837907, Shell: 5.0, NHOPr: 2.601766973050859
+Mean # in shell: 25.0, Min Mmax: 27000.0, Mmax: 41040
+PE Offset: 0.0019039685845183554
+stebskip: 0, Beta is Zero
+(0.12370906246401761, 0, Int32[0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  …  
+```
+
+What we did there was first:, initialize a system of the series (i.e.,
+the number of particles and shape) with zero temperature, save the
+`MDRecord`, and then call `MD2readpairplot()` on that file with the
+desired $N_g$. After a dozen or so logs, the result is printed (the `dr`
+of 0.1237..., the number of dislocations {0}, followed by an `Int32`
+array starting with zeros).
+
+Now we need to find the non-zero indicies.
+
+```{julia}
+#| eval: false
+
+julia> x = [0] # declare x with dummy first element
+julia> > [graw[i] != 0 ? 
+             (println( "$i, $(graw[i]), $((dr * i/1.9046256137279147))"); 
+              push!( x, i)) : nothing for i in 1:200]
+
+
+16, 3240, 1.0392304845413263
+27, 3240, 1.753701442663488
+31, 3240, 2.0135090637988196
+41, 6480, 2.6630281166371486
+47, 3240, 3.052739548340146
+54, 3240, 3.507402885326976
+56, 6480, 3.637306695894642
+ ⋮
+
+julia> x
+55-element Vector{Int64}:
+   0
+  16
+  27
+  31
+  41
+  47
+  54
+  56
+  ⋮
+
+```
+
+We initialize a container called `x`, followed by a *comprehension*
+which prints the indices of the `graw[i]` that are non-zero, along with
+the count and range for the bin (in units of particle spacing), and
+`push!()`s the number into `x`. Note the ranges printed are either near
+integers or the integer square roots previously mentioned (1.7321,
+2.6458, 3.4641, 3.6056). Since those bin ranges are for the bin edge,
+they seem to line up pretty well with the prediction. In the 200 bin
+array, 54 are non-zero.There may be another way to initialize the array,
+but I don't know it.
+
+So this allows us to identify which indices are non-zero and can be used
+as distribution peaks for regressions against the three possibilities
+outlined by the KTNHY theory (@Kosterlitz2016, @Keim2007). Below is a
+real example.
+
+```{julia}
+#| eval: false
+
+julia> MD2.InitSystem( joinpath( datadir, "S5b.00000"), temp = 0.0, N = 256)
+julia> (dr, nds, graw, g, g6) = MD2.readpairplot( joinpath( datadir, 
+                                                   "S5b.00000.jld2"), 100)
+julia> x = [0] # 
+# extract non-zero indices
+julia> [graw[i] != 0 ? push!( x, i) : nothing for i in 1:100];
+# process a run
+julia> (dr, ndsavg, ndsstd, sumpdf, pdfavg, psiavg) = 
+   MD2.avgpairdist(datadir, "S5b.00100*", 20, 100)
+# plot the run's data
+julia> xvec = (dr/a) .* collect( 1:100); # creat x-axis coordinates
+julia> plot( xvec, abs.( psiavg), xscale = :log10, yscale = :log10, 
+              xlims = (0.5, 1.2 * dr * 100 / a))
+julia> scatter!( xvec[x[2:23]], abs.( psiavg[ x[ 2:23]]))
+
+```
+
+This resulted in @fig-firstatt : very few of the peaks were hit.
+
+![First example of regression samples showing misalignment with peaks.
+Data from run `S5b.00100`, with TE = 0.13757 and T =
+0.010803.](2026-Init-files/2026-02-12_11-00-41.png){#fig-firstatt
+width="300"}
+
+### Second Attempt
+
+Here is another, better attempt. We will look for simple peaks such that
+a peak is simply those points surrounded by lesser points.
+
+```{julia}
+#| eval: false
+
+julia> psiabs = abs.( psiavg);
+julia> x = [0];
+julia> [psiabs[i] > psiabs[i-1] && psiabs[i] > psiabs[i+1] ? push!( x, i) :
+           nothing for i in 2:99];
+julia> plot( xvec2, abs.( psiavg), xlims = (a/2, 1.2*dr*100), 
+             xscale = :log10, yscale = :log10)
+julia> scatter!( xvec2[x[2:14]], abs.( psiavg[x[2:14]]))
+```
+
+@fig-secondatt shows the result of that.
+
+![Points selected by simple peak
+detector.](2026-Init-files/2026-02-12_17-05-20.png){#fig-secondatt
+width="300"}
+
+While that looks hopeful, when incorporated into the code, we can see
+that hot samples generate rather many intermediate low peaks.
+
+![Simple peak detector on run `S5b.00210` with TE = 0.16409 and T =
+0.022106.](2026-Init-files/2026-02-13_08-30-11.png){#fig-secondatt2
+width="400"}
+
+### Third (and Final) Attempt
+
+@fig-secondatt2 shows a few intermediate peaks with some noise toward
+the longer ranges. We will attempt to eliminate these intermediate peaks
+by rejecting peaks surrounded by other peaks more than twice their
+magnitude. This requires a second pass of the peaks. At this point in
+the code (evolving version 1.6.15) the peaks are output, and we can
+experiment on them. Requiring both points didn't work well, so we tried
+testing if either adjacent point was less than half its neighbors. The
+code below deletes the peak from a copy (so that we aren't making
+comparisons on a modified version of `peaks`), and steps through `peaks`
+in reverse, so deleting an item doesn't affect the count.
+
+```{julia}
+#| eval: false
+
+julia> (dr, ndsavg, ndsstd, sumpdf, pdfavg, psiavg, peaks) = 
+   MD2.avgpairdist( datadir, "S5b.00200*", 20, 100);
+julia> peakscpy = copy( peaks);
+julia> psiabs = abs.(psiavg);
+julia> [2 * psiabs[ peaks][i] < psiabs[ peaks][i-1] && 2 * psiabs[ peaks][i] <
+           psiabs[peaks[i+1]] && deleteat!(peakscpy, i) 
+        for i in (length(peaks)-1):-1:2]
+julia> scatter( peaks, psiabs[peaks], yscale=:log10, color = :red)
+julia> scatter!( peakscpy, psiabs[peakscpy], color=:blue)
+```
+
+That seemed to work pretty well, producing @fig-thirdatt.
+
+![Plot of peaks of $G_6(r)$ of run `S5b.00200`, with TE = 0.1628 and T =
+0.021422. The red points were deleted by the above
+code.](2026-Init-files/2026-02-13_10-34-11.png){#fig-thirdatt
+width="300"}
+
+As of 5/21/26, I realized that between the real peaks, there was likely
+noise. Since the $g_6$ terms is really Fourier coefficient of six evenly
+spaced particles, random particle placement generates essentially a
+white noise component whose average can be predicted (see @sec-g6expmin
+above). This is explained in @sec-procg6 below.
+
+## Number of Particles in $G_r(r)$ Estimation
+
+Adding a simple `sum( pdfsum)` to the `MD2.avgpairdist()` output we can
+see in the processing of the very cold run `S5b.00010` that 494,112
+total particle pairs were measured across 20 files.
+
+```{julia}
+#| eval: false
+
+julia> (dr, ndsavg, ndsstd, sumpdf, pdfavg, psiavg) = MD2.avgpairdist(datadir, 
+                                                         "S5b.00010*", 20, 100)
+(fname, tfiles) = ("S5b.00010*.jld2", 32)
+First file system state:
+-----ReadMDRecord(), Current MD2 Version 1.6.13
+Restoring system on 2026-01-24T13:04:54.667
+System State restored from
+/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980/S5b.00010.0012.jld2,
+timestamp: 2025-11-17T12:49:37.037, Restored from MD2 Version: 1.6.6
+Current total steps: 56000
+Total Kinetic Energy: 0.3341184, T = 0.00130515
+Type of MDRecord: Main.MD2.MDRecordVV{Float32}
+Linear Momentum: Float32[-1.7028506f-6, -1.0129443f-6]
+Angular Momentum: -6.9294834
+----MD2State initializing with type: Float32
+Density: 0.31830987, Shell: 5.0, NHOPr: 2.601767
+Mean # in shell: 25.0, Min Mmax: 6400.0, Mmax: 9472
+PE Offset: 0.0019039686
+stebskip: 0, Beta is Zero
+(dr, dr * Ng) = (0.14108337f0, 14.108337f0)
+Average number of dislocations: 0.0, Std Dev: 0.0
+nrm = 101.91113f0
+┌ Warning: Invalid negative or zero value 0.0 found at series index 1 for log10
+based yscale
+└ @ Plots ~/.julia/packages/Plots/8ZnR3/src/utils.jl:105
+(0.14108337f0, 0.0, 0.0, 494112, Float32[0.0,  0.0, 0.0, 0.0, 0.0, 0.0, 0.0  … 
+```
+
+The code computed `dr` at 0.14108, so the particle count radius will be
+$N_g$ times this or 14.108. The number of particles in that radius at a
+density of $\rho = 1/\pi$ is simply $\pi \rho r^2 = r^2 = 199.05$. There
+were zero dislocations (which had a zero standard deviation) and 494,112
+interactions summed over 20 files.
+
+That's an average of $N_a = 24,705.6$ interactions per file. To find the
+average number of interacting particles, we realize that if there are
+$N_p$ particles interacting, that there are
+$\sum_{i=1}^{N_p - 1} (N_p - i) = N_p(N_p - 1)/2 = N_a$ interactions
+(confirmed in *Mathematica*), so we can solve for the roots of the
+quadratic $N_p^2 - N_p - 2N_a$, where $N_p$ is the number of interacting
+particles and $N_a$ is the average interactions per file. The *R* code
+below will do that for us.
+
+```{r}
+Quad <- function( a, b=0, c=0) { # Roots of quadratic ax^2 + bx + c = 0
+   # Note that if any of a, b, or c are vectors, the return vector is
+   # all of the first roots followed by all of the second roots.
+   disc <- b^2 - 4.0*a*c
+   d2 <- sqrt( ifelse( disc >= 0.0, disc, disc + 0i))
+   c( (-b + d2), (-b - d2))/(2.0*a)
+}
+
+Quad( 1, -1, -24705.6 * 2)
+```
+
+222.8 is about 23 more than expected, and in a very cold system
+($T=0.00122$). I don't have an explanation for this, although it is
+likely due to there being 256 particles, each of which interacts with
+only 199.05 particles. The hottest file (`S5b.00210` at $T = 0.0221$)
+yielded about the same: 223.5, so it isn't a temperature related
+discrepancy. If $\pi \rho r^2 = 223$, then $\rho = 0.35664$, which is
+about 12% bigger than $1 / \pi = 0.31831$.
+
+## Performing the Reqression
+
+Now we are ready to perform the regressions. The three regimes we are
+trying to detect are (@Keim2007) 1) $G_6(r) \sim c$, more or less
+constant in the solid, 2) $G_6(r) \sim r^{-\eta_6(\beta)}$, an algebraic
+decline in order in the hexatic fluid, and 3)
+$G_6(r) \sim e^{-r/\xi_6(\beta)}$, an exponential decline is the fully
+fluid state (both $\xi_6$ and $\eta_6$ are expected to be functions of
+the inverse temperature $\beta$).
+
+Keim, et.al. estimated $\eta_6$ and $\xi_6$ for all temperatures, and
+compared the resulting statistics of the three possibilities. Keim
+performed a physical experiment with $3 \times 10^5$ superparamagnetic
+colloids, about 3,000 of which are observed, and averaged over 70
+statistically independent configurations. The fits were performed for
+$r/a < 20$.
+
+For simplicity's sake, we will forgo non-linear regression and simply
+linearize the data, the data being the estimate of $G_6(r)$ and $r$.
+
+For the solid, a simple regression of the estimate against $r$ will tell
+us if there is any slope to speak of. For the hexatic fluid, we will
+perform a linear regression of the logarithm of the estimate against the
+logarithm of the range:
+$\ln\left( \langle G_6(r) \rangle \right) \sim a \ln(r) + b$, where $b$
+is expected to be zero (or a constant for the experiment) and $a$ is an
+estimator of $-\eta_6(\beta)$. For the fully fluid equation, we will
+regress the log of the estimate against the range:
+$\ln\left( \langle G_6(r) \rangle \right) \sim a r + b$, where $b$ will
+be zero or a constant, and $a$ will estimate $-\xi_6(\beta)$. For each
+of these regressions, we will want the coefficients, the standard error
+of each coefficient, the correlation coefficient, and the F-statistic
+data (value and degrees of freedom). Here is how that computed for
+`S5b.00200`.
+
+```{julia}
+#| eval: false
+
+julia> using GLM, DataFrames # we need GLM to perform regressions
+julia> x = dr .* peakscpy .- dr/2; # middle of the bin's range
+julia> y = psiabs[peakscpy];
+julia> df = DataFrame( x = x, y = y, lnx = log.( x), lny = log.( y));
+
+julia> m1 = lm( @formula( y ~ x), df)
+StatsModels.TableRegressionModel{LinearModel{GLM.LmResp{Vector{Float64}},
+   GLM.DensePredChol{Float64, CholeskyPivoted{Float64, Matrix{Float64},
+      Vector{Int64}}}}, Matrix{Float64}}
+
+y ~ 1 + x
+
+Coefficients:
+─────────────────────────────────────────────────────────────────────────────
+                  Coef.  Std. Error      t  Pr(>|t|)   Lower 95%    Upper 95%
+─────────────────────────────────────────────────────────────────────────────
+(Intercept)   0.133329   0.0209483    6.36    <1e-05   0.0893179   0.177339
+x            -0.0114249  0.00210916  -5.42    <1e-04  -0.0158561  -0.00699375
+─────────────────────────────────────────────────────────────────────────────
+
+julia> m2 = lm( @formula( lny ~ x), df)
+StatsModels.TableRegressionModel{LinearModel{GLM.LmResp{Vector{Float64}},
+   GLM.DensePredChol{Float64, CholeskyPivoted{Float64, Matrix{Float64},
+      Vector{Int64}}}}, Matrix{Float64}}
+
+lny ~ 1 + x
+
+Coefficients:
+─────────────────────────────────────────────────────────────────────────
+                 Coef.  Std. Error      t  Pr(>|t|)  Lower 95%  Upper 95%
+─────────────────────────────────────────────────────────────────────────
+(Intercept)  -1.5664     0.33689    -4.65    0.0002  -2.27418   -0.85862
+x            -0.328625   0.0339194  -9.69    <1e-07  -0.399887  -0.257363
+─────────────────────────────────────────────────────────────────────────
+
+julia> m3 = lm( @formula( lny ~ lnx), df)
+StatsModels.TableRegressionModel{LinearModel{GLM.LmResp{Vector{Float64}},
+   GLM.DensePredChol{Float64, CholeskyPivoted{Float64, Matrix{Float64},
+      Vector{Int64}}}}, Matrix{Float64}}
+
+lny ~ 1 + lnx
+
+Coefficients:
+──────────────────────────────────────────────────────────────────────────
+                 Coef.  Std. Error       t  Pr(>|t|)  Lower 95%  Upper 95%
+──────────────────────────────────────────────────────────────────────────
+(Intercept)   0.141478    0.368043    0.38    0.7052  -0.631752   0.914708
+lnx          -2.24609     0.168315  -13.34    <1e-10  -2.59971   -1.89247
+──────────────────────────────────────────────────────────────────────────
+
+```
+
+Unfortunately, the *julia* `lm()` function does not have an equivalent
+of R's `summary()` function, so we have to extract the parameters
+one-at-a-time. We also wanted to tweak a number of things, and so a
+script was created to run the three regressions and plot the results.
+This script will change over time, but as of 14 February 2026 (HVD),
+this is what that script looks like:
+
+```{julia}
+#| label: rs021426
+#| eval: false
+
+using GLM, DataFrames, StatsBase, Plots # we need GLM to perform regressions
+a = 1.9046257
+Ng = 100
+(dr, ndsavg, ndsstd, sumpdf, pdfavg, psiavg, peaks) = 
+   MD2.avgpairdist( datadir, "S5b.00200*", 20, Ng);
+peakscpy = copy( peaks);
+psiabs = abs.(psiavg);
+[2 * psiabs[ peaks][i] < psiabs[ peaks][i-1] && 2 * psiabs[ peaks][i] <
+           psiabs[peaks[i+1]] && deleteat!(peakscpy, i) 
+        for i in (length(peaks)-1):-1:2]
+@show length(peakscpy)
+xvec = (dr .* (collect( 1:100) .- 0.5)) ./ a
+gr()
+pl = plot( xvec, psiabs, yscale = :log10, xscale = :log10, ylims = (0.001, 1.1),
+           xlim = (0.5, 1.2 * dr * Ng / a), label = "G6", legend = :bottomleft,
+           title = "Orientational Correlation Function",
+           xticks = ([0.5, 1, 2, 3, 4, 5, 6, 7],[0.5, 1, 2, 3, 4, 5, 6, 7]),
+            yticks = [0.001, 0.01, 0.1, 1],
+           xlabel = "r/a", ylabel = "|G6(r)|")
+px = xvec[ peakscpy]
+py = psiabs[ peakscpy]
+scatter!( pl, px, py, color=:blue, label = "Points")
+df = DataFrame( px = px, py = py, lnx = log.(px), lny = log.(py))
+m1 = lm( @formula( py ~ px), df)
+m2 = lm( @formula( lny ~ lnx), df)
+m3 = lm( @formula( lny ~ px), df)
+plot!( pl, df.px, predict(m1, df), label = "Linear Fit", color = :red)
+plot!( pl, df.px, exp.( predict(m2, df)), label = "Power Law Fit", 
+       color = :green)
+plot!( pl, df.px, exp.( predict(m3, df)), label = "Exp Fit", color = :orange)
+display( pl)
+aic.([m1 m2 m3])
+```
+
+@fig-firstreg is the resulting plot. The AIC was reported as
+`(-94.7681  30.5687  47.4496)`, which is disappointing (`m1` had the
+best fit, but this indicates that there is a strong linear trend, so not
+a solid; `m2` though is the power law, and since its AIC is less than
+the exponential fit, it is the better fit).
+
+![Three regressions performed on the 25 blue points from
+`S5b.00200`.](2026-Init-files/2026-02-14_10-10-07.png){#fig-firstreg
+width="400"}
+
+### Program Error Found
+
+The expectation here is that the exponential fit will be the best, but
+we see an uptick at the end. The issue is that `100 * Ng = 14.108337f0`,
+and this is bigger than `by = 13.196`. So this is an error in the
+program. We want the inter-particle distance $a$ to fall in the middle
+of our bins. Thus, $a = i \Delta  r + 0.5$, as our bins start at
+$(i - 1) \Delta r$ and end at $i \Delta r$. So $\Delta r = a/(k - 0.5)$,
+where $k$ is the number of *bins per a*. The maximum
+$\Delta r_\text{max} = \text{min}( bx, by) / N_g$. Unfortunately, we had
+$\Delta r = a/\left( \text{floor}(a/\Delta r_\text{max}) - 0.5\right)$.
+The function should have been `ceil()`, not `floor()`. This was
+corrected (on 2/14/26), and resulted in @fig-secreg.
+
+![Result of updating `avgpairdist()` to reduce `dr`. Note that the
+maximum range is now less than
+$r/a = 7$.](2026-Init-files/2026-02-14_12-43-22.png){#fig-secreg
+width="400"}
+
+### Refining Peaks Filter
+
+There appears to still be a problem with peaks, and that problem is when
+there are many low peaks grouped together, a single pass of the
+adjacency filter is insufficient. We can apply it recursively until the
+number of peaks ceases to change. Tried a number of procedures, but
+ended up with two important items 1) use as many files as possible (we
+used 20 in all the above processing), and 2) filter recursively by
+comparing each point to the one on its left. The function below is the
+main filter function.
+
+```{julia}
+#| eval: false
+function filterpeaks( peaks, data, c)
+    # peaks is an array of indices of peaks in data, and c is a cutoff factor.
+    # This function removes peaks that are less than 1/c times the height of  
+    # their neighbors. 
+    peakscpy = copy( peaks);
+    [c * data[ peaks[i]] < data[ peaks[ i + 1]] && deleteat!(peakscpy, i) 
+        for i in (length(peaks)-1):-1:2]
+    return copy( peakscpy)
+end
+```
+
+We made the factor `c` an input to `avgpairdist()` (named `ft` for
+"filter threshold"), and played around with a few values for it,
+settling on 1.15. `avgpairdist()` will apply that recursively until the
+number of peaks ceases changing. The work below showed that 30 files was
+likely the maximum in the already existing files, although this could be
+extended (Keim used 70 configurations; see pg. 3). The new `regress.jl`
+script is below, and the results are displayed in @fig-reg3:
+
+```{julia}
+#| label: jl260216
+#| eval: false
+
+using GLM, DataFrames, StatsBase, Plots # we need GLM to perform regressions
+a = 1.9046257
+Ng = 100
+(dr, ndsavg, ndsstd, sumpdf, pdfavg, psiavg, peaks) = 
+   MD2.avgpairdist( datadir, "S5b.00200*", 30, Ng, ft = 1.15);
+
+psiabs = abs.(psiavg);
+
+xvec = (dr .* (collect( 1:100) .- 0.5)) ./ a
+gr()
+pl = plot( xvec, psiabs, yscale = :log10, xscale = :log10, ylims = (0.001, 1.1),
+           xlim = (0.5, 1.2 * dr * Ng / a), label = "G6", legend = :bottomleft,
+           title = "Orientational Correlation Function",
+           xticks = ([0.5, 1, 2, 3, 4, 5, 6, 7],[0.5, 1, 2, 3, 4, 5, 6, 7]),
+            yticks = [0.001, 0.01, 0.1, 1],
+           xlabel = "r/a", ylabel = "|G6(r)|")
+px = xvec[ peaks]
+py = psiabs[ peaks]
+scatter!( pl, px, py, color=:blue, label = "Points")
+df = DataFrame( px = px, py = py, lnx = log.(px), lny = log.(py))
+m1 = lm( @formula( py ~ px), df)
+m2 = lm( @formula( lny ~ lnx), df)
+m3 = lm( @formula( lny ~ px), df)
+plot!( pl, df.px, predict(m1, df), label = "Linear Fit", color = :red)
+plot!( pl, df.px, exp.( predict(m2, df)), label = "Power Law Fit", 
+       color = :green)
+plot!( pl, df.px, exp.( predict(m3, df)), label = "Exp Fit", color = :orange)
+display( pl)
+@show r2.( [m1, m2, m3])
+@show aic.([m1 m2 m3])
+```
+
+![Regression plot of `S5b.00200` with 30 files processed and filter
+threshold of 1.15.](2026-Init-files/2026-02-16_10-11-18.png){#fig-reg3
+width="400"}
+
+The correlation coefficient $r^2$ for the power law and exponential fits
+were 0.978 and 0.939, respectively, indicating the power law was the
+better fit. It makes sense to use weighted regressions here, especially
+since low values of $\langle G_6(r) \rangle$ may also have very few
+samples in them and should be weighted low. Conversely, a low value of
+$\langle G_6(r) \rangle$ with a large number of samples would be more
+significant. The number of particles in each ring of the estimate is
+returned in the `pdfavg` position, normalized by the area of the ring.
+This normalization is `nrm * ( 2 * i - 1)`, where
+`nrm = dr^2 * pi * N * nfiles * density`, and is 132.50873 in this
+example. The following code will create and plot this for the example
+above:
+
+```{julia}
+#| eval: false
+julia> wgts = [132.50873 * (2*i -1) * pdfavg[i] for i in eachindex( pdfavg)];
+julia> plot(wgts)
+```
+
+![Number of samples in each `dr` sized ring of 30 files of `S5b.00200`
+of the estimate $\langle G_6(r) \rangle$. The x axis of this plot is an
+integer running from 1 to $N_g = 100$ in steps of `dr` =
+0.13135.](2026-Init-files/2026-02-16_11-34-56.png){#fig-reg3
+width="400"}
+
+I frankly thought that there might be zeros in in the outer ranges, but
+the reverse is true. Even with only 256 particles, we get a lot of
+particles at the large radii. It's a bit too easy to incorporate the
+weights into the estimate to not try it. We only need to add the
+following lines to the code in `regress.jl`:
+
+```{julia}
+#| eval: false
+wgts = [132.50873 * (2 * i - 1) * pdfavg[i] for i in peaks];
+@show wgts
+fw = FrequencyWeights( wgts)
+m1 = lm( @formula( py ~ px), df, weights = fw)
+m2 = lm( @formula( lny ~ lnx), df, weights = fw)
+m3 = lm( @formula( lny ~ px), df, weights = fw)
+```
+
+It should be no surprise that the $r^2$ for the power law and
+exponential fits were a little worse than the weightless fits: 0.970 and
+0.926. The plot of the regression lines and the data are in @fig-reg4.
+
+![Regression lines on `S5b.00200` fitting with weights of number of
+particle pairs in the
+estimate.](2026-Init-files/2026-02-16_13-17-45.png){#fig-reg4
+width="400"}
+
+Of course, this procedure gave the highest weights to the longer ranges,
+where clearly the data has a more random character.
+
+### Statistics of the Estimate
+
+Estimates of $\left| \langle G_6(r) \rangle \right|$ are the magnitude
+of a complex number formed by the sum of between 5,000 and 25,000
+complex numbers. By the central limit theorem, the central tendency of
+the distribution of the complex $\langle G_6(r) \rangle$ will be
+normally distributed.
+
+These complex numbers start as the product of two unity magnitude number
+$g_6^{i,j} {g_6^*}^{i,k}$ where here, $i$ refers to the file number of
+the estimate, and $j$ and $k$ refer to particle numbers. $g_6^j$ is
+given by @eq-g6def and the product is given by:
+
+$$\begin{aligned}
+g_6^j {g_6^*}^l &= \frac{1}{N_j} \sum_{k=1}^{N_j} e^{-i6\theta_{jk}} \frac{1}{N_l} \sum_{m=1}^{N_l}e^{-i6\theta_{lm}} \\
+   &= \frac{1}{N_j N_l} \sum_{k=1}^{N_j} \sum_{m=1}^{N_l} e^{-i6(\theta_{jk} - \theta_{lm})}\\
+\end{aligned}$$ {#eq-g6g6}
+
+Note the loose notation, as particles $j$ and $l$ are uniquely
+identified, the groups of particles denoted by $k$ and $m$ are merely
+those in range of particles $j$ and $l$.
+
+In the solid state, the periodic boundary conditions will force the
+orientation to align with the boundaries, and we can assume that all of
+the $\theta_j$ will be small angles with an approximate normal
+distribution with a small variance $\sigma_\theta^2$. Therefore, the
+expectation of the complex number will be real; that is, the expectation
+of the imaginary component of $g_6^j {g_6^*}^l$ will be zero. Ultimately
+$\langle G_6(r) \rangle = \frac{1}{N}\sum_N e^{\theta_j}$ for some large
+$N$. When the variance of $\sigma_\theta^2$ is small, this sum may be
+approximated by Taylor series expansions yielding
+$\sum e^{\theta_j} \approx \sum \left( 1 - \theta_j^2/2 + i \theta_j \right)$
+where again, $i$ is the imaginary unit. The imaginary part is the sum of
+an approximately normal distribution and the real part is $N$ minus the
+sum of a scaled $\chi_1^2$ distribution (according to *Mathematica*, it
+is $p(x) = \exp(-x/2\sigma^2) / (\sigma\sqrt{2\pi x})$, $x > 0$, which
+is a Gamma distribution $\Gamma( \alpha = 1/2, \theta = 2\sigma^2)$
+using the [Wikipedia](https://en.wikipedia.org/wiki/Gamma_distribution)
+terminology). The sum of $N$ such random variables is distributed as
+$\Gamma(N/2, 2\sigma^2)$. As the $\alpha$ parameter grows, the Gamma
+approximates a normal distribution with mean $\alpha \theta$ and
+variance $\alpha \theta^2$. @fig-ghist below shows how this works for
+fifty samples of $\Gamma(\alpha = 1/2, \theta = \pi/20)$, along with the
+curves for the resulting Gamma (with $\alpha = N / 2 = 25$ and the same
+$\theta$), and the normal approximation (with mean
+$\alpha \theta = \pi^2/8 \approx 1.234$ and variance
+$\alpha \theta^2 = \pi^4/1600 \approx 0.0609$, or
+\$\sigma \approx 0.24674).
+
+![Histogram of 1,000 samples of a sum of fifty random deviates from a
+$\Gamma(1/2, \pi/20)$ distribution. The blue curve is the resulting
+$\Gamma( 50/2, \pi/20)$ PDF, and the red curve is the normal
+approximation of $\mathcal{N}(\pi^2 / 8, \pi^4/1600)$. The figure is
+from *Mathematica* notebook
+`SquareNormal.nb`.](2026-Init-files/2026-02-20_10-28-31.png){#fig-ghist
+width="400"}
+
+Note that for an $N$ in the thousands, this will be a small variance.
+The expansion of the $G_6$ estimate looks like the following:
+
+$$\begin{aligned}
+\langle G_6(r) \rangle &= \frac{1}{N}\sum_N e^{\theta_i}\\
+  &\approx \frac{1}{N} \sum \left( 1 - \theta_i^2/2 + j \theta_i \right) \\
+  &= 1 - X/2N + iY/N \\
+\end{aligned}$$
+
+where $X$ is a $\Gamma(N/2, 2\sigma_\theta^2)$ random variable (with a
+normal approximation) and $Y$ is a $\mathcal{N}(0, \sigma_\theta^2/N)$
+distribution (where $\mathcal{N}$ indicates normal).The point of all of
+this is that both the real and the imaginary components are normally
+distributed with variances divided by $N$.
+
+At the other end of the estimate, when the substance is fully liquid and
+we are estimating $G_6(r)$ at large $r$, most of the $g_6^j$ will be
+over five or seven particles with a random rotation. Those particles
+will be more-or-less evenly distributed around the central particle, and
+so the expected value of $g_6$ in these cases are zero (this is either a
+five or seven point DFT of a scaled frequency of $2\pi/6$, when the
+particles are spaced by $2\pi/5$ or $2\pi/7$). A histogram of the
+absolute value of $g_6$ in these cases is below in @fig-g67hist.
+
+![Histogram of 10,000 samples of the real part of $g_6$ computed for
+seven particles evenly spaced with a uniform random offset angle, and
+$\pm \pi/20$ uniform random noise angle for each point. The imaginary
+part and computations for five particles looked
+similar.](2026-Init-files/2026-02-21_07-58-14.png){#fig-g67hist
+width="400"}
+
+So, in the fully solid phase, the $g_6$ are normally distributed noise
+around unity, and in the fully uncorrelated phase, it is normally
+distributed around zero. The thing we are interested in then is the
+expectation of the product of two of these.
+
+In between these extremes, there are a number of particles which are
+aligned with each other, and a number that are dislocations with five or
+seven nearest neighbors. The ultimate result though is that the complex
+$\langle G_6(r) \rangle$ is a sum of very many complex numbers, some
+with magnitudes near one, and some with magnitudes near zero. We will
+posit then, that the magnitude is normally distributed, at least near
+the mean.
+
+### Properly Weighted Regression {#sec-pwr}
+
+So code was added to `avgpairdist()` to estimate the variance of each
+sample of $\langle G_6(r) \rangle$. This is done file-by-file, but the
+sums extend over all the files. Following the notation in @eq-G6est, we
+sum the magnitude squared of the raw sums (see @eq-G6sqrd)
+
+$$G_6^2(r) = \frac{1}{N_f N_p} \sum_{i=1}^{N_f} \left( \sum_{j=1}^{N_p -1} \frac{1}{N_{r_{i,j}}}\sum_{k=1}^{N_{r_{i,j}}} g_6^{i,j} {g_6^*}^{i,k} \right)^2$$ {#eq-G6sqrd}
+
+The the variance of the estimate is computed as
+
+$$\sigma^2_{G_6}(r) = G_6^2(r) - \left( G_6(r) \right)^2$$
+
+We note though, that this is an estimate of the variance of a single
+sample of $G_6(r)$, not the variance of the estimate. The difference is
+that the estimate is the average of $N_fN_pN_{r_{i,j}}$ samples, and
+this number varies by $r$ (see @fig-reg3). So, the variance of the
+estimate will decrease with increasing number of samples
+($\sigma^2_{\overline{X}} = \sigma^2_X/n$, see Theorem 2 of chapter7,
+pg. 130, of @Hoel). So, we have
+
+$$\sigma^2_{\langle G_6(r) \rangle} = \frac{\sigma^2_{G_6}(r)}{N_f N_p \left( \sum_{j=1}^{N_p -1} N_{r_{i,j}} \right)}$$
+
+Remember that for each file, the number of particles in each ring
+$r_i = i \delta r$ is different. The variance was computed and error
+bars added to the plot at the end of `avgpairdist()`. @fig-gstd is a
+plot of that standard deviation.
+
+![Standard deviation of `S5b.00200` as a function of
+$i = r/ \delta r$.](2026-Init-files/2026-02-27_12-41-41.png){#fig-gstd
+width="400"}
+
+After all that, *Julia* does not have a convenient way to use such
+weights. `GLM`'s `lm()` function only uses sample counts. The weights
+$w_i$ should be applied such that each point's squared error is
+multiplied by that weight, as it is proportional to the reciprocal of
+the variance (the variance of multiple samples). In our example, we have
+standard deviation, so we can call the weights the reciprocal of the
+standard deviation squared. Also, we are performing regression on the
+logarithm of the the observations, so the variance of the logarithm will
+be quite different. We used this simple trick:
+
+$$w_{\text{ln}_i} = \frac{1}{ \left( \ln(y_i + \sigma_i) - \ln(y_i - \sigma_i)\right)^2}$$
+
+where $y_i$ is the $i$th observation of $\langle G_6(r) \rangle$ and
+$\sigma_i$ is the observed standard deviation of that observation. Here
+is what that looks like in *Julia*
+
+```{julia}
+#| eval: false
+px = xvec[ peaks]
+py = psiabs[ peaks]
+pystd = psistd[ peaks]
+scatter!( pl, px, py, color=:blue, label = "Points")
+df = DataFrame( px = px, py = py, lnx = log.(px), lny = log.(py))
+# wgts = [132.50873 * (2 * i - 1) * pdfavg[i] for i in peaks] # counts
+wgts = 1 ./ (psistd[peaks] .^ 2)
+lnwgts = FrequencyWeights( 1 ./ (log.(py .+ pystd) - log.(py .- pystd)).^2)
+@show wgts
+fw = FrequencyWeights( wgts)
+m1 = lm( @formula( py ~ px), df, weights = fw)
+m2 = lm( @formula( lny ~ lnx), df, weights = lnwgts)
+m3 = lm( @formula( lny ~ px), df, weights = lnwgts)
+```
+
+This results in @fig-lnwgts.
+
+![Regression lines on `S5b.00200` fitting with weights of measured
+variance converted for logarithms as noted in the
+text.](2026-Init-files/2026-02-28_09-45-50.png){#fig-lnwgts width="400"}
+
+This is clearly the best fit of the exponential decay, but is is still
+inferior to the power law fit. The correlation coefficient of the
+linear, power law, and exponential are 0.586, 0.980, and 0.931,
+respectively, with with RSS's (given by the `deviance()` function) of
+37.0, 0.648, and 2.23. As this is almost the hottest run available,
+either the hexatic phase extends much hotter than expected, or is
+indistinguishable from the fluid phase in this small-size system.
+
+## Maximum Likelihod Estimation
+
+It is also possible that the longer range values of
+$\langle G_6(r) \rangle$ are simply corrupted by noise. We have been
+using the magnitude of $\langle G_6(r) \rangle$ to allow for rotations
+of the particle groups in the hexatic phase (as observed in run
+`S2b.0027` \[see Semi-Final.pdf\]). We will assume that the points are
+normally distributed with the measured variances as in @fig-gstd above.
+The functions will either follow a constant trajectory (which we will
+detect from the F-Test just as we did for temperature equilibrium). The
+other two are simply normal distributions with means given by either
+$ar^{-\eta_6}$ or $ae^{-r/\xi_6}$. The likelihood function to maximize
+is the product of all the individual probabilities of the observation
+triplets or $(r_i, \sigma_i, y_i)$.
+
+$$\mathcal{L}(r_i,a,b) = \prod_{i=1}^N \frac{\exp \left[ -(y_i - f(r_i,a,b))^2 / \sigma_i^2 \right]}{\sqrt{2 \pi} \sigma_i}$$
+
+where $f(r,a,b)$ is either $ar^{-b}$ or $ae^{-rb}$. We compute the
+log-likelihood as the following (with the minus sign moved to the left
+side of the equal sign):
+
+$$-\ln \left( \mathcal{L}(r_i,a,b) \right) =  \sum_{i=1}^N \lbrace \left( y_i - f(r_i,a,b) \right) ^2/\sigma_i^2 + \ln(\sigma_i) + \ln(2\pi)/2\rbrace $$
+
+Since they are constant, the last two terms
+$\ln(\sigma_i) + \ln(2\pi)/2$ can be ignored. Expressed as a negative
+logarithm, the function should be minimized. The procedure is to start
+with a guess of $a$ & $b$, compute the function, and then use numerical
+derivatives to minimize the function in terms of $a$ & $b$. Implemented
+this in *Julia* with the code below, appended to the `regress.jl` file.
+
+```{julia}
+#| eval: false
+
+function expfit( r, a, b)
+   return a * exp( -r * b)
+end
+
+function powerfit( r, a, b)
+   return a * r^(-b)
+end
+
+function normalll( x::Vector{T}, y::Vector{T}, s::Vector{T},
+                   f::Function, guess::Vector{T}) where T <: Real
+   s2 = s.^2
+   function ll( p)
+      a, b = p
+      yhat = f.( x, a, b)
+      return sum( ((y .- yhat) .^ 2) ./ s2)
+   end
+   res = optimize( ll, guess)
+   return Optim.minimizer( res)
+end
+```
+
+I then added the newly detected curves to the original plot in
+@fig-lnwgts and got @fig-mll.
+
+![@fig-lnwgts with the maximum likelihood fits of the power-law and the
+exponential law curves in dashed
+lines.](2026-Init-files/2026-03-06%2016-02-59.png){#fig-mll width="400"}
+
+It is a bit hard to see, but the maximum likelihood fits are very close
+to the properly weighted linear regression fits. The objective values,
+i.e., the log-likelihoods, for the power-law and exponential fits were
+-3.14 and -6.84 respectively, indicating that the power-law is still the
+better fit. Incidentally, the power-law coefficient was 1.83 vs. the
+regression's 1.79, and the exponential coefficient was 0.696 vs. the
+regression's 0.693. The fits each took about 0.156s, most of which
+(99.9%) was compile time.
+
+Developing the error bounds of the maximum likelihood estimates will
+take about as much time as it did to develop the estimates themselves.
+That the properly weighted linearized regression results were so similar
+to the ML results is an indication that that the linearized equations
+are still approximately normally distributed, so the ML approach will be
+abandoned for the weighted linear regression.
+
+# Distribution between Kinetic & Potential Energy {#sec-Distkepe}
+
+The minimum potential energy is the energy of the particles in their
+home positions. The inter-particle distance is given by
+$a = \sqrt{2 / (\rho \sqrt{3})}$. At the density of $\rho = 1/\pi$,
+$a = 1.90463$. In the min PE positions, each particle is surrounded by
+six particles at $a$, and six more at the next nearest neighbor
+positions of $a\sqrt{3}$. The rest of the particles are outside of
+$r_{skn}$ potential range. Each particle is assigned half of the energy
+between two particles in the total budget, so the minimum potential
+energy per particle is given by:
+
+$$P_e = 3\left( a^{-5} + (a\sqrt{3})^{-5}\right) - 6r_{skn}^{-5}$$
+
+where the factor of three is half the potential of six particles, and
+the factor of six is half the $r_{skn} = 3.5$ potential of twelve
+particles. At the density of $\rho = 1/\pi$, this evaluates as follows:
+
+```{r}
+a <- sqrt( 2 * pi / sqrt(3))
+b <- a * sqrt(3)
+pe.init <- 3 * ( a^-5 + b^-5) - 6 * 3.5^-5
+c( a = a, b = b, pe.init = pe.init)
+```
+
+## Excess Potential Energy {#sec-ExPot}
+
+We can define the excess PE to be the potential energy that is above
+this number. @fig-ExPE is a plot of the that excess potential energy as
+a fraction of the kinetic energy.
+
+```{r}
+#| label: fig-ExPE
+#| fig-cap: The excess potential energy as a fraction of the kinteic energy, plotted as a function of the total energy.  At low energies (i.e., in the solid), the ratio between the two is about unity (the solid black line).  As we get into the transition region, more energy is absorbed into potential than kinetic energy (on average). Both series `S5` and `S5b` are included in this plot. Series 3 included heating and cooling runs, and these are collected as series `S3h`, and colored red/blue for heating/cooling.
+
+MD2.C <- copy( MD2.B) # create copy to add series2
+setorder( MD2.C, TE.mean.rs)
+MD2.C[, series2 := as.factor( ifelse( grepl("h", run), # if "h" in run ...
+                                      paste( series, "h", sep=""), 
+                                      series))]
+colors <- c( Heat="red", Cool="blue", Init="black")
+with( MD2.C[ , .( ExPE = pe.mean.rs - pe.init, itype,
+                  ke = ke.mean.rs, TE = TE.mean.rs, s = as.factor( series2))], { 
+      pch <- as.integer( s)
+      plot( x = TE, y = ExPE/ke, pch = pch, panel.first = grid(),
+            # xlim = c(0.12, 0.14), ylim = c(0.95,1.05),
+            col = colors[ itype])
+      legend( "topright", legend = levels( s), 
+              pch = 1:nlevels( s))
+      abline( h = 1.0)
+      })
+```
+
+That blue tail in the left was a surprise, and @fig-ExPES3 zooms in to
+it.
+
+```{r}
+#| label: fig-ExPES3
+#| fig-width: 5
+#| fig-height: 4
+#| fig-cap: Zoom into cold section of @fig-ExPE with only the series 3 points, and individual heating (red) and cooling (blue) series annotated. Those blue points above 1.0 are two of the four cooled series. This was not noted previously, and the detailed particle position data was lost, but these look like dislocations were frozen in the solid.
+
+with( MD2.C[ grepl("S3", series), .( ExPE = pe.mean.rs - pe.init, itype,
+                  ke = ke.mean.rs, TE = TE.mean.rs, s = as.factor( newSeries))], { 
+      pch <- as.integer( s)
+      plot( x = TE, y = ExPE/ke, pch = pch, panel.first = grid(),
+            xlim = c(0.12, 0.155), ylim = c(0.98,1.3), ylab = "Excess PE / Ke",
+            col = colors[ itype])
+      legend( "topright", legend = levels( s), bg = "white",
+              pch = 1:nlevels( s), col = c("black", rep( "red", 4), 
+                                                   rep( "blue", 4)))
+      })
+```
+
+Let's take a look at the instantaneous distributions and the transfer
+between the kinetic and potential energy. We'll pick a cold, warm,
+transition, and hot energy from series `S5b`.
+
+```{r}
+#| label: tbl-det3
+#| echo: false
+#| tbl-cap: Four exemplar runs to examine potential and kinetic energy distributions.
+knitr::kable( MD2.B[grepl( "^S5b.00025$|^S5b.00071$|^S5b.00123$|S5b.00190", run), 
+                    .(run, TE.mean.rs, ke.mean.rs, total.steps, steps.avg, 
+                      skip = total.steps - steps.avg, valid)], 
+      format.args = list( big.mark = ","))
+```
+
+First we need to read in the data. The second series is large, but we
+should have enough memory to work with all three simultaneously. First,
+we'll define a few functions to simplify the process. There are a lot of
+samples, so we will split the histograms into 100 bins.
+
+```{r}
+#| label: plothists
+stat.summary <- function( x) { # get summary stats and return in names vector
+   r <- range( x)
+   return( c( min = r[1], max = r[2], std = std( x), mean = mean( x)))
+}
+
+plothists <- function( x, breaks = 100, pe.init, skip = 1000, title = "") {
+   h1 <- hist( tail( x$ke, -skip), breaks = breaks, plot = FALSE)
+   epe <- tail( x$pe - pe.init, -skip) # excess PE
+   h2 <- hist( epe, breaks = breaks, plot = FALSE)
+   ke.st <- stat.summary( x$ke)
+   pe.st <- stat.summary( epe)
+   limits <- c( min( ke.st[ "min"], pe.st[ "min"]), 
+                max( ke.st[ "max"], pe.st[ "max"]))
+   colors <- c( ke = rgb( 1, 0, 0, 0.4), pe = rgb( 0, 0, 1, 0.4))
+   plot( h1, col = colors[ "ke"], xlab = "Energy/Particle", freq = FALSE, 
+         xlim = limits, main = paste( "Energy Histogram of", title), 
+         border = colors[ "ke"])
+   plot( h2, col = colors[ "pe"], freq = FALSE, add = TRUE, ann = FALSE,
+         border = colors[ "pe"])
+   x <- seq( from = ke.st[ "min"], to = ke.st[ "max"], length.out = 100)
+   lines( x = x, y = dnorm( x, mean = ke.st[ "mean"], sd = ke.st[ "std"]))
+   x <- seq( from = pe.st[ "min"], to = pe.st[ "max"], length.out = 100)
+   lines( x = x, y = dnorm( x, mean = pe.st[ "mean"], sd = pe.st[ "std"]))
+   legend( "topright", legend = c( "ke", "pe"), col = colors, fill = colors)
+   invisible( list( ke.st = ke.st, pe.st = pe.st, ke.hist = h1, pe.hist = h2))
+}
+```
+
+Now we can read in the data and apply the function `plothists()`. The
+summary statistics (min, max, mean, and standard deviation) of each
+sample is printed before the plot.
+
+```{r}
+#| label: fig-d25
+#| fig-cap: Distribution of the kinetic and potential energy samples of cold run `S5b.00025`. The solid lines are normal distributions with the mean and variance of each energy. The first 1,000 steps were skipped.
+r25 <- combineruns( td, "S5b", "00025")
+r25.hist <- plothists( r25$rundt, pe.init = pe.init, title = "S5b.025")
+r25.hist[ "ke.st"]
+r25.hist[ "pe.st"]
+```
+
+```{r}
+#| label: fig-d71
+#| fig-cap: Distribution of the kinetic and potential energy samples of cold run `S5b.00071`. The solid lines are normal distributions with the mean and variance of each energy. The first 1,000 steps were skipped.
+r71 <- combineruns( td, "S5b", "00071")
+r71.hist <- plothists( r71$rundt, pe.init = pe.init, title = "S5b.071")
+r71.hist[ "ke.st"]
+r71.hist[ "pe.st"]
+```
+
+```{r}
+#| label: fig-d190
+#| echo: false
+#| fig-cap: Distribution of the kinetic and potential energy samples of hot run `S5b.00190`. The solid lines are normal distributions with the mean and variance of each energy. The first 1,000 steps were skipped.
+r190 <- combineruns( td, "S5b", "00190")
+r190.hist <- plothists( r190$rundt, pe.init = pe.init, title = "S5b.190")
+r190.hist[ "ke.st"]
+r190.hist[ "pe.st"]
+```
+
+```{r}
+#| label: fig-d123
+#| echo: false
+#| fig-cap: Distribution of the kinetic and potential energy samples of transition temperature run `S5b.00123`. The solid lines are normal distributions with the mean and variance of each energy. The first 1,000 steps were skipped. The gap in the normal distribution lines is due to their peaks being clipped by the plot limits.
+r123 <- combineruns( td, "S5b", "00123")
+r123.hist <- plothists( r123$rundt, pe.init = pe.init, skip = 1000, 
+                        title = "S5b.123")
+r123.hist[ "ke.st"]
+r123.hist[ "pe.st"]
+```
+
+Both the hot and cold (i.e., fluid and solid) distributions look normal,
+but the transition distribution is decidedly non-normal. This may be due
+to the substance being in both a solid and fluid state, with the
+proportions changing (see @Koch1983 Fig. 7).
+
+We can look at the kinetic and potential energies as they evolve
+step-by-step. In the figures below, the black line is
+$\left( \left< E_t \right> - U_0 \right) / 2$, where
+$\left< E_t \right>$ is the mean total energy, $U_0$ is the potential
+energy in the rest position (so the black line is half the thermal
+energy of the constant density system).
+
+```{r}
+#| label: fig-kp25
+#| fig-cap: The kinetic (red) and excess potential (blue) energy at end of cold run `S5b.00025`. 
+x <- 1:1000
+plot( x = x, y = tail( r25$rundt$ke, 1000), typ = "l", col = "red", 
+      ylab = "Energy", xlab = "step", main = "End of Run S5b.00025", 
+      panel.first = grid())
+lines( x = x, y = tail( r25$rundt$pe, 1000) - pe.init, col = "blue")
+abline( h = (MD2.B[ run == "S5b.00025", TE.mean.rs] - pe.init)/2)
+```
+
+```{r}
+#| label: fig-kp71
+#| fig-cap: The kinetic (red) and excess potential (blue) energy at end of cold run `S5b.00071`. 
+x <- 1:1000
+plot( x = x, y = tail( r71$rundt$ke, 1000), typ = "l", col = "red", 
+      ylab = "Energy", xlab = "step", main = "End of Run S5b.00071", 
+      panel.first = grid())
+lines( x = x, y = tail( r71$rundt$pe, 1000) - pe.init, col = "blue")
+abline( h = (MD2.B[ run == "S5b.00071", TE.mean.rs] - pe.init)/2)
+```
+
+```{r}
+#| label: fig-kp190
+#| echo: false
+#| fig-cap: Hot run `S5b.00190`.
+x <- 1:1000
+limits <- c( min( r190.hist$ke.st[ "min"], r190.hist$pe.st[ "min"]), 
+                max( r190.hist$ke.st[ "max"], r190.hist$pe.st[ "max"]))
+plot( x = x, y = tail( r190$rundt$ke, 1000), typ = "l", col = "red", 
+      ylab = "Energy", xlab = "step", main = "End of Run S5b.00190",
+      ylim = limits, panel.first = grid())
+lines( x = x, y = tail( r190$rundt$pe, 1000) - pe.init, col = "blue")
+abline( h = (MD2.B[ run == "S5b.00190", TE.mean.rs] - pe.init)/2)
+```
+
+```{r}
+#| label: fig-kp123
+#| echo: false
+#| fig-cap: Transition run `S5b.00123`.
+x <- 1:1000
+limits <- c( min( r123.hist$ke.st[ "min"], r123.hist$pe.st[ "min"]), 
+                max( r123.hist$ke.st[ "max"], r123.hist$pe.st[ "max"]))
+plot( x = x, y = tail( r123$rundt$ke, 1000), typ = "l", col = "red", 
+      ylab = "Energy", xlab = "step", main = "End of Run S5b.00123",
+      ylim = limits, panel.first = grid())
+lines( x = x, y = tail( r123$rundt$pe, 1000) - pe.init, col = "blue")
+abline( h = (MD2.B[ run == "S5b.00123", TE.mean.rs] - pe.init)/2)
+```
+
+As expected, the potential and kinetic energy trajectories are mirror
+images, reflecting around half the mean thermal energy.
+
+```{r}
+#| label: cleanup
+#| include: false
+rm( r71, r71.hist, r123, r123.hist, r190, r190.hist)
+```
+
+# Preparing Version 1.7 and for the next runs
+
+There isn't much point requiring the pair distribution function to be
+calculated from files, although that was very helpful in developing the
+technique and the regressions procedures. Like diffusion, we should
+establish equilibrium, and then run the required executions to collect
+the $G_6(r)$ data. So there are a few things that we need to do:
+
+1.  Complete the velocity Verlet algorithm with heating and cooling.
+2.  Add pair distribution calculation to the main routine with a switch
+    and parameters (steps between estimation, number of estimations in
+    the averages, and number of bins in the estimate; this last item
+    really standardizes the `dr` of the estimate.).
+3.  Standardize on 70 estimates in the $G_6(r)$ average.
+4.  Increase the diffusion estimate to cover the same scaled time.\
+    The $\Delta t = 0.01$ time step data (series 3) only went to
+    $50\tau$, while the larger time step (Series 5, and the 1979 work)
+    went to about $89\tau$.\
+    We tended to see a recoil effect in some of the clearly solid data
+    ($D^2$ would increase, then decrease, but sometimes leaving a
+    negative slope), so having a longer estimate would be helpful,
+    probably something around $200\tau$ (about 11,253 steps at
+    $\Delta t = 0.0177737$, 20k steps at 0.01, and 13,333 at
+    $\Delta t = 0.015$).
+5.  Add heating and cooling runs with total energy steps similar to the
+    initialization energy steps (mean of runs between
+    $0.13 < E_t < 0.15$ is
+    `r tgtdE <- mean( diff( sort( MD2.C[ series == "S5b" & TE.mean.rs %within% c(0.13, 0.15), TE.mean.rs])))`.
+
+## Completing Heating/Cooling in Velocity Verlet
+
+This is accomplished simply by applying the supplied $\beta$ to the
+velocities. Since $\beta$ is supplied as a fraction, we replace the
+program variable `Beta = 1 + Beta`, and then added the following
+statement to the `MoveParts!( st::MD2StateVV)` function:
+`!iszero( st.Beta) && st.v .*= st.Beta`. So at every step, all the
+velocities are slightly modified. Since the kinetic energy is simply the
+sum of the velocities squared, the kinetic energy after one step will be
+$E_{k,1} = \frac{1}{2}m\sum_N \left[(1+\beta)^2(v_x^2 + v_y^2)\right] = (1 + \beta)^2 E_{k,0}$.
+$L$ repeated applications of this should yield a final kinetic energy of
+$E_{k,L} = (1 + \beta)^{2L} E_{k,0}$, however, in the transition region,
+where we are primarily interested, the kinetic energy remains the same,
+as is shown by @fig-TvE below.
+
+```{r}
+#| label: fig-TvE
+#| fig-cap: Series 5 Temperature vs. Energy.
+setkey(MD2.C, TE.mean.rs) # sort the data table
+with( MD2.C[ grepl( "S5", series),],{
+      plot( TE.mean.rs, ke.mean.rs, panel.first = grid(), 
+            xlab = "Total Energy", ylab = "Temperature", 
+            xlim = c(0.135, 0.155), ylim = c( 0.008, 0.020) )}
+      )
+```
+
+In this case, we expect the kinetic energy to remain the about the same,
+but the total energy to be given by
+$E_{t,L} = L \left[(1 + \beta)^2 - 1\right]E_{k,0} + E_{t,0}$. Each
+increment is from the same kinetic energy. Note
+$(1 + \beta)^2 - 1 = 2\beta + \beta^2$, and, since $\beta$ is small, the
+delta energy is just about $2L\beta E_{k,0}$.
+
+At higher temperatures, the kinetic energy will grow (or shrink)
+geometrically, and we must be sure that things don't grow too wildly
+(which we've seen, of course). The change in total energy after one step
+will be the change in kinetic energy, but we would expect the added
+energy to thermalize into potential energy too, so while the total
+energy increases by about $2\beta E_k$, the kinetic energy only
+increases by $\beta E_k$. Therefore, the kinetic energy after $L$ steps
+is $E_{k,L} = (1 + \beta)^L E_{k,0} \approx (1+L\beta)E_{k,0}$, and the
+total energy will be about $E_t \approx E_{t,0} + 2L\beta E_{k,0}$.
+
+As an example, we took run `S5b.00200` and executed the following
+*Julia* code:
+
+```{julia}
+#| eval: false
+startnm = "S5b.00200.0031" # basename
+init26dir = normpath(pwd() * "/../../MD2/Archived Notes/2026-Init-files/")
+# init26dir stores files for this document
+rdfile = joinpath( init26dir, startnm)
+cp( joinpath( datadir, startnm * ".jld2"), rdfile * ".jld2") # copy .jld2 file
+svfile = joinpath( init26dir, MD2.heatname( startnm)) * ".0000"
+MD2.RunSystem( rdfile, svfile, 1000, Beta = 0.00001)
+```
+
+with this result:
+
+```{julia}
+#| eval: false
+
+julia> startnm = "S5b.00200.0031" # basename
+"S5b.00200.0031"
+
+julia> init26dir = normpath(pwd() * "/../../MD2/Archived Notes/2026-Init-files/")
+"/media/phil/Original/Users/phils/Documents/DSP/MD/MD2/
+   Archived Notes/2026-Init-files/"
+
+julia> # init26dir stores files for this document
+       rdfile = joinpath( init26dir, startnm)
+"/media/phil/Original/Users/phils/Documents/DSP/MD/MD2/
+   Archived Notes/2026-Init-files/S5b.00200.0031"
+
+julia> cp( joinpath( datadir, startnm * ".jld2"), rdfile * ".jld2") # copy .jld2 file
+"/media/phil/Original/Users/phils/Documents/DSP/MD/MD2/
+   Archived Notes/2026-Init-files/S5b.00200.0031.jld2"
+
+julia> svfile = joinpath( init26dir, MD2.heatname( startnm)) * ".0000"
+"/media/phil/Original/Users/phils/Documents/DSP/MD/MD2/
+   Archived Notes/2026-Init-files/S5b.00200h01.0000"
+
+julia> MD2.RunSystem( rdfile, svfile, 1000, Beta = 0.00001)
+-----ReadMDRecord(), Current MD2 Version 1.7.4
+Restoring system on 2026-05-13T07:49:59.918
+System State restored from /media/phil/Original/Users/phils/Documents/DSP/MD/MD2/
+   Archived Notes/2026-Init-files/S5b.00200.0031.jld2, 
+   timestamp: 2025-11-17T12:54:57.375, Restored from MD2 Version: 1.6.6
+Current total steps: 151000
+Total Kinetic Energy: 5.1561055, T = 0.020141037
+Type of MDRecord: Main.MD2.MDRecordVV{Float32}
+Linear Momentum: Float32[4.2487227f-6, 7.666498f-6]
+Angular Momentum: -45.675137
+RunSystem: Running 1000 steps with Beta = 1.0e-5, diffFlag = false, deltat = 10.
+----MD2State initializing with type: Float32
+Density: 0.31830987, Shell: 5.0, NHOPr: 2.601767
+Mean # in shell: 25.0, Min Mmax: 6400.0, Mmax: 9472
+PE Offset: 0.0019039686
+stebskip: 20, Beta = 1.0e-5
+Max number of interactions: 3046
+Linear Momentum: Float32[4.295842f-6, 7.75003f-6]
+Corrected Linear Momentum: Float32[1.6298145f-9, -4.4383341f-10]
+Angular Momentum: -36.90951
+Moment of Inertia: 2782.1592
+Corrected Angular Momentum: 1.0728836e-5
+Final Linear Momentum: Float32[6.7159766f-5, -6.3711355f-5]
+Final Total Kinetic Energy: 5.7697067
+-----saveMDRecord()
+System state saved in /media/phil/Original/Users/phils/Documents/DSP/MD/MD2/
+   Archived Notes/2026-Init-files/S5b.00200h01.0000.jld2 at 
+   2026-05-13T07:50:00.242
+Current Steps: 0
+Maximum Speed: 0.60565317
+Scalars saved in /media/phil/Original/Users/phils/Documents/DSP/MD/MD2/
+   Archived Notes/2026-Init-files/S5b.00200.0031.heat.scalars.csv
+
+```
+
+```{r}
+#| label: fig-S5b.00200.heat
+#| fig-cap: The first 1,000 steps heating `S5b.00200.0031`.
+init26dir = paste( getwd(), "/2026-Init-files/", sep="")
+x = readplot( paste( init26dir, 
+                 "S5b.00200.0031.heat.scalars.csv", sep=""))
+```
+
+As this is a hot run with original temperature and total energy is
+recorded as
+`r xold <- MD2.C[ run == "S5b.00200", .(ke = ke.mean.rs, TE = TE.mean.rs)]; xold$ke`,
+and `r xold$TE`, respectively. The last total energy of the heating run
+is `r last(x$TE)`. Our prediction from above yields
+`r MD2.C[ run == "S5b.00200", TE.mean.rs] + 2 * 1000 * 0.00001 * MD2.C[ run == "S5b.00200", ke.mean.rs]`.
+The predicted increment is
+`r 2 * 1000 * 0.00001 * MD2.C[ run == "S5b.00200", ke.mean.rs]`, which
+is pretty close to the observed `r last(x$TE) - xold$TE`. The new
+temperature can only be determined by running to equilibrium. The
+observed increment is `r xold$TE - last(x$TE)`. So we would need a
+slightly different $\beta$ to achieve the desired increment of `r tgtdE`
+in the transition region. $\beta$ should be closer to
+`r tgtdE / ( 2 * 1000 * mean( MD2.C[ series == "S5b" & TE.mean.rs %within% c(0.13, 0.15), ke.mean.rs]))`,
+so at higher temperatures, the step will be a bit bigger, but in the
+transition region, it will be fine. Note that the momentum growth looks
+disturbing, but this has been seen in the past, and `RunSystem()` calls
+`MomentumCorrect()` if `Beta` is non-zero.
+
+# Processing $G_6$ Data {#sec-procg6}
+
+As of 19 May 2026, v1.7.7 of `MD2` will produce a file by the name of
+`\*.g6.csv` which contains the averaged *g6* data. While we worked
+pretty hard at finding peaks and performing regressions in *Julia*, we
+ultimately decided to perform the work in R. The first elements of all
+of the data arrays in the csv file contains the dislocation stats. The
+below R code essentially duplicates the *Julia* code in @sec-findpeaks
+above, with the addition of requiring the peaks to be a factor of 'ft'
+above the expected noise value described in @sec-g6expmin above.
+
+In testing the filter function, it became evident that peaks filtered by
+being too close to the noise can squeak through with lower values of
+`ft`.
+
+## Finding Peaks
+
+```{r}
+#| label: peaks
+filterpeaks <- function( peaks, x, c = 2){
+   # For internal use in findpeaks
+   # peaks is an array of indices of peaks in data, and c is a cutoff 
+   # factor.
+   # This function removes peaks that are less than 1/c times the height 
+   # of their neighbors. 
+   rslpk <- 1:(length( peaks) - 1)
+   ndx <- which( c * x[ peaks[ rslpk]] >= x[ peaks[ rslpk + 1]])
+   c( peaks[ ndx], last( peaks))
+}
+
+findpeaks <- function( x, elim = NA, ft = 2) {
+   # Returns the indices of peaks in `x` that are greater than their neighbors
+   # by a filter threshold of `ft`. `x` must be a numeric array.
+   # The first and last points are not considered peaks.
+   Ng <- length( x)
+   peaks <- which((x[ 2:(Ng - 1)] > x[ 1:(Ng - 2)]) & 
+                     (x[ 2:(Ng - 1)] > x[ 3:Ng])) + 1
+   if (length( elim) == length(x)){ # drop peaks too near the noise limit
+      peaks <- peaks[ (x[ peaks] / elim[ peaks]) > ft]
+   }
+   lpeaks  <- length( peaks)
+   peaks   <- filterpeaks( peaks, x, ft)
+   newlpks <- length( peaks)
+   while (lpeaks > newlpks && newlpks > 3) {
+      lpeaks <- newlpks
+      peaks <- filterpeaks( peaks, x, ft)
+      newlpks <- length( peaks)
+      #print( newlpks)
+   }
+   peaks
+}
+```
+
+Now that we have `findpeaks()` we can read in the data and process it.
+
+```{r}
+#| label: fig-g6210
+#| fig-cap: "$G_6$ estimate for `S5b.00210`, with peaks detected by algorithm above.  An estimate of the minimum resulting from random orientation is shown by the light blue dashed line."
+g600210 <- data.table::fread( paste(td, "S5b.00210.g6.csv", sep="/"))
+ds00210 <- c( 
+   count = g600210$graw[1],
+   mean  = g600210$gr[1],
+   std   = g600210$g6std[1],
+   min   = g600210$g6r[1],
+   max   = g600210$g6im[1])
+g600210[, ':='(g6abs = sqrt( g6r^2 + g6im^2), 
+               elim = 0.289 * sqrt( pi / (2 * graw)))] 
+                # make |g6^2| & noise limit elim
+
+g600210pks <- findpeaks( g600210$g6abs, elim = g600210$elim, ft = 2)
+plot( g6abs ~ rvec, data = g600210, typ = "l", log="xy", xlab = "r/a",
+      xlim = c(0.5, 1.2*last( g600210$rvec)), ylim = c( 0.001, 1))
+emin <- 0.289 * sqrt( pi / (2 * max( g600210[ g600210pks, graw])))
+sprintf( "Estimated minimum: %e", emin)
+abline( h = emin, lty = 2, col = "lightblue")
+grid()
+points( g6abs ~ rvec, data = g600210[ g600210pks,], pch = 1)
+```
+
+These results match the *Julia* results precisely. Now we need to create
+the linear fits. We'll do all three (linear, power law, and
+exponential), with weights computed as discussed in @sec-pwr above, and
+report the results.
+
+## Fitting Curves
+
+There are three curves to fit: constant, power-law, and exponential (see
+@Keim2007, Figure 3). The power-law form is $G_6(r) = a_p r^{-\eta_6}$,
+where $\eta_6 \le 1/4$, with equality at the hexatic -- isotropic fluid
+transition temperature. The isotropic fluid form is
+$G_6(r) = a_e e^{-r / \xi_6}$ See @fig-curves below for examples copying
+the coordinates and statistics from Keim.
+
+```{r}
+#| label: fig-curves
+#| fig-cap: Plots of the three types of curves.  The constant is at $G_6(R) = 0.9$. The two power-law curves are plotted with  $a = 0.6$ and 0.7, and $\eta_6 = 1/4$ and 1/6 (lower and upper, respectively).  The two exponential curves are plotted with $a = 0.5$ and 0.6, and $\xi_6 = 6$ and 10 (lower and upper, respectively).
+roa <- c(0.1, 0.2, 0.5, 0.8, 1:30)
+plot( x = roa, y=0.5*exp(-roa/5), log='xy', type='l', panel.first = grid(),
+      xlim = c(1, 30), ylim = c(0.01, 1), xlab = "r/a", ylab = "G6(r)")
+lines( x = roa, y = 0.6 * exp(-roa/10))
+lines( x = roa, y = .7 * roa ^(-1/4), col = 'red')
+lines( x = roa, y = .8 * roa ^(-1/6), col = 'red')
+abline( h = 0.9, col = 'green')
+legend( 'bottomleft', legend = c("Constant", "Power-Law", "Exponential"), 
+        lty = 1, col = c('green', 'red', 'black'))
+```
+
+Our small system can only measure $G_6(r)$ over $0 \le r \le 7$, and the
+curves are not so distinguished there.
+
+```{r}
+#| label: fig-curves2
+#| fig-cap: Reproduction of @fig-curves with $r < 7$. 
+roa <- c(0.1, 0.2, 0.5, 0.8, 1:30)
+plot( x = roa, y=0.5*exp(-roa/5), log='xy', type='l', panel.first = grid(),
+      xlim = c(1, 8), ylim = c(0.01, 1), xlab = "r/a", ylab = "G6(r)")
+lines( x = roa, y = 0.6 * exp(-roa/10))
+lines( x = roa, y = .7 * roa ^(-1/4), col = 'red')
+lines( x = roa, y = .8 * roa ^(-1/6), col = 'red')
+abline( h = 0.9, col = 'green')
+legend( 'bottomleft', legend = c("Constant", "Power-Law", "Exponential"), 
+        lty = 1, col = c('green', 'red', 'black'))
+```
+
+We'll create a function that will fit all three curves with `lm()` via
+transformation to a linear form. To the `lm()` result, we'll add the
+reduced $\chi^2$ statistic defined as
+
+$$\chi_\nu^2 = \frac{1}{\nu}\sum_i {\frac{r_i2}{\sigma_i^2}}$$
+
+where here, $\nu$ is the degrees of freedom (and since we are estimating
+two parameters, it is always the number of observations minus two),
+$r_i$ is the $i$'th residual, and $\sigma_i^2$ is the variance of the
+$i$'th estimate (and so here is the *weight*). We will name this `rse`
+and refer to it in all caps: `RSE`.
+
+```{r}
+#| label: trifit
+
+trifit <- function( dt){
+   # dt should be a data.table with g6abs, g6std, graw, and rvec, and only 
+   # those samples which count (i.e., the peaks).
+   dt[, ':='( lg6 = log( g6abs), lr = log( rvec))]
+   lg6w = (log(dt$g6abs + dt$g6std) - dt$lg6)^-2
+   weights = dt$g6std^-2
+   sw <- sum( weights)
+   lin <- lm( g6abs ~ rvec, data = dt, weights = weights)
+   pow <- lm( lg6 ~ lr, data = dt, weights = lg6w)
+   exf <- lm( lg6 ~ rvec, data = dt, weights = lg6w)
+   # add RSE of linear data to each element
+   lin[["rse"]] <- sum( weights * lin$residuals^2) / (sw * lin$df.residual)
+   pow[["rse"]] <- sum( weights * (exp( pow$fitted.values) - dt$g6abs)^2) / 
+                                   (sw * pow$df.residual)
+   exf[["rse"]] <- sum( weights * (exp( exf$fitted.values) - dt$g6abs)^2) / 
+                                   (sw * exf$df.residual)
+   list( lin = lin, pow = pow, exf = exf)
+}
+```
+
+So here is an example.
+
+```{r}
+#| label: first_fit
+MD2.C[, g6absz := abs(Rpsi.mean.rs + Impsi.mean.rs * 1i)] # Add column
+setkey( MD2.C, run) # Sort by run
+fits <- trifit( g600210[ g600210pks, .(rvec, g6abs, g6std, graw)] )
+summary( fits$lin)
+summary( fits$pow)
+summary( fits$exf)
+sapply( fits, \(x) x[["rse"]])
+```
+
+Those last three values are the RSE. The three equations are linear:
+$G_6(r) = 0.03 - 0.0035r$, power-law: $\ln(G) = -1.816 \ln(r) - 1.54$,
+which becomes $G_6(r) = e^{-1.816 \ln(r) - 1.54} = 0.2144 r^{-1.816}$,
+and exponential as $\ln(G) = -0.505 r - 1.833$ which becomes
+$G_6(r) = 0.16e^{-0.505 r}$.
+
+Instead of linearizing the power-law and exponential equations, we can
+also use `nls()` to fit them. Here, we'll fit them to the proper forms
+to estimate $\eta_6$ and $\xi_6$ directly.
+
+```{r}
+g600210[,g6wsd := g6std / sqrt( graw)]
+dt <- g600210[ g600210pks, .(rvec, g6abs, g6std)]
+(lc <- coef(lm( log( g6abs) ~ log( rvec), data = dt)))
+aest <- exp( lc[1])
+best <- -lc[2]
+c( aest, best)
+nlspow <- nls( g6abs ~ a * rvec^-b, data = dt, 
+               weights = 1 / g6std^2, start  = list( a = aest, b = best))
+(lc <- coef(lm( log( g6abs) ~ rvec, data = dt)))
+aest <- exp( lc[1])
+best <- -1 / lc[2]
+c( aest, best)
+nlsexf <- nls( g6abs ~ a * exp( -rvec / b), dt, 
+               weights = 1 / g6std^2, start  = list( a = aest, b = best))
+summary( nlspow)
+summary( nlsexf)
+with( g600210[ g600210pks,], {
+  sw <- sum( g6wsd^-2)
+  c( pow = sum( resid( nlspow)^2 / g6wsd^2) / (sw * (length( g600210pks) - 3)),
+     exf = sum( resid( nlsexf)^2 / g6wsd^2) / (sw * (length( g600210pks) - 3)))
+})
+```
+
+The values produced by `nls()` are similar to those produced by the
+linear regression of the transformed data (1/2.0329 = `r 1/2.0329`), and
+the residual errors are better, but close to that produced by `lm()`.
+
+Finally, we can look at the excess potential energy as a function of the
+number of dislocations. Recall that the baseline minimum $U_0$ is
+0.11595 (see @sec-Distkepe above).
+
+```{r}
+with( MD2.C[run == "S5b.00210", ], {
+      sprintf( "Excess PE per dislocation: %e", 
+               (pe.mean.rs - pe.init - ke.mean.rs) / ds00210["mean"])
+      print( sqrt((pe.sd.rs^2 + ke.sd.rs^2)/nr))
+      print( nr)
+      })
+```
+
+At this point, we recognize that we're going to be adding new data to
+the database, so we save the database to a file. Recall that the full
+name we're using is `MD2DT.x.RDS`, where `x` is a generation label (`C`
+in this instance).
+
+```{r}
+#| label: MD2DT.C.RDS
+#| eval: false
+# we'll only execute this by hand.
+saveRDS( MD2.C, "../MD2DT.C.RDS")
+pdcnt <- MD2.C[ series == "S5b", pdfilecnt( run, steps.avg), by = run]
+saveRDS( pdcnt, "pdcnt.RDS")
+```
+
+We can put these steps together to grab a file, compute the regressions,
+and report the results, including a data table row to make a table of
+regression values.
+
+```{r}
+#| label: g6proc
+g6proc <- function( td, MD2DT, run, ft = 2, trifitter = trifit, skip = 0, 
+                    plotflag = FALSE, pltll = 0.001, pltlog = 'xy', 
+                    xlim = NULL, ylim = c(pltll, 1),
+                    ebars = TRUE, legpos = "bottomleft", legcex = 0.75) {
+   # td is test directory, that is, where to find the files.
+   # MD2DT is an MD2 data table. The g6absz data item must exist.
+   #     g6absz := abs(Rpsi.mean.rs + Impsi.mean.rs * 1i)
+   # run should match both the file name (after ".g6.csv" is appended to it), 
+   # and the run in the MD2 data table.
+   # ft is the factor by which peaks must be separated
+   # trifitter is a function (like trifit) that will make three fits.
+   # skip will drop the first skip points from fits
+   # if plotflag is TRUE, the result will be plotted. 
+   # pltll is the plot's lower limit.
+   # pltlog is passed to the plot's log parameter
+   # xlim and ylim are the plots limits
+   # ebars if true will plto error bars on peaks
+   # legpos is the legend position
+   # legcex is the legend text ratio (cex for legend call)
+   # Invisibly returns a named list with the run, a single row data table of
+   # regression data (newrow), a table of g6 values (g6dt), the 
+   # peaks (g6dtpks), the dislocation stats (dsstat), and the three fits as  
+   # returned by trifit() (whose key results are in newrow).
+   g6dt <- data.table::fread( paste0(td, "/", run, ".g6.csv"))
+   # retrieve dislocation stats.
+   ds <- c( count = g6dt$graw[1], mean  = g6dt$gr[1], std = g6dt$g6std[1],
+            min = g6dt$g6r[1], max = g6dt$g6im[1])
+   # reset first row to NA
+   g6dt$graw[1] <- NA; g6dt$gr[1] <- NA; g6dt$g6std[1] <- NA; g6dt$g6r[1] <- NA
+   g6dt$g6im[1] <- NA
+   # compute g6abs and noise limit
+   g6dt[, ':='(g6abs = sqrt( g6r^2 + g6im^2), 
+               elim = 0.289 * sqrt( pi / (2 * graw)))] 
+                # make |g6^2| & noise limit elim
+   g6dtpks <- findpeaks( g6dt$g6abs, elim = g6dt$elim, ft = ft)
+   g6dtpks <- if (skip > 0) last( g6dtpks, -skip) else g6dtpks
+   setkey( MD2DT, run) # Sort by run
+   fits <- trifitter( g6dt[ g6dtpks,])
+   es <- lapply( fits, # extract data with names from fits
+                 \(x) { # function to apply to each fit
+                    mod <- summary( x)
+                    y <- c( mod$coefficients[2, c('Estimate', 'Std. Error')],
+                            r.squared = mod$r.squared, rse = x[["rse"]],
+                            fstat = mod$fstatistic[ 1])
+                    as.list( y)})
+   newrow <- list( run = run, dscount = unname( ds["count"]), 
+      dsmean = unname( ds["mean"]), dsstd = unname( ds["std"]), 
+      dsmin = unname( ds["min"]), dsmax = unname( ds["max"]),
+      npeaks = length( g6dtpks))
+   newrow = do.call( data.table, c( newrow, do.call( 'c', es)))
+   names( newrow) <- gsub( " ", "", names( newrow))
+   if (plotflag) {
+      if (is.null(xlim)) xlim <- c( 0.5, 1.2 * last( g6dt$rvec))
+      plot( g6abs ~ rvec, data = g6dt, typ = "l", log = pltlog, 
+            xlab = "r/a", ylab = "|G6|", main = run,
+            xlim = xlim, ylim = ylim)
+      emin <- 0.289 * sqrt( pi / (2 * max( g6dt[ g6dtpks, graw])))
+      sprintf( "Estimated minimum: %e", emin)
+      abline( h = MD2DT[ run, g6absz], col = 'black', lty = 2)
+      abline( h = emin, lty = 2, col = "lightblue")
+      grid()
+      g6pks <- g6dt[ g6dtpks,]
+      g6ptstd <- g6pks$g6std / sqrt( ds["count"]) 
+      # sd of avg is sqrt of point sd
+      points( g6abs ~ rvec, data = g6pks, pch = 1)
+      if (ebars) arrows( g6pks$rvec, pmax( pltll / 10, g6pks$g6abs - g6ptstd), 
+                         g6pks$rvec, g6pks$g6abs + g6ptstd, 
+                         length = 0.05, angle = 90, code = 3)
+      lines( x = g6pks$rvec, y = predict( fits$lin), col = "red")
+      lines( x = g6pks[rvec > 0.01,]$rvec, y = exp( predict( fits$pow)), 
+             col = "green")
+      lines( x = g6pks$rvec, y = exp( predict( fits$exf)), col = "orange")
+      legend( legpos, cex = legcex,
+              c( "|G6|", "Peaks", "Linear", "Power Law", "Exponential", 
+                 "Overal Psi"),
+              col = c("black", "black", "red", "green", "orange", "black"),
+              lty = c( 1, -1, 1, 1, 1, 2), pch = c( NA, 1, NA, NA, NA, NA))
+   } # end if (plotflag)...
+   invisible( list( run = run, newrow = newrow, g6dt = g6dt, g6dtpks = g6dtpks,
+                    dsstat = ds, fits = fits))
+}
+```
+
+### Cold, Warm, Transition, and Hot Runs
+
+We can repeat the above processing in a single line now. We'll look at
+the runs listed in @tbl-det3 above. First, the hot one:
+
+```{r}
+#| label: fig-g6190
+#| fig-cap: The G6 computation for run `S5b00190`.  The error bars reflect the standard deviation of the avereage. A tighter filter threshold (`ft`) is applied as spurious peak was evident with `ft = 2`.
+g6data190 <- g6proc( td, MD2.C, "S5b.00190", ft = 1.5, plotflag = TRUE)
+g6dt <- g6data190$newrow
+fitdat <- function( fit) sapply( fit, \(x) {sx <- summary(x)
+                           c( a = sx$coefficients[1], b = sx$coefficients[2],
+                              ars = (sx$adj.r.squared %||% NA), 
+                              fstat = (sx$fstatistic['value'] %||% NA), 
+                              rse = x[["rse"]])})
+fitdat( g6data190$fits)
+```
+
+We expected the exponential to be the winner there, but the power law
+appears to win. Below we'll use that function for the cold sample.
+
+```{r}
+g6data025 <- g6proc( td, MD2.C, "S5b.00025", ft = 1.5, plotflag = TRUE)
+g6dt <- rbind( g6dt, g6data025$newrow)
+(g6dt025 <- fitdat( g6data025$fits))
+```
+
+So that was disappointing. The linear is still significant (we hoped for
+it to be non-significant), and by the F-statistic, the power-law is
+still the winner. A look at the data in linear coordinates shows why.
+
+```{r}
+g6proc( td, MD2.C, "S5b.00025", ft = 1.5, plotflag = TRUE, pltlog="",
+        ylim = c( 0.875, 0.895), xlim = c( 1, 7), ebars = FALSE, 
+        legpos = "topright")
+```
+
+The first two peaks drove the fit. The exponential and the linear fit
+overlay. This was a surprise, but here is what happens. The Taylor
+series for the exponential equation $y = a e^{b x}$ (where here
+$b = -1/\xi_6)$ is given by
+$y \approx a + a b x + a b^2 x^2/2 + O(x^3)$. Since $b$ is so small,
+only the linear term $a b$ counts over the range $x \in \{1, 7\}$. The
+$a$ returned by the fit is the logarithm of the $a$ in these equations.
+The exponential fit coefficient is $\ln(a_e)=$ `r g6dt025['a', 'exf']`,
+so $a_e =$ `r exp(g6dt025['a', 'exf'])`. The first term is therefore
+$a b =$ `r exp( g6dt025['a', 'exf']) * g6dt025['b', 'exf']`; compare
+this $a$ and $a b$ to the linear coefficients above.
+
+And a warm one:
+
+```{r}
+g6data071 <- g6proc( td, MD2.C, "S5b.00071", ft = 1.5, plotflag = TRUE)
+g6dt <- rbind( g6dt, g6data071$newrow)
+fitdat( g6data071$fits)
+```
+
+Let's look at a linear plot zoomed in.
+
+```{r}
+g6proc( td, MD2.C, "S5b.00071", ft = 1.5, plotflag = TRUE, pltlog = "",
+        ylim=c( 0.65, 0.75), xlim = c( 1, 7), ebars = FALSE, 
+        legpos = "topright")
+```
+
+Again, the first two points appear higher and drive the fit. And again
+the linear and exponential fits overlap in the range of the plot.
+
+And a transition one:
+
+```{r}
+g6data <- g6proc( td, MD2.C, "S5b.00123", ft = 1.5, plotflag = TRUE)
+g6dt <- rbind( g6dt, g6data$newrow)
+```
+
+```{r}
+g6proc( td, MD2.C, "S5b.00123", ft = 1.5, plotflag = TRUE, pltlog="",
+         ylim=c( 0.25, 0.5), xlim = c( 1, 7),ebars = FALSE, legpos = "topright")
+```
+
+None of those were helpful. Let's try the same set using `nls()` for the
+non-linear fits. We need a new version of `trifit()`.
+
+```{r}
+#| label: trifit2
+trifit2 <- function( dt) {
+   # dt should be a data.table with g6abs, g6std, graw, and rvec, and only 
+   # those samples which count (i.e., the peaks).
+   dt[, ':='( weights = g6std^-2)] 
+  # and reflect numb. of samples in sd
+   lin <- lm( g6abs ~ rvec, data = dt, weights = dt$weights)
+   lc <- coef(lm( log( g6abs) ~ log( rvec), data = dt, weights = dt$weights)) 
+   aest <- exp( lc[1])
+   best <- -lc[2]
+   pow <- nls( g6abs ~ a * rvec^-b, data = dt, weights = dt$weights, 
+               start  = list( a = aest, b = best))
+   lc <- coef(lm( log( g6abs) ~ rvec, data = dt))
+   aest <- exp( lc[1])
+   best <- -1 / lc[2]
+   exf <- nls( g6abs ~ a * exp( -rvec / b), dt, weights = weights, 
+               start  = list( a = aest, b = best))
+   sw <- sum( dt$weights) * (nrow( dt) - 2)
+   lin[["rse"]] <- sum( dt$weights * lin$residuals^2) / sw
+   pow[["rse"]] <- sum( dt$weights * resid( pow)^2) / sw 
+   exf[["rse"]] <- sum( dt$weights * resid( exf)^2) / sw
+   list( lin = lin, pow = pow, exf = exf)
+}
+```
+
+Now we can repeat what we just did using `trifit2()`. This time we'll go
+from cold to hot.
+
+```{r}
+g6data025nls <- g6proc( td, MD2.C, "S5b.00025", ft = 1.5, trifitter = trifit2)
+(g6dt025 <- fitdat( g6data025nls$fits))
+```
+
+```{r}
+g6data071nls <- g6proc( td, MD2.C, "S5b.00071", ft = 1.5, trifitter = trifit2)
+(g6dt071 <- fitdat( g6data071nls$fits))
+```
+
+```{r}
+g6data123nls <- g6proc( td, MD2.C, "S5b.00123", ft = 1.5, trifitter = trifit2)
+(g6dt123 <- fitdat( g6data123nls$fits))
+```
+
+```{r}
+g6data190nls <- g6proc( td, MD2.C, "S5b.00190", ft = 1.5, trifitter = trifit2)
+(g6dt190 <- fitdat( g6data190nls$fits))
+```
+
+So the power-law has the lowest residual error for all runs. We need to
+skip the first two data points, and re-try the fits.
+
+```{r}
+g6data025nlssk <- g6proc( td, MD2.C, "S5b.00025", ft = 1.5, trifitter = trifit2, 
+                          plotflag = TRUE, pltlog = '', skip = 2,
+                          ylim=c(0.875,0.895), xlim = c(1,7), ebars=FALSE, 
+                          legpos = "topright")
+(g6dt025 <- fitdat( g6data025nlssk$fits))
+```
+
+```{r}
+g6data071nlssk <- g6proc( td, MD2.C, "S5b.00071", ft = 1.5, 
+                          trifitter = trifit2, skip = 2)
+(g6dt071 <- fitdat( g6data071nlssk$fits))
+```
+
+```{r}
+g6data123nlssk <- g6proc( td, MD2.C, "S5b.00123", ft = 1.5, 
+                          trifitter = trifit2, skip = 2)
+(g6dt123 <- fitdat( g6data123nlssk$fits))
+```
+
+```{r}
+g6data190nlssk <- g6proc( td, MD2.C, "S5b.00190", ft = 1.5, 
+                          trifitter = trifit2, skip = 2)
+(g6dt190 <- fitdat( g6data190nlssk$fits))
+```
+
+### Process All Runs
+
+We need to process the entire cache of run `S5b`. Back in
+@sec-filecntpp, we generated the `pdcnt` data table. We can use this to
+help create a *Julia* script by listing the components. Following the
+steps in [FinalDiffusion.pdf](FinalDiffusion.pdf) we get the following:
+
+```{r}
+pdcnt <- readRDS( "pdcnt.RDS")
+cat( '["', 
+     paste0( pdcnt[,run], collapse = '*", "'), 
+     '"] \n', sep = "")
+pdcnt$V1
+```
+
+Here is the resulting *Julia* execution:
+
+```{julia}
+#| eval: false
+julia> files = ["S5b.00010*", "S5b.00015*", "S5b.00020*", "S5b.00025*",
+   "S5b.00030*", "S5b.00035*", "S5b.00040*", "S5b.00045*", "S5b.00050*",
+   "S5b.00055*", "S5b.00060*", "S5b.00061*", "S5b.00062*", "S5b.00063*",
+   "S5b.00064*", "S5b.00065*", "S5b.00066*", "S5b.00067*", "S5b.00068*",
+   "S5b.00069*", "S5b.00070*", "S5b.00071*", "S5b.00072*", "S5b.00073*",
+   "S5b.00074*", "S5b.00075*", "S5b.00076*", "S5b.00077*", "S5b.00078*",
+   "S5b.00079*", "S5b.00080*", "S5b.00081*", "S5b.00082*", "S5b.00083*",
+   "S5b.00084*", "S5b.00085*", "S5b.00086*", "S5b.00087*", "S5b.00088*",
+   "S5b.00089*", "S5b.00090*", "S5b.00091*", "S5b.00092*", "S5b.00093*",
+   "S5b.00094*", "S5b.00095*", "S5b.00096*", "S5b.00097*", "S5b.00098*",
+   "S5b.00099*", "S5b.00100*", "S5b.00101*", "S5b.00102*", "S5b.00103*",
+   "S5b.00104*", "S5b.00105*", "S5b.00106*", "S5b.00107*", "S5b.00108*",
+   "S5b.00109*", "S5b.00110*", "S5b.00111*", "S5b.00112*", "S5b.00113*",
+   "S5b.00114*", "S5b.00115*", "S5b.00116*", "S5b.00117*", "S5b.00118*",
+   "S5b.00119*", "S5b.00120*", "S5b.00121*", "S5b.00122*", "S5b.00123*",
+   "S5b.00124*", "S5b.00125*", "S5b.00126*", "S5b.00127*", "S5b.00128*",
+   "S5b.00129*", "S5b.00130*", "S5b.00131*", "S5b.00132*", "S5b.00133*",
+   "S5b.00134*", "S5b.00135*", "S5b.00136*", "S5b.00137*", "S5b.00138*",
+   "S5b.00139*", "S5b.00140*", "S5b.00145*", "S5b.00150*", "S5b.00155*",
+   "S5b.00160*", "S5b.00165*", "S5b.00170*", "S5b.00175*", "S5b.00180*",
+   "S5b.00185*", "S5b.00190*", "S5b.00195*", "S5b.00200*", "S5b.00205*",
+   "S5b.00210"]
+
+julia> cnt = vec( [30 30 30 30 30 30 30 30 30 30 20 30 30 20 30 30 30 30 30 30
+   20 30 30 30 30 30 30 30 20 30 30 30 30 20 30 30 30 72 30 30 30 30 20 20 30 
+   30 30 30 20 30 30 48 30 30 30 30 20 30 30 30 20 30 48 24 48 20 30 48 30 48 
+   20 48 20 72 72 48 48 48 48 29 48 48 48 48 20 48 48 52 20 72 20 20 20 20 20 
+   29 30 72 30 20 30 20 30 30 30])
+
+julia> @floop for i in 1:length(cnt); 
+   MD2.avgpairdist( datadir, files[i], cnt[i], 100, plotq = false);end
+```
+
+This threw a `TaskFailedException` related to `@floop`, but all of the
+`.g6.csv` files appear intact. The *R* code following will read and
+process the files. We will use `trifitt2()` (based on `nls()`) to
+process the data.
+
+```{r}
+#| label: MD2S5
+g6dt <- data.table()
+system.time( for( i in pdcnt$run){
+   g6data <- g6proc( td, MD2.C, i, trifitter = trifit2, ft = 1.5)
+   g6dt <- rbind( g6dt, g6data$newrow)
+})
+
+MD2S5 <- MD2.C[ grepl( "S5", series),] # just series 5 data
+MD2S5 <- MD2S5[ g6dt, on = .(run = run)]
+```
+
+We now have a 19 new data items in addition to the 73 already existing
+(for a total of 91). We will also add excess PE (the PE above the at
+rest PE), and excess PE per dislocation.
+
+```{r}
+MD2S5 <- MD2S5[, ExPE := pe.mean.rs - pe.init] # pe.init is a global
+MD2S5 <- MD2S5[, epepds := 256 * ExPE / dsmean]
+saveRDS( MD2S5, "../MD2S5.RDS")
+```
+
+# Exploring the New Data
+
+Since we really didn't know what we'd find, let's poke around a bit.
+
+## Dislocations and Energy
+
+We noted previously that excess potential energy (as defined by
+potential energy $U$ above the rest energy $U_0$ that exceeds the mean
+kinetic energy $E_k$) increases with temperature. That is, we would
+expect the total energy $E_t$ to be given by:
+$E_t = U + E_k = U_0 + U_e + E_k$, where at low temperatures
+$U_e \approx E_k$ (by the equipartition theorem), such that thermal
+energy is shared equally between kinetic and potential (see @sec-ExPot).
+@fig-dsTE below shows how the excess energy per dislocation trends (here
+plotted as total per dislocation; previous plots were a per-particle
+excess).
+
+```{r}
+#| label: fig-dsTE
+#| fig-cap: Total excess PE and number of dislocations vs. total energy.  The singular point with about 35 dislocations is at total energy of $0.1441 \epsilon$ (red verticle dashed line).
+#| fig-subcap:
+#| - "Total excess PE (logarithmic scale) vs. total energy. Energies with no dislocations cannot be plotted."
+#| - "Mean Dislocation Count. Blue points are identically zero.  Light gray bars show $\\pm\\sigma$ observed dislocations."
+#| layout-nrow: 2
+plot( epepds ~ TE.mean.rs, data = MD2S5, log ='y', xlab = "TE",
+      ylab = "Excess PE per Dislocation")
+grid()
+abline( v = 0.1441, col = 'red', lty = 2)
+plot( dsmean ~ TE.mean.rs, data = MD2S5, xlab = "TE")
+points( dsmean ~ TE.mean.rs, data = MD2S5[ dsmean == 0], col = 'blue')
+grid()
+with( MD2S5[ dsmean > 0,], 
+      arrows(TE.mean.rs, dsmean - dsstd, TE.mean.rs, dsmean + dsstd, angle = 90, 
+             col = 'lightgray', code = 3, length = 0.1))
+abline( v = 0.1441, col = 'red', lty = 2)
+```
+
+The same figure can be plotted vs temperature. We can get the data
+specifics via the following statement:
+
+```{r}
+(temp <- MD2S5[ dsmean >34 & dsmean < 36, 
+                .(run, dsmean, TE.mean.rs, ke.mean.rs)])
+TEtr <- temp$TE.mean.rs[1]
+ketr <- temp$ke.mean.rs[1]
+dsmtr <- temp$dsmean[1]
+```
+
+@fig-dsT shows the same plot versus temperature.
+
+```{r}
+#| label: fig-dsT
+#| fig-cap: Total excess PE and number of dislocations vs. temperature. The singular point with about 35 dislocations is at a temperature of 0.0131 (red verticle dashed line).
+#| fig-subcap:
+#| - "Total excess PE (logarithmic scale) vs. temperature. Temperatures with no dislocations cannot be plotted."
+#| - "Mean Dislocation Count. Blue points are identically zero.  Light gray bars show $\\pm\\sigma$ observed dislocations."
+#| layout-nrow: 2
+
+pltmin = min( MD2S5[ dsmean > 0, dsmean])/2 # create a minimum below the min
+plot( epepds ~ ke.mean.rs, data = MD2S5,  xlab = "T", log="y",
+      ylab = "Excess PE per Dislocation")
+grid()
+abline( v = ketr, col = 'red', lty = 2)
+plot( dsmean ~ ke.mean.rs, data = MD2S5, xlab = "T")
+points( dsmean ~ ke.mean.rs, data = MD2S5[ dsmean == 0], col = 'blue')
+grid()
+with( MD2S5[ dsmean > 0,], 
+      arrows(ke.mean.rs, pmax(dsmean - dsstd, pltmin), 
+             ke.mean.rs, dsmean + dsstd, angle = 90, 
+             col = 'lightgray', code = 3, length = 0.1))
+abline( v = ketr, col = 'red', lty = 2)
+```
+
+The dislocations statistics also reports a standard deviation. If the
+dislocations pop in and out randomly in an uncorrelated fashion, the
+variance will equal the mean (i.e., a Poisson distribution.)
+
+```{r}
+#| label: fig-dsstd
+#| fig-cap: Variance of dislocation count divided by the mean number of dislocations. The singular point with about 35 dislocations is at a total energy of $0.1441 \epsilon$ (red verticle dashed line).  The dark blue dashed line shows where the mean and variance are equal (i.e, the ratio is one).
+
+plot( dsstd^2 / dsmean ~ TE.mean.rs, data = MD2S5, xlab = "TE", 
+      ylab = "Var(ds) / dsmean")
+grid()
+abline( v = TEtr, col = 'red', lty = 2)
+abline( h = 1, col = 'darkblue', lty = 2)
+```
+
+Since the variance is often more than twice the mean, that means that
+dislocations are appearing in a correlated fashion. This is to be
+expected as a particle moving near an adjacent cell will show as more
+than a single dislocation. It is simple to conceive of dislocations
+occurring in pairs: a particle moves away from one cell reducing its
+nearest neighbor count from 5 to 6) and into an adjacent cell
+(increasing its neighbor count to 7). If indeed dislocation tend to show
+up in pairs, then the variance would be four times the mean (if $x$ is a
+Poisson variable, and $y = 2x$, $\sigma^2_y = 4 \sigma^2_x = 4\mu_x$),
+but that doesn't seem to be the case either. If dislocations did occur
+in pairs, the variance ratio is below the expected four until a total
+energy of $0.1441\epsilon$. This may mean that dislocations persist
+between samples (another form of correlation).
+
+The variance of the estimate of the variance of a Poisson is not readily
+available (and why would it be: the mean and variance are equal), but we
+can simulate the condition. @fig-simdsstd below generates `dscount`
+Poisson random variables with mean `dsmean / 2`, multiplies each random
+variable by two (simulating the condition that dislocations occur in
+pairs), and computes the mean and variance of that. It does this for
+each sample whose `dsmean` was greater than zero and plots the ratio.
+
+```{r}
+#| label: fig-simdsstd
+#| fig-cap: Simulation of the ratio plotted in @fig-dsstd using the counts and means from the data to and `rpois()` to generate Poisson distributed samples.
+with( MD2S5, {
+  plot( x = TE.mean.rs, 
+        y = sapply( 1:length( dsmean), 
+                    \(i) { x <- 2 * rpois( dscount[i], dsmean[i] / 2)
+                           var(x) / mean(x)}),
+        xlab = "TE", ylab = "Var(p) / mean(p)", ylim = c( 0, 8), 
+        panel.first = grid())
+  })
+```
+
+We rarely see ratios as high as eight, but they do happen. The point is,
+this is a decent indication that the cold samples at least are
+approximately independent samples.
+
+Below we look at energy per dislocation plotted by dislocation density.
+
+```{r}
+#| label: fig-expepdsT
+#| fig-cap: The per-particle kinetic energy per dislocation density plotted against the dislocation density (log-log plot). The energy per dislocation decreases as a power law $y = a x^b$.  The thin black line in the center of the red line is the $y = e^{\text{predict}(x)}$ prediction directly from the linear regression.  The red line is prediction from the power law equation. The verticle black lines are one and two mean number of dislocations.
+
+plf <- function( x, a, b) a * x^b # Simple power-law function
+MD2S5[, dsden := dsmean / 256] # Add dsden to data table
+plot( ke.mean.rs/dsden ~ dsden, 
+      data = MD2S5[ dsmean > 0, .(epepds, ke.mean.rs, dsden)], 
+      log ='xy', 
+      xlab = "Dislocation Density", ylab = "KE / Dislocation"
+      #xlim = c(1e-4, 1), ylim = c(0.01, 50)
+      )
+grid()
+llTds <- with(  MD2S5[ (dsmean > 0) & (dsmean < dsmtr),],{
+  llTds <- lm( log( ke.mean.rs / dsden) ~ log( dsden))
+  lines( x = dsden, 
+         y = plf( dsden, exp( coef( llTds)[1]), coef(llTds)[2]),
+         col = 'red', lwd = 3)
+  lines( x = dsden, y = exp( predict( llTds)))
+  llTds})
+abline( v = 1)
+abline( v = 2)
+summary( llTds)
+```
+
+We find the same relationship between the excess PE and the dislocation
+density (@fig-expepds).
+
+```{r}
+#| label: fig-expepds
+#| fig-cap: The same as @fig-expepdsT using excess potential energy.
+
+plot( epepds ~ dsden, data = MD2S5[ dsden > 0, .(epepds, dsden)], 
+      log ='xy', 
+      xlab = "Dislocation Density", ylab = "Excess PE / Dislocation"
+      #xlim = c(1e-4, 1), ylim = c(0.01, 50)
+      )
+grid()
+llpds = with( MD2S5[ (dsden > 0) & (dsmean < dsmtr),], {
+  llpds <- lm( log( epepds) ~ log( dsden),)
+  lines( x = dsden,
+         y = plf( dsden, exp( coef( llpds)[1]), coef(llpds)[2]),
+         col = 'red', lwd = 3)
+  lines( x = dsden, y = exp( predict( llpds)))
+  llpds})
+abline( v = 1)
+abline( v = 2)
+summary( llpds)
+```
+
+In @fig-expepds, the excess PE red line is given by taking the exponent
+of the intercept, and the power is read out directly yielding the pair
+(`r c( exp( coef( llpds)[1]), coef( llpds)[2])`) which yields the
+equation $y = 0.0194(x^{-0.852})$.
+
+In @fig-TEepds below we plot the excess total energy (essentially, the
+excess PE plus kinetic energy).
+
+```{r}
+#| label: fig-TEepds
+#| fig-cap: The same as @fig-expepdsT and @fig-expepds using excess potential energy.
+
+plot( TEpds ~ dsden, data = MD2S5[ dsden > 0, 
+          .(TEpds = (TE.mean.rs - pe.init)/dsden, dsden)], 
+      log ='xy', 
+      xlab = "Dislocation Density", ylab = "Excess TE / Dislocation"
+      #xlim = c(1e-4, 1), ylim = c(0.01, 50)
+      )
+grid()
+llTEds = with( MD2S5[ (dsmean > 0) & (dsmean < dsmtr), 
+                      .(TEpds = (TE.mean.rs - pe.init)/dsden, dsden)], 
+  {
+  llTEds <- lm( log( TEpds) ~ log( dsden),)
+  lines( x = dsden,
+         y = plf( dsden, exp( coef( llTEds)[1]), coef(llTEds)[2]),
+         col = 'red', lwd = 3)
+  lines( x = dsden, y = exp( predict( llTEds)))
+  llTEds})
+abline( v = 1)
+abline( v = 2)
+summary( llTEds)
+```
+
+These three plots look like they have remarkable structure. They plot a
+function $E / D(E) \sim D(E)$ where $E$ is energy (kinetic, excess
+potential, or excess total) and $D(E)$ is the dislocation density as a
+function of energy (the dislocation density is merely the dislocation
+count divided by the number of particles). We can see from @fig-dsTE
+that the dislocation density is a strong function of TE. A Taylor series
+expansion requires four terms.
+
+```{r}
+dsTEfit <- lm( dsden ~ poly( TE.mean.rs, 4), 
+               data = MD2S5[ (dsmean > 0) & (dsmean < dsmtr),])
+summary( dsTEfit)
+```
+
+Since we have a good fit for $E/D(E) = a D(E)^b$, we can solve for
+$D(E)$ by taking the logarithm of both sides:
+
+$$\begin{aligned} 
+\ln(E) - \ln \left( D(E) \right) &= \ln(a) + b \ln \left(
+D(E) \right) \\
+\ln(E) - \ln(a) &= (1 + b)\ln \left( D(E) \right) \\ 
+D(E) &= \left( E / a \right)^{1/(1+b)} \\
+\end{aligned}$$
+
+We can compare the three energy fits to see which is best:
+
+```{r}
+AIC( llTds, llpds, llTEds)
+```
+
+So the regression vs temperature looks the best (but just by a little).
+The coefficients are (`r c( exp( coef( llTds)[1]), coef( llTds)[2])`).
+So the dislocation density is
+$D(E) = \left( `r exp(- coef( llTds)[1])` \times E \right) ^ {`r 1/(1 + coef( llTds)[2])`}$.
+Note that the power-law function $y = a' x^{b'}$ is a little different
+than this expression: $D(E) = (1/a)^{1/(1 + b)} E^{1/(1 + b)}$, so here
+$a' = a^{-1/(1 + b)}$, but we estimated $a'' = \widehat{\ln(a)}$, so
+$a = e^{a''}$ and $a' = (e^{a''})^{-1/(1 + b)} = \exp(-a''/(1 + b))$.
+
+@fig-ddvT plots the observations with the fit function. The predicted
+dislocation density at melting is given by evaluating the equation at
+the transition temperature `r ketr`:
+`r 100*(exp(- coef( llTds)[1]) * ketr)^(1/(1 + coef( llTds)[2]))`%.
+
+```{r}
+#| label: fig-ddvT
+#| fig-cap: Dislocation density vs. temperature (log-log plot) with power-law line from fit to solid points as in @fig-expepdsT. Vertical red dashed line is at the transition temperature of 0.01309.  Horizontal black line is the predicted melting dislocation density. The gray bars show the $\pm\sigma$ of the dislocation density observations. 
+llTdsab <- with( MD2S5, {
+   pltmin <- min( dsden[ dsden > 0]) / 4 # create a minimum below the min
+   plot( y = dsden, x = ke.mean.rs, log='xy', panel.first = grid(),
+         xlab = "T", ylab = "Dislocation Density",
+         ylim = c( 1e-4, 1), xlim = c( 0.005, max( ke.mean.rs)))
+   b <- 1 / (1 + coef( llTds)[2])
+   a <- exp( -coef( llTds)[1] * b)
+   lines( x = ke.mean.rs, y =  plf( ke.mean.rs, a, b))
+   arrows( ke.mean.rs, pmax(dsden - dsstd / 256, pltmin), 
+           ke.mean.rs, dsden + dsstd / 256, angle = 90, 
+           col = 'lightgray', code = 3, length = 0.1)
+   points( y = dsden, x = ke.mean.rs) # replot to place in front of gray bars.
+   abline( v = ketr, col = 'red', lty = 2)
+   abline( h = plf( ketr, a, b))
+   c( a = a, b = b)
+})
+pltddvT <- recordPlot( )
+llTdsab
+```
+
+### Getting a better Fit
+
+Perhaps the fit can be improved. There are four ways:
+
+1.  include a variance in the `lm()` call (adjusted for taking the
+    logarithm),
+2.  perform a maximum-likelihood (ML) on a poisson fit (with each
+    occurrence resulting in two dislocations, and where the variances
+    would be ignored),
+3.  a ML poisson whose occurrences are set by the relationship between
+    the mean and variance, and
+4.  a Gaussian with observed variances.
+
+#### Simple Weighted LM Fit
+
+For an `lm()` fit, weights need to be provided that reflect the variance
+of the density after taking the logarithm. A procedure similar to that
+used to draw the arrow above (where
+$\sigma_{ln(x)}=\left( \ln(x + \sigma_x) - \ln(x - \sigma_x) \right)/2$)
+can be used, but we need to adjust the range for negative values of
+$x - \sigma_x$. When this happens, replacing the low value with a
+fraction of the observed value, that fraction being set by the ratio of
+the observation and the high value. That is, if
+$\ln(x + \sigma_x) = a \ln(x)$, then let
+$\sigma_{ln(x)} = \left( a\ln(x) -\ln(x)/a \right)$.
+
+```{r}
+llVepd <- with( MD2S5[ (dsmean > 0) & (dsmean < dsmtr),], {
+   lowval <- dsden - dsstd / 256
+   hival  <- dsden + dsstd / 256
+   a <- log( hival) / log( dsden)
+   weights <- 1 / ifelse( lowval > 0, (log( hival) - log( lowval))^2 / 4,
+                     ((a - 1/ a) * log( dsden))^2 / 4)
+   # plot( x = ke.mean.rs, y = dsden, log='xy')
+   lm( log( dsden) ~ log( ke.mean.rs), weights = weights)
+})
+summary( llVepd)
+```
+
+The power-law $a$ coefficient is the exponential function of the
+intercept yielding `r exp( coef( llVepd)[1])`. The melting dislocation
+density is
+`r 100 * plf( ketr, exp( coef( llVepd)[1]), coef( llVepd)[2])`%.
+
+```{r}
+#| label: fig-ddv
+#| fig-cap: New regression line added to @fig-ddvT (in red), and new melting dislocation density (horizontal red line). 
+
+replayPlot( pltddvT)
+rc <- unname( coef( llVepd)) # raw coef, without names
+cVepd <- c( a = exp( rc[1]), b = rc[2])
+with( MD2S5, {
+   lines( x = ke.mean.rs, y = plf( ke.mean.rs, a = cVepd['a'], b = cVepd['b']), 
+                                   col = 'red')
+   abline( h = plf( ketr, a = exp( coef( llVepd)[1]), 
+                                   b = coef( llVepd)[2]), col = 'red')
+})
+```
+
+#### Poisson ML Fit
+
+For a particular dislocation density $x$, the number of dislocations
+observed is given by the following (with variable drawn from the `MD2S5`
+data table): `256 * dscount * dsden / 2` which is equal to
+`dscount * dsmean / 2`. These values are usually integers (i.e., there
+were even numbers of dislocations), but as the dislocations grow, odd
+counts start showing up, so we will round the above results. The
+likelihood can incorporate zero responses densities too.
+
+```{r}
+Pll <- function( parms) {
+   #cat( parms)
+   with( MD2S5[ dsmean < dsmtr,], 
+         sum( -dpois( round( 256 * dscount * dsden / 2),
+                     256 * dscount * plf( ke.mean.rs, parms[1], parms[2])/2, log = TRUE)))
+   }
+Pll( cVepd)
+PML <- optim(  cVepd, Pll)
+PML
+```
+
+The maximum likelihood parameters are almost identical to the weighted
+`lm()` results. The ratio `cVepd / PML$par` is {`r cVepd/PML$par`} (as
+{a, b}). The predicted melting density is
+`r 100 * plf( ketr, a = PML$par['a'], b = PML$par['b'])`%.
+
+```{r}
+#| label: fig-ddvPML
+#| fig-cap: Poisson maximum likelihood line added to @fig-ddvT (in red), and new melting dislocation density (horizontal red line). 
+
+replayPlot( pltddvT)
+with( MD2S5, {
+   lines( x = ke.mean.rs, 
+          y = plf( ke.mean.rs, a = PML$par['a'], b = PML$par['b']), 
+          col = 'red')
+   abline( h = plf( ketr, a = PML$par['a'], b = PML$par['b']), col = 'red')
+})
+```
+
+Given how close these two estimates are to each other, there seem little
+point in pursuing the other two options.
+
+## $G_6$ Statistics
+
+We can also plot the estimated values of $\eta_6$ (which is the the
+power-law coefficient) and $\xi_6$, which is hte exponential estimate.
+Here is the plot of $\eta_6$:
+
+```{r}
+#| label: fig-eta6
+#| fig-cap: Log plot of $\eta_6$ estimated from power-law fits.  Red dashed verticle line is the transition temperature of 0.01309.  The horizontal dashed line is the critical value of $\eta_6 = 1/4$.
+
+plot( pow.Estimate ~ ke.mean.rs, data = MD2S5, log = 'y', 
+      xlab = "T", ylab = TeX( r"($\eta_6$)"))
+grid()
+abline( v = ketr, col = 'red', lty = 2)
+abline( h = 1/4, lty = 2)
+```
+
+The theory is that the transition from a hexatic fluid to an isotropic
+fluid occurs *at* the temperature where $\eta_6 = 1/4$ (@Nelson1979 eq.
+1.21). There might be something happening around $E_t = 0.013$, but
+there are no other transition points near that temperature.
+
+@fig-xi6 below show the estimates of $\xi_6$ vs temperature. When
+plotted verses total energy, there is no overlap.
+
+```{r}
+#| label: fig-xi6
+#| fig-cap: Log plot of values of $\xi_6$ estimated from exponential fits. Red dashed verticle line is the transition temperature of 0.01309. Note that since the fits are against an $r$ in units of the interparticle spaceing $a$, $\xi_6$ is in units of $a$.
+plot( exf.Estimate ~ ke.mean.rs, data = MD2S5, log = 'y', xlab = "T", 
+      ylab = TeX( r'($\xi_6(T)$)'))
+grid()
+abline( v = ketr, col = 'red', lty = 2)
+```
+
+According to @Nelson1979 (equation 1.10a), $\xi_6$ is a function of
+temperature:
+
+$$\xi_6(T) \sim exp \left( \frac{b}{(T - T_m)^{\bar{\nu}}} \right)$$ {#eq-xi6ot}
+
+Where $T_m$ is the hexatic fluid transition temperature, $b$ is a
+constant, and $\bar{\nu} = 0.36963$. This would only apply for
+$T > T_m$. The following will attempt to fit that equation. Note that we
+cannot include the point which defines the transition temperature (only
+those points greater than it).
+
+```{r}
+# require(nls2)
+xi6fit <- lm( lnxi6 ~ tp, data = MD2S5[ ke.mean.rs > ketr, 
+              .(lnxi6 = log( exf.Estimate), tp = (ke.mean.rs - ketr)^-0.36963)])
+summary( xi6fit)
+```
+
+The fit isn't great:
+
+```{r}
+#| label: fig-xi6fit
+#| fig-label: "Log plot of first fit of @eq-xi6ot. The verticle red dashed line is the transition temperature of 0.01309. Note the point which this line crosses is not included in the fit."
+with( data = MD2S5[ke.mean.rs >= ketr, .(xi6 = exf.Estimate, t = ke.mean.rs)], {
+  plot( xi6 ~ t,  log = 'y', xlab = "T", ylab = TeX( r'($\xi_6(T)$)'))
+  grid()
+  lines( x = t, 
+         y = exp( coef( xi6fit)[1]) + coef( xi6fit)[2] * (t  - ketr)^-0.36963)
+  })
+abline( v = ketr, col = 'red', lty = 2)
+```
+
+We can use this fit as our starting guesses for an `nls()` fit.
+
+```{r}
+#| label: xi6fitnls
+xi6fitnls <- nls( xi6 ~ a * exp( b * tp^-0.36963), weights = weights,
+               data = MD2S5[ ke.mean.rs > ketr, 
+                  .( xi6 = exf.Estimate, tp = ke.mean.rs - ketr, 
+                     weights = exf.Std.Error^-2)],
+               start = c( a = exp( coef( xi6fit)[1]),  b = coef( xi6fit)[2]),
+               algorithm = "plinear")
+#summary( xi6fitnls) # summary fails
+coef( xi6fitnls)
+```
+
+The `summary()` function fails, but the result is not a bad fit.
+
+```{r}
+#| label: fig-xi6fit2
+#| fig-cap: "Second fit of @eq-xi6ot. The verticle red dashed line is the transition temperature of 0.01309. Note the point which this line crosses is not included in the fit."
+with( data = MD2S5[ ke.mean.rs >= ketr, .(xi6 = exf.Estimate, t = ke.mean.rs, 
+                                          sig = exf.Std.Error)], 
+  {
+  plot( xi6 ~ t,  log = 'y', xlab = "T", ylab = TeX( r'($\xi_6(T)$)'))
+  grid()
+  arrows( x0 = t, y0 = xi6 - sig, y1 = xi6 + sig, angle = 90, code = 3, 
+          length = 0.1, col = 'darkgray')
+  # coef( xi6fitnls)[1] * exp( coef( xi6fitnls)[2] / (t  - ketr)^0.36963
+  lines( x = t, 
+    y = coef( xi6fitnls)[1] * exp( coef( xi6fitnls)[2] * (t  - ketr)^-0.36963))
+  })
+abline( v = ketr, col = 'red', lty = 2)
+```
+
+Attempts to mimic @Keim2007 using `nls()` to find the $T_m$ failed with
+a `singular matrix` error.
+
+The $G_6$ statistics are the regressions for linear, exponential, and
+power-law equations. Ideally, we would see a temperatures for all three
+fail (i.e., a constant), then power-law, then exponential regressions.
+Further reflection reveals that all of the regressions always generate a
+decent fit, and it is difficult to say numerically which is better.
+
+```{r}
+#| label: fig-g6statplt
+#| fig-cap: $G_6$ statistics alongside thermodynamic quanitities. From top to bottom, left to right, `lnxi6`, `lneta6`, and `lin.Estimate` are the relevant coefficients of the exponential ($\ln(\xi_6)$), power-law ($\ln(\eta_6$), and linear fits, respectively. `lnexfRSE`, `lnpowRSE`, and `lnlinRSE` are the logarithm of the respective RSEs. `lnFvald` is the logarithm of the diffusion regression F-Statistic, `rtv` the relative temperature variance, and `dsmean` is the mean dislocation count. The red vertical line is at the transition energy $E_t = 0.1441\epsilon$.
+pl1 <- melt( MD2S5[, `:=`(lnFvald = log(Fvald), lnpowRSE = log( pow.rse),
+                          lnexfRSE = log( exf.rse), 
+                          lneta6 = log( pow.Estimate), 
+                          lnxi6 = log( exf.Estimate),
+                          lnlinRSE = log( lin.rse))], 
+             id.vars = c( "run", "TE.mean.rs"), 
+             measure.vars = c( "lin.Estimate", "lnlinRSE", "dsmean", 
+                               "lneta6", "lnpowRSE", "rtv", 
+                               "lnxi6", "lnexfRSE", "lnFvald"))
+xyplot( value ~ TE.mean.rs | variable, data = pl1, xlab = "Total Energy pp",
+        scales = list( y = list( relation = "free")), layout = c(3,3),
+        panel = function(...) {
+           panel.grid( h = -1, v = -1)
+           panel.xyplot(...)
+           panel.abline( v = TEtr, col = 'red', lty = 2)})
+```
+
+@fig-g6statplt2 shows a little zoom into the transition region.
+
+```{r}
+#| label: fig-g6statplt2
+#| fig-cap: This shows @fig-g6statplt zoomed in a bit around the transition.
+xyplot( value ~ TE.mean.rs | variable, 
+        data = pl1[ TE.mean.rs %within% c( 0.135, 0.155),], 
+        xlab = "Total Energy pp",
+        scales=list( y = list( relation = "free")), layout = c( 3, 3),
+        panel=function(...) {
+           panel.grid( h = -1, v = -1)
+           panel.xyplot(...)
+           panel.abline( v = TEtr, col = 'red', lty = 2)})
+```
+
+## Significance of Estimates
+
+The RSEs need to be compared to determine which might be a better. The
+plot below (@fig-linpowexf) demonstrates that there is a small group of
+points at which the exponential fit is best.
+
+```{r}
+#| label: fig-linpowexf
+#| fig-cap: Log-log plot comparing the three $G_6$ fits. Points below the line are less than the power-law RSE.  Only some hot exponential fits beat the power-law. The "hot" points are those above the the transition energy of 0.1441.
+
+maxf = max( MD2S5[, max( lin.rse, pow.rse, exf.rse)])
+pntcol <- MD2S5[, ifelse( TE.mean.rs > TEtr, 'red', 'black')]
+plot( lin.rse ~ pow.rse, data = MD2S5, log = 'xy', 
+      ylab = "Linear or Exp. RSE", xlab = "Power Law RSE")
+      #xlim = c( 1, maxf), ylim = c( 1, maxf), col = pntcol)
+grid()
+abline( b = 1, a = 0)
+points( exf.rse ~ pow.rse, data = MD2S5, pch = 2, col = pntcol)
+legend( "topleft", legend = c( "Cold Lin", "Hot Lin", "Cold Exp", "Hot Exp"),
+        pch = c( 1, 1, 2, 2), col = c( 'black', 'red', 'black', 'red'))
+```
+
+We wouldn't expect the linear F-values to ever be more significant than
+the other two, as the linear case is useful when the slope is zero
+(which by definition makes significance low).
+
+We can try to replicate FIG. 4 in @Keim2007. Since the stats collected
+are from linear fits to logarithm transformed data, the residual sum of
+squares (the reduced $\chi^2$ is the weighted residual squared error;
+see *Wikipedia* [Reduced Chi-squared
+statistic](https://en.wikipedia.org/wiki/Reduced_chi-squared_statistic)).
+This is the RSE. @fig-Fratio shows the ratios of the power-law and
+exponential fit RSEs.
+
+```{r}
+#| label: fig-Fratio
+#| fig-cap: "Ratio of the power-law and exponential fits RSE. The verticle red dashed line is the melting temperature of 0.013085. The horizontal blue line is the at the ratio of one: points with a ratio above one mean the exponential fit is better."
+plot( (pow.rse / exf.rse) ~ ke.mean.rs, 
+      data = MD2S5[, beta := 1 / ke.mean.rs],
+      #ylim = c( 0.5, 4), 
+      xlab = "T", ylab = "RSEpow / RSEexf")
+grid()
+abline( v = ketr, col = 'red', lty = 2)
+abline( h = 1, col = 'blue')
+```
+
+@fig-Fratio shows that the power-law beats the exponential for
+everything below the melting temperature (where $G_6(r)$ really ought to
+be a constant). Nevertheless, the exponential function starts winning
+(though not consistently) right at the transition temperature.
+
+@fig-Estimates below show the values of the estimates as a function of
+temperature.
+
+```{r}
+#| label: fig-Estimates
+#| fig-cap: Log plot of the raw $G_6(r)$ coefficient estimates plotted by temperature.  The verticle red dashed line is the the transition energy of 0.01309. Note that the negative of the linear coefficients are plotted.
+plot( exf.Estimate ~ ke.mean.rs, data = MD2S5, xlab = "T",
+      ylab = "Raw Estimates", log='y', ylim = c( 0.001, 1000))
+grid()
+abline( v = ketr, lty = 2, col = 'red')
+points( pow.Estimate ~ ke.mean.rs, data = MD2S5, pch=2,col='red')
+points( -lin.Estimate ~ ke.mean.rs, data = MD2S5, pch=3,col='green')
+legend( "topright", legend = c( 'Exponential', 'Power-law', '-Linear'), 
+        pch = c( 1, 2, 3), col = c('black', 'red', 'green'))
+```
+
+# Specific Heat
+
+Following section 7.7 of @Reif1965 we can predict the specific heat of
+the solid form. In two dimensions, the sum in equation (7.7.1) would be
+over $2N_a$ instead of $3N_a$. The theory is that at low enough
+temperatures there are small lattice vibrations which are approximately
+like simple springs. The molar specific heat is given by
+
+$$E = \sum_{i=1}^{2N_a} \left( \frac{p_i^2}{2m} + 
+            \frac{1}{2}\kappa_i q_i^2 \right)$$
+
+where $N_a$ is Avogadro's number, $p_i$ is the momentum in the i'th
+particle dimension, $m$ is the particle mass, $\kappa_i$ is the elastic
+constant of the i'th particle dimension's spring, and $q_i$ is the
+displacement in the i'th particle dimension from its home position.
+Since both the potential and kinetic energy's are quadratic quantities,
+the equipartition theorem applies to both, and
+$p_i^2 / 2m = \kappa_iq_i^2 / 2 = kT / 2$, so that
+$E = 2N_a(kT / 2)\times2 = 2N_akT$.
+
+In our system, $m=1$, $k=1$, and the energies we use are per particle,
+so the specific heat is per particle.
+
+$$c_v = \left( \frac{\partial E}{\partial T} \right)_v = 2$$
+
+We can check this with our data. We need the dydx function:
+
+```{r}
+#| label: dydx
+
+dydx <- function( y, x, lag = 1) {
+   # find derivative over lag + 1 points
+   lx <- length( x)
+   stopifnot( length( y) == lx)
+   data <- data.table( x = x, y = y, keyby = x)
+   xm <- (data$x[ 1:(lx - lag)] + data$x[ (lag + 1):lx]) / 2 # midpoint of  sets
+   dydxfit <- function( i) { # get dy/dx from points i:(i + lag)
+      c <- coef( lm( y ~ poly( x, lag, raw = TRUE), # get poly coef
+                     data = data[ i:(i + lag)]))
+      dpc <- (1:lag) * tail( c, -1) # derivative of poly coeff
+      polyval( rev(dpc), xm[ i]) # evaluate poly at midpoint of data & return
+   }
+   dd <- vapply( 1:(lx - lag), dydxfit, 1.0)
+   list( dd=dd, xm = xm)
+}
+
+# test
+tx <- c(1, 4, 3, 3.5, 2, 5)
+ty <- tx^2
+(dd <- dydx(ty, tx, 2)) # Note the NaN in third position: 3,  5, NaN, 7, 9
+dd$dd - 2 * dd$xm
+rm( tx, ty, dd) # remove these variables
+```
+
+And here is the plot with a focus around two:
+
+```{r}
+#| label: fig-Cv1
+#| fig-cap: Numerical derivative of energy with respect to temperature. The verticle red dashed line is the transition temperature of $T = 0.01309$.
+setkey( MD2S5, ke.mean.rs)
+with( MD2S5, {
+   dedt <- dydx( TE.mean.rs, ke.mean.rs)
+   plot( x = dedt$xm, y = dedt$dd, panel.first = grid(),
+         ylim = c(0,4),
+         xlab="T", ylab = "Cv", main = "dE/dT, all points")
+})
+abline( v = ketr, lty = 2, col = 'red')
+abline( h = 2, lty = 2, col = 'black')
+```
+
+Below about $T = 0.008$, the specific heat is consistently two as
+predicted. Past the transition region, around $T = 0.018$, the specific
+heat returns to approximately two.
+
+{{< pagebreak >}}
+
+# References
+
+::: {#refs}
+:::
+
+{{< pagebreak >}}
+
+# R Session Info
+
+<button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOne">
+
+</button>
+
+:::: {#collapseOne .accordion-collapse .collapse}
+::: {}
+Quarto CLI Version: {{< version >}}
+
+```{r}
+sessionInfo()
+```
+:::
+::::
+

@@ -1,0 +1,1718 @@
+---
+title: "S5"
+author: "Phil Shea"
+date: last-modified
+format:
+  pdf:
+    fig-pos: 'H'
+    #cite-method: biblatex
+#mainfont: "Times New Roman"
+bibliography: "../Melting in Two D.bib"
+link-citations: true
+monofont: "Courier 10 Pitch"
+monofontoptions: 'Scale=0.8'
+execute:
+   freeze: auto
+editor_options:
+  markdown:
+    wrap: 72
+    references: 
+      location: block
+    canonical: true
+---
+
+```{r}
+#| label: init
+#| include: false
+#
+# NOTE: if the package has changed, it must be installed locally via:
+#
+# devtools::install("C:/Users/phils/Documents/DSP/MD/MD2RP")
+# (for Windows)
+# or
+#
+# devtools::install("/home/phil/MD/MD2RP")
+# (for linux)
+#
+# You probably have to re-start R after this.
+#
+# *****************************************************
+require( MD2RP)
+require( parallel)
+require( pracma)
+require( data.table)
+require( knitr)
+require( lattice)
+require( JuliaCall)
+num_cores <- detectCores() - 1
+options(digits=5)
+"%within%" <- function( vector, range) # define convenience function.
+   (vector > range[ 1]) & (vector < range[ 2])
+
+td <- "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+MD2DF.Q6 <- readRDS( "../MD2DF.Q6.RDS") # read in current data for analysis 
+```
+
+# Series 5
+
+The series 4 data appears valid, but suffers from energy growth that was
+not previously observed in series 1 though 3. Therefore, the series 4
+data will be re-run.
+
+## Velocity Verlet
+
+Added the velocity Verlet update to compensate for the larger time step.
+The `revtest()` function shows how effective that is in maintaining
+particle positions. Currently running MD2 version 1.5.9. For example:
+
+```{julia}
+#| eval: false
+
+julia> MD2.revtest( td, 21, "rf.", 1000, update = "OG", T=Float32, 
+                    tau = 0.0177737)
+   .
+   .
+   .
+RMS Particle Distance is 0.07083208, 
+ 3.718950345439551% of lattice spacing of 1.9046256137279147 
+ Maximum delta was 0.28849894 on particle 163.
+1.2843989f0
+
+julia>  rm.( glob("*.*", td))
+7-element Vector{Nothing}:
+ nothing
+   .
+   .
+   .
+ nothing
+
+julia> MD2.revtest( td, 21, "rfvv.", 1000, update = "VV", T=Float32, 
+                    tau = 0.0177737)
+   .
+   .
+   .
+RMS Particle Distance is 0.00014607886, 
+ 0.007669688860197647% of lattice spacing of 1.9046256137279147 
+ Maximum delta was 0.0004228177 on particle 30.
+5.4627926f-6
+```
+
+So the original Verlet algorithm had a mean particle distance of 3.72%
+of the lattice spacing, vs. 0.0077% for the velocity Verlet (both run in
+`Float32`). Note that the return value is the sum-of-squared distance,
+and the velocity Verlet is clearly in the realm of round off error for a
+`Float32`. @tbl-revtest shows the results.
+
+| Name     | 64/32 | $\delta t$ | RMS Dist. | \% Lattice | Max Part.  |
+|:---------|:-----:|:-----------|:----------|:-----------|:-----------|
+| F64      |  64   | 0.01       | 0.0142    | 0.749      | 0.04169    |
+| F64013   |  64   | 0.013      | 0.0366448 | 1.92       | 0.176      |
+| F640177  |  64   | 0.0177737  | 0.14517   | 7.6218     | 0.37303    |
+| F640177b |  64   | 0.0177737  | 0.14485   | 7.605      | 0.43965    |
+| F640177c |  64   | 0.0177737  | 0.2774    | 14.5665    | 1.163      |
+| F32      |  32   | 0.01       | 0.0170    | 0.89277    | 0.1067     |
+| F32013   |  32   | 0.013      | 0.08027   | 4.215      | 0.2677     |
+| F320177  |  32   | 0.0177737  | 0.19545   | 10.26      | 0.7719     |
+| rf       |  32   | 0.0177737  | 0.0708321 | 3.72       | 0.2885     |
+| rfvv     |  32   | 0.0177737  | 0.0001461 | 0.00767    | 0.00042282 |
+
+: `revtest()` results for `Float64` and `Float32` and three different
+time steps (runs on 2 October 2025). The last two runs were were
+executed on 4 November 2025, the last one with the velocity Verlet
+algorithm performing the position and velocity update. Note that
+different runs can have different results. All runs had an
+initialization temperature of $T=0.03$. {#tbl-revtest}
+
+## New Runs
+
+```{julia}
+#| eval: false
+
+hil@phil-XPS-8920:~$ julia -t8,1
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.12.1 (2025-10-17)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org release
+|__/                   |
+
+julia> cd("/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J")
+
+julia> td = "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+"/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> tlist = [i for i in 10:5:210]
+
+julia> append!( tlist, [i for i in 60:140])
+122-element Vector{Int64}:
+  10
+  15
+   ⋮
+ 138
+ 139
+ 140
+
+julia> tlist = sort( unique( tlist))
+105-element Vector{Int64}:
+  10
+  15
+   ⋮
+ 205
+ 210
+ 
+julia> MD2.revtest( td, 21, "rfvv.", 1000, update = "VV", T = Float32, 
+                    tau = 0.0177737) # force compile.
+
+julia> @time MD2.newruns( td, tlist, "S5.", 1000, 10000, 5, T=Float32, 
+                                 tau=0.0177737)
+    ⋮
+139.152671 seconds (336.41 M allocations: 13.642 GiB, 2.73% gc time, 
+                   556 lock conflicts, 0.00% compilation time)
+
+```
+
+Process the data:
+
+```{r}
+#| label: MD2DFR1
+system.time( MD2DF.R1 <- MD2DFfile( "../MD2DF.R1.RDS", td, "S5.*.scalars.csv",
+                                   df = MD2DF.Q6))
+```
+
+```         
+630  files found.
+   user  system elapsed 
+  0.210   0.037  13.703 
+```
+
+@fig-MDR1 shows the series scalars.
+
+```{r}
+#| label: fig-MDR1
+#| fig-cap: Plot of all the new S5 series scalars.
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2( MD2DF.R1[ series == "S5"], linethresh = 200)
+```
+
+These are the runs not yet valid.
+
+```{r}
+MD2DF.R1[!valid & series=="S5", run]
+```
+
+These runs had 51k steps, and we need to exceed 2M steps. If we do 50k
+step runs, we need about another 40.
+
+```{julia}
+#| eval: false
+
+julia> runs = vec(["S5.00084" "S5.00086" "S5.00091" "S5.00104" "S5.00114"
+                   "S5.00116" "S5.00118" "S5.00121" "S5.00122" "S5.00124"
+                   "S5.00130" "S5.00131" "S5.00132" "S5.00133" "S5.00136"
+                   "S5.00137" "S5.00140" "S5.00160" "S5.00180" "S5.00200"])
+20-element Vector{String}:
+ "S5.00084"
+   ⋮
+ "S5.00200"
+
+julia> @time MD2.filerun_thread( td, runs, 6, 50000, 42)
+1077.677320 seconds (2.65 G allocations: 90.461 GiB, 2.22% gc time, 
+                     294 lock conflicts, 0.17% compilation time)
+
+```
+
+The follow-up run was 20 files extended by 42 executions of 50k steps,
+for 42M total steps.
+
+```{r}
+#| label: MD2DFR2
+system.time( MD2DF.R2 <- MD2DFfile( "../MD2DF.R2.RDS", td, "S5.*.scalars.csv",
+                                   df = MD2DF.R1))
+```
+
+```         
+1470  files found.
+   user  system elapsed 
+  0.558   0.378 219.564
+  
+```
+
+That was over 3 1/ minutes to process the files.
+
+```{r}
+#| label: fig-MDR2
+#| fig-cap: Plot of all the new S5 series scalars.
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2( MD2DF.R2[ series == "S5"], linethresh = 200)
+```
+
+It is difficult to tell if the momentum is a problem. @fig-MR2 shows it
+is not.
+
+```{r}
+#| label: fig-MR2
+#| fig-cap: Max momentum of each series 5 run, plotted logarithmically.
+plotconfMD2( MD2DF.R2[series == "S5",], y="M.2.max.raw", linethresh = 200, 
+             log = "y", ylab = "Max Momentum")
+```
+
+We can compare the series 5 max momentum to the previous series
+(@fig-MR2b).
+
+```{r}
+#| label: fig-MR2b
+#| fig-cap: Max momentum of each series.
+with( MD2DF.R2, {
+   pch = as.factor( series)
+   #col = c("blue", "darkred")[pch]
+   plot( x = TE.mean.rs, y = M.2.max.raw, pch = as.integer(pch), 
+             col = as.integer(pch), panel.first = grid(),
+                log = "", ylab = "Max Momentum")
+   legend("topright", legend = unique(pch), col = as.integer(unique(pch)), 
+          pch=as.integer(unique(pch)))
+   })
+```
+
+The total energy is also more stable (see @fig-MR2c). As a reminder,
+series 2 had a step in the potential energy (the energy at a range of
+`rskn = 3.5` was not subtracted from the potential energy equation). The
+energy would tend to grow, especially as a ring of particles existed
+just outside the `rskn` range when the particles were in their minimum
+PE positions. This was fixed before the `S3` runs. Series 4, which
+closely duplicated the 1980 work (`Float32` precision and 0.0177737 time
+step), suffered from energy growth not seen in 1980. This was due to
+longer runs than were possible in 1980 (80k step runs were considered
+quite long; series 4 used 4M step runs).
+
+```{r}
+#| label: fig-MR2c
+#| fig-cap: Total energy range of each series. Series 5 has very little growth.
+with( MD2DF.R2, {
+   pch = as.factor( series)
+   #col = c("blue", "darkred")[pch]
+   plot( x = TE.mean.rs, y = TE.max.raw - TE.min.raw, pch = as.integer(pch), 
+             col = as.integer(pch), panel.first = grid(),
+                log = "", ylab = "TE Range")
+   legend("topright", legend = unique(pch), col = as.integer(unique(pch)), 
+          pch=as.integer(unique(pch)))
+   })
+```
+
+@fig-PvTR2 shows the series 5 isochor.
+
+```{r}
+#| label: fig-PvTR2
+#| fig-cap: Pressure vs. Temperature, with standard deviation and total rnge lines.
+plotconfMD2( MD2DF.R2[series == "S5",], x = "ke.mean.rs", y = "Pressure",
+             linethresh = 200, main = "Series 5", xlab = "T")
+```
+
+On 10 November 2025, I was cleaning up before running a `revtest()` and
+I executed the *Julia* command `rm.( glob( "*.*", td))` and,
+unfortunately, `td` was defined for data i.e., `.../MD/Data/1980/`), not
+testing (`.../MD/dev/MD2J/test/testtemp/`), so all collected raw data
+was deleted. A few feeble attempts at restoring the data were made, to
+no avail. Only the `S1` and `S2` data were backed up, so `S3`, `S4`, and
+`S5` raw data are lost. The collected averages still exist in the MD2
+data frames, but there is no ability to back and look at a temperature
+or Nelson-Halperin order parameter trajectories.
+
+# Series 5b
+
+I created the following *Julia* script to make starting a new *Julia*
+session easy and repeatable.
+
+```{julia}
+#| eval: false
+cd("/media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J")
+pwd()
+datadir = "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+testdir = joinpath( pwd(), "test/testtemp")
+include( joinpath( pwd(), "src/MD2.jl"))
+println( "Working Directory: $(pwd())")
+println( "Data Directory: $datadir")
+println( "Test Directory: $testdir")
+using .MD2
+using StaticArrays
+using Plots
+using Glob
+using Statistics
+using LinearAlgebra
+using Printf
+using OhMyREPL
+```
+
+The file is stored in `"/home/phil/openMD2.jl"`. We need to recreate the
+series 5 data, and here it is.
+
+```{julia}
+#| eval: false
+phil@phil-XPS-8920:~$ julia -t8,1
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.12.1 (2025-10-17)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org release
+|__/                   |
+
+julia> include("openMD2.jl")
+MD2 included.
+Working Directory: /media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J
+Data Directory: /media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980
+Test Directory: /media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testtemp
+
+julia> tlist = [i for i in 10:5:210]
+41-element Vector{Int64}:
+  10
+  15
+   ⋮
+ 205
+ 210
+
+julia> append!( tlist, [i for i in 60:140])
+122-element Vector{Int64}:
+  10
+  15
+   ⋮
+ 139
+ 140
+
+julia> tlist = sort( unique( tlist))
+105-element Vector{Int64}:
+  10
+  15
+   ⋮
+ 205
+ 210
+
+julia> @time MD2.newruns( datadir, tlist, "S5b.", 1000, 5000, 10, T=Float32,
+                          tau=0.0177737)
+
+173.326846 seconds (456.82 M allocations: 22.041 GiB, 2.10% gc time, 
+                    1761 lock conflicts, 52.73% compilation time: 
+                       12% of which was recompilation)
+
+```
+
+And we process that data.
+
+```{r}
+#| label: MD2DFR3
+system.time( MD2DF.R3 <- MD2DFfile( "../MD2DF.R3.RDS", td, "S5b.*.scalars.csv",
+                                   df = MD2DF.R2))
+```
+
+```         
+1155  files found.
+   user  system elapsed 
+  0.149   0.029  12.789 
+```
+
+```{r}
+#| label: fig-MDR3
+#| fig-cap: Plot of all the new `S5b` series scalars.
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2( MD2DF.R3[ series == "S5b"], linethresh = 200)
+```
+
+```{r}
+MD2DF.R3[!valid & series=="S5b", run]
+```
+
+As before, we'll do 42 more 50k step runs. Since there was a single
+1,000 step initialization run,
+
+```{julia}
+#| eval: false
+julia> runs = vec( ["S5b.00087" "S5b.00101" "S5b.00112" "S5b.00114" "S5b.00117"
+                    "S5b.00119" "S5b.00121" "S5b.00123" "S5b.00124" "S5b.00125"
+                    "S5b.00126" "S5b.00127" "S5b.00128" "S5b.00130" "S5b.00131"
+                    "S5b.00132" "S5b.00133" "S5b.00135" "S5b.00136" "S5b.00137"
+                    "S5b.00139" "S5b.00175"])
+22-element Vector{String}:
+ "S5b.00087"
+ "S5b.00101"
+ ⋮
+ "S5b.00139"
+ "S5b.00175"
+
+julia> @time MD2.filerun_thread( datadir, runs, 11, 50000, 42)
+1171.125701 seconds (3.51 G allocations: 131.914 GiB, 2.11% gc time, 
+                     209 lock conflicts, 0.00% compilation time)
+
+```
+
+Process the data.
+
+```{r}
+#| label: MD2DFR4
+system.time( MD2DF.R4 <- MD2DFfile( "../MD2DF.R4.RDS", td, "S5b.*.scalars.csv",
+                                    df = MD2DF.R3))
+```
+
+That originally took almost five minutes.
+
+```         
+2079  files found.
+   user  system elapsed 
+  0.708   0.400 295.965 
+```
+
+```{r}
+#| label: fig-MDR4
+#| fig-cap: Plot of all the new `S5b` series scalars.
+op <- par( mfrow = c(5, 3), mar = c(3, 3, 0.5, 0.5), tcl = -0.3,
+mgp = c(1.7, 0.4, 0))
+plotAllMD2( MD2DF.R4[ series == "S5b"], linethresh = 200)
+```
+
+While we can only look into series `S5b` in detail, there is no reason
+to not group all of the `S5` and `S5b` together. There are 210 runs.
+
+```{r}
+#| label: fig-PvTR4
+#| fig-cap: Pressure vs. Temperature, with standard deviation and total range lines.  The standard deviation around each point is quite small.
+plotconfMD2( MD2DF.R4[grepl( "S5", series),], x = "ke.mean.rs", y = "Pressure",
+             linethresh = 400, main = "Series 5", xlab = "T")
+```
+
+## Type Error in *Julia* `sqrt()`
+
+Noticed an error in how numbers were typed in *Julia*, whenever the
+expression `sqrt(c)` appears where `c` was an integer constant. *Julia*
+renders these as `Float64` values, even if the rest of the calculation
+is `Float32`, and the `Foat64` would propagate. This was likely not a
+major problem, but fixed it in MD2 version 1.6.3.
+
+# Diffusion Runs
+
+The code below will create a list that will be more-or-less easy to
+paste into a *Julia* session, along with the run list. The *Julia*
+`filerun_thread()` function needs the run-name and the last `*.jld2`
+file number.
+
+```{r}
+#| label: difflist
+#| eval: false
+drn <- MD2DF.R4[ series == "S5b", run] # get runs
+cat( '["', # create runs string
+     paste( drn, collapse = '", "'), '"] \n', sep = "")
+# Next line searches td for each run, grabs last, and extracts execution number
+lfn <- strsplit( sapply( drn, \(fn) last( list.files( td, 
+                                             paste(fn, "*.jld2", sep = ".")))),
+                  "[.]")
+
+as.integer(sapply( seq_along( lfn), \(i) lfn[[i]][3]))
+```
+
+Original run of the above (on 17 November 2025)
+
+```         
+["S5b.00010", "S5b.00015", "S5b.00020", "S5b.00025", "S5b.00030", "S5b.00035",
+"S5b.00040", "S5b.00045", "S5b.00050", "S5b.00055", "S5b.00065", "S5b.00061",
+"S5b.00062", "S5b.00060", "S5b.00067", "S5b.00063", "S5b.00066", "S5b.00064",
+"S5b.00069", "S5b.00068", "S5b.00071", "S5b.00076", "S5b.00072", "S5b.00074",
+"S5b.00077", "S5b.00075", "S5b.00078", "S5b.00081", "S5b.00079", "S5b.00082",
+"S5b.00070", "S5b.00073", "S5b.00083", "S5b.00086", "S5b.00084", "S5b.00080",
+"S5b.00087", "S5b.00090", "S5b.00088", "S5b.00094", "S5b.00085", "S5b.00089",
+"S5b.00091", "S5b.00095", "S5b.00092", "S5b.00093", "S5b.00100", "S5b.00097",
+"S5b.00102", "S5b.00098", "S5b.00099", "S5b.00106", "S5b.00104", "S5b.00096",
+"S5b.00103", "S5b.00107", "S5b.00109", "S5b.00108", "S5b.00111", "S5b.00105",
+"S5b.00101", "S5b.00114", "S5b.00113", "S5b.00112", "S5b.00110", "S5b.00120",
+"S5b.00117", "S5b.00135", "S5b.00121", "S5b.00119", "S5b.00128", "S5b.00132",
+"S5b.00123", "S5b.00116", "S5b.00125", "S5b.00122", "S5b.00126", "S5b.00130",
+"S5b.00115", "S5b.00118", "S5b.00131", "S5b.00133", "S5b.00127", "S5b.00136",
+"S5b.00124", "S5b.00140", "S5b.00134", "S5b.00129", "S5b.00145", "S5b.00137",
+"S5b.00138", "S5b.00139", "S5b.00155", "S5b.00150", "S5b.00165", "S5b.00160",
+"S5b.00180", "S5b.00170", "S5b.00195", "S5b.00175", "S5b.00190", "S5b.00185",
+"S5b.00205", "S5b.00200", "S5b.00210"] 
+  [1] 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11
+ [25] 11 11 11 11 11 11 11 11 11 11 11 11 53 11 11 11 11 11 11 11 11 11 11 11
+ [49] 11 11 11 11 11 11 11 11 11 11 11 11 53 53 11 53 11 11 53 53 53 53 53 53
+ [73] 53 11 53 11 53 53 11 11 53 53 53 53 53 11 11 11 11 53 11 53 11 11 11 11
+ [97] 11 11 11 53 11 11 11 11 11
+```
+
+These are pasted into the *Julia* session as `names` and `runs`. The
+names need commas, the runs need only spaces; neither tolerate returns.
+Here is the *Julia* run:
+
+```{julia}
+#| eval: false
+phil@phil-XPS-8920:~$ julia -t8,1
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.12.1 (2025-10-17)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org release
+|__/                   |
+
+julia> include("openMD2.jl")
+Working Directory: /media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J
+Data Directory: /media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980
+Test Directory: /media/phil/Original/Users/phils/Documents/DSP/MD/dev/MD2J/test/testtemp
+
+julia> include("./src/MD2.jl")
+MD2 included.
+Main.MD2
+
+julia> names = ["S5b.00010", "S5b.00015", "S5b.00020", "S5b.00025", "S5b.00030",
+                "S5b.00035", "S5b.00040", "S5b.00045", "S5b.00050", "S5b.00055",
+                "S5b.00065", "S5b.00061", "S5b.00062", "S5b.00060", "S5b.00067",
+                "S5b.00063", "S5b.00066", "S5b.00064", "S5b.00069", "S5b.00068",
+                "S5b.00071", "S5b.00076", "S5b.00072", "S5b.00074", "S5b.00077",
+                "S5b.00075", "S5b.00078", "S5b.00081", "S5b.00079", "S5b.00082",
+                "S5b.00070", "S5b.00073", "S5b.00083", "S5b.00086", "S5b.00084",
+                "S5b.00080", "S5b.00087", "S5b.00090", "S5b.00088", "S5b.00094",
+                "S5b.00085", "S5b.00089", "S5b.00091", "S5b.00095", "S5b.00092",
+                "S5b.00093", "S5b.00100", "S5b.00097", "S5b.00102", "S5b.00098",
+                "S5b.00099", "S5b.00106", "S5b.00104", "S5b.00096", "S5b.00103",
+                "S5b.00107", "S5b.00109", "S5b.00108", "S5b.00111", "S5b.00105",
+                "S5b.00101", "S5b.00114", "S5b.00113", "S5b.00112", "S5b.00110",
+                "S5b.00120", "S5b.00117", "S5b.00135", "S5b.00121", "S5b.00119",
+                "S5b.00128", "S5b.00132", "S5b.00123", "S5b.00116", "S5b.00125",
+                "S5b.00122", "S5b.00126", "S5b.00130", "S5b.00115", "S5b.00118",
+                "S5b.00131", "S5b.00133", "S5b.00127", "S5b.00136", "S5b.00124",
+                "S5b.00140", "S5b.00134", "S5b.00129", "S5b.00145", "S5b.00137",
+                "S5b.00138", "S5b.00139", "S5b.00155", "S5b.00150", "S5b.00165",
+                "S5b.00160", "S5b.00180", "S5b.00170", "S5b.00195", "S5b.00175",
+                "S5b.00190", "S5b.00185", "S5b.00205", "S5b.00200", "S5b.00210"]
+
+105-element Vector{String}:
+ "S5b.00010"
+ "S5b.00015"
+ ⋮
+ "S5b.00200"
+ "S5b.00210"
+
+julia> runs = vec( [11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 
+                    11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 53 11 11 11 
+                    11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 
+                    53 53 11 53 11 11 53 53 53 53 53 53 53 11 53 11 53 53 11 11 
+                    53 53 53 53 53 11 11 11 11 53 11 53 11 11 11 11 11 11 11 53 
+                    11 11 11 11 11])
+
+105-element Vector{Int64}:
+ 11
+ 11
+  ⋮
+ 11
+ 53
+ 11
+ 11
+ 11
+ 11
+ 11
+
+julia> @time MD2.filerun_thread( datadir, names, runs, 5000, 20, 
+                                 diffFlag = true)
+
+366.068064 seconds (856.33 M allocations: 39.481 GiB, 2.17% gc time, 
+                    4495 lock conflicts, 21.01% compilation time: 14% of which 
+                    was recompilation)
+
+```
+
+Twenty executions of 5k steps for each of 105 runs for a total of
+10,500k steps in a little over 14 minutes, for about 0.082s/1k
+execution. That's much slower, but there was a lot of compilation, and
+oddly a lot of re-compilation. The code below will update the runs in
+the database.
+
+```{r}
+#| label: MD2DFR5
+system.time( MD2DF.R5 <- MD2DFfile( "../MD2DF.R5.RDS", td, "S5b.*.scalars.csv",
+                                    df = MD2DF.R4))
+
+```
+
+The original run took almost 5m.
+
+```         
+4179  files found.
+   user  system elapsed 
+  1.151   1.507 287.742 
+```
+
+@fig-R5ke show the kinetic energy vs total energy of the resulting data.
+It can be seen that a few runs that had been valid are now not valid.
+
+```{r}
+#| label: fig-R5ke
+plotconfMD2( df = MD2DF.R5[ series == "S5b", ], y = "ke",
+             linethresh = 300)
+```
+
+Following the procedure used in
+[FinalDiffusion.pdf](FinalDiffusion.pdf#Diffusion), we need to define
+and run some functions.
+
+```{r}
+#| label: difffuncs
+read_diff <- function( td, runname) { 
+   # returns a data.table with diffusion data
+   # td is the test data directory
+   # runname is a filename ala list.files( td, glob2rx( "*.diff.txt"))
+   filename <- list.files( td, runname, full.names = TRUE)
+   #print( filename)
+   dd <- data.table::fread( filename)
+   nrdd <- nrow( dd)
+   ddcols <- colnames( dd)
+   timecols <- ddcols[ seq.int( from=4, to=length( ddcols), by=3)]
+   dscols   <- ddcols[ seq.int( from=5, to=length( ddcols), by=3)]
+   dmxcols  <- ddcols[ seq.int( from=6, to=length( ddcols), by=3)]
+   dd[, row := 1:nrdd] # adds row number to show time sequence of executions
+   dd[, run := rep( runname, nrdd)] # put run name in each row
+   reshape( dd, list( timecols, dscols, dmxcols),
+            v.names=c("Time", "D2", "Dmax"), timevar="group", idvar="row", 
+            drop=c("time","d^2", "max d^2"), direction="long")
+} # end read_diff
+
+fitdiff <- function( r, diffdata, plot=FALSE, weights = NULL, verbose = FALSE) { 
+   # r is the run id as a string.
+   # diffdata is a data.table with fields Time, run, d2mn (mean of the D2 data),
+   #     Other fields are ignored.
+   dd <- diffdata[ r == run,]
+   # print( nrow(dd))
+   maxT <- max( dd$Time)
+   maxd <- max( dd$d2mn)
+   if (!is.null(weights)) weights = 1 / dd$d2sd^2
+   
+   #lm0 <- lm( d2mn ~ Time - 1, data = dd)
+   lm1 <- lm( d2mn ~ Time, data = dd, weights = weights)
+   #lm2 <- lm( d2mn ~ poly( Time, 2), data = dd)
+ 
+   if (plot) {
+      newT <- data.frame( Time =c( 0, dd$Time)) # Predict value at Time = 0
+      pred.w.plim <- predict( lm1, newT, interval = "prediction")
+      pred.w.clim <- predict( lm1, newT, interval = "confidence")
+      plot( d2mn ~ Time, data = dd, xlim = c( 0, maxT), ylim = c(0, maxd), 
+              main = r, xlab = 'Time', ylab = expression( r^2))
+      grid()
+      if (!is.null( dd$d2sd)) 
+         arrows( dd$Time, dd$d2mn - dd$d2sd, dd$Time, dd$d2mn + dd$d2sd,
+                 length = 0.05, angle = 90, code = 3)
+      matplot(newT, cbind( pred.w.clim, pred.w.plim[, -1]), 
+              col = c( 1, 2, 2, 3, 3), lty = c(1,2,2,3,3), type = "l", 
+              add = TRUE)
+      #abline( lm1)
+      abline( h = mean( dd$d2mn), lty = 4, col = 4)
+      legend( x = 'bottomright',  pch = c(1, NA, NA, NA, NA), 
+              lty = c(0, 1, 2, 3, 4), col = c( 1, 1, 2, 3, 4),
+              legend = c("Measurements", 'Regression Line', "Conf. Interval",                            'Pred. Interval', 'Mean'))
+   }
+   if (verbose) {
+      #print( summary( lm0))
+      print( summary( lm1))
+      #print( summary( lm2))
+   }
+   nr <- nrow( dd)
+   mod <- summary( lm1)
+   coeff <- unname( mod$coefficients[ "Time", c( 'Estimate', 'Std. Error')])
+   t <- mod$fstatistic
+   Fpvalue <-  stats::pf( t['value'], t['numdf'], t['dendf'], lower.tail=FALSE)
+   data.table::data.table( run = r, nrd = nr, Estimated = coeff[1], 
+      Std.Errord = coeff[2], r.squaredd = mod$r.squared, 
+      Fvald =  unname( t['value']), Fpvalued = unname( Fpvalue), 
+      dfd = t['dendf'])
+} # end fitdiff
+```
+
+The code below will find all the diffusion execution files, run the
+diffusion estimation program `diff_files()`, and create a data table of
+the result.
+
+```{r}
+#| label: ddb
+#| warning: false
+# warnings are generated because the columns of the diff files have no names.
+
+diff_files <- list.files( td, glob2rx( "S5b*.diff.txt"))
+# call read_diff on each element of diff_files, and rbind into big data.table
+ddb <- data.table::rbindlist( lapply( diff_files, 
+                                      function(fn) read_diff( td, fn)))
+head(ddb)
+diffdata <- ddb[, .(d2mn = mean( D2), d2sd = sd( D2), maxD = max( Dmax)), 
+                by=.( Time, run)]
+# next line uses a regex to replace last 9 characters with nothing
+diffdata[, run := gsub( '.{9}$', "", run)] # remove the ".diff.txt" part
+head( diffdata, n=20)
+nrow( diffdata)
+```
+
+As before, each row is a time and the diffusion estimate at that time.
+There are ten rows for each file. Here is an example of one run's data:
+
+```{r}
+fitdiff( "S5b.00150", diffdata, plot = TRUE, verbose = TRUE)
+```
+
+This block will use `fitdiff()` to estimate the slope of the line and
+add the data to the current `MD2DF` file, thus creating and saving a new
+file.
+
+```{r}
+#| label: MD2DFS
+#| eval: false
+#| # run this by hand to save a new file.
+difflist <- unique( diffdata$run)
+diffproc <- data.table::rbindlist( lapply( difflist, fitdiff, diffdata))
+rm( difflist)
+MD2DF.S = copy(MD2DF.R5)
+MD2DF.S[ diffproc, 
+         `:=`( nrd = i.nrd, Estimated = i.Estimated, Std.Errord = i.Std.Errord, 
+               r.squaredd = i.r.squaredd, Fvald = i.Fvald, 
+               Fpvalued = i.Fpvalued, dfd = i.dfd), 
+         on="run"]
+saveRDS( MD2DF.S, file = "../MD2DF.S.RDS")
+rm( diffproc, ddb, diffdata)
+```
+
+```{r}
+#| label: readMD2DFS
+#| include: false
+# this will execute when rendering, thus reading in the file saved above.
+MD2DF.S <- readRDS( "../MD2DF.S.RDS")
+```
+
+```{r}
+#| label: fig-D2vT
+#| fig-cap: Difffusion estimate vs. temperature.  As before, red points are those not considerd valid (here the `Fval` must be greater than 10; Validity is the reverse for diffusion, as correlation means diffusion). The blue vertical line is the start of diffusion for the series S3 `Init` points previously measured ($T = 0.01283$).  The blue horizontal line is the threshold where the root-mean-square diffusion distance after $T = 50\tau$ (the maximum time over which diffusion was estimated in series `S3`; `S5b` estsimation extended to 88.869\tau - both were estimated with 20 executions of 5,000 steps) is equal to the mean particle distance $a = \sqrt{2 \pi / \sqrt{3}}$.
+ 
+#pchlu <- c( Init = 1, Heat = 0, Cool = 2) # pch lookup
+with( MD2DF.S[series == "S5b",], {
+   plotconf( y = Estimated/4, x = ke.mean.rs, sd = Std.Errord, linethresh = 200,
+             # Valid is the reverse for diffusion, as good correlation 
+             # means diffusion. 
+      Fval = Fvald, vpch = 2, ipch = 1, icol = "black", vcol = "darkred",
+      xlab = "T", ylab = "D", maxf = 10, # pch =  pchlu[ itype],
+      main = "D vs Temperature for S5b Runs")
+   }) # with( MD2DF.S ...
+abline( v = 0.01283, col = "blue")
+abline( h =  (2 * pi / sqrt(3)) / (4 * 50), col = 'blue')
+#legend( "bottomright", legend = names( pchlu), pch = pchlu)
+```
+
+We can combine the `S3` and `S5b` diffusion data into a single graph
+(@fig-alldiff).
+
+```{r}
+#| label: fig-alldiff
+#| fig-cap: All collected diffusion data. Series by color as indicated in legend. Very small values are often negative, and as the absolute value is plotted, these are indicated here by triangles. The blue vertical line is the start of diffusion for the series S3 `Init` points previously measured ($T = 0.01283$). The blue horizontal line is the threshold where the root-mean-square diffusion distance after $T = 50\tau$ (the maximum time over which diffusion was estimated in series `S3`; `S5b` estsimation extended to 88.869\tau - both were estimated with 20 executions of 5,000 steps).
+with( MD2DF.S[ !is.na(nrd),], {
+   sf <- as.factor( series)
+   pch <- ifelse( Estimated < 0, 2, 1)
+   plot( x = ke.mean.rs, y = abs( Estimated/4), pch = pch, col = sf, 
+         panel.first = grid(), log = 'y', main = "All Diffusion Data",
+         xlab = "Temperature", ylab = "D")
+   legend( "bottomright", legend = unique(sf), col=1:length(sf), pch=1)
+})
+abline( v = 0.01283, col = "blue")
+abline( h =  (2 * pi / sqrt(3)) / (4 * 50), col = 'blue')
+```
+
+We really only have diffusion data from series three and five (`S3b` is
+really part of series 3).
+
+```{r}
+#| label: fig-allFval
+#| fig-cap: Diffusion across all series plotted against the F-Value of the regression (in log scale).  Some of the very small values of D are negative, and these are noted by triangles. The verticle blue line is the F-value of 10.
+with( MD2DF.S[ !is.na(nrd),],{
+   sf <- as.factor( series)
+   pch <- ifelse( Estimated < 0, 2, 1)
+   plot( x = Fvald, y = Estimated/4, pch = pch, col = sf, 
+         panel.first = grid(), log = 'x', main = "All Diffusion Data",
+         xlab = "D Fval", ylab = "D")
+   legend( "topleft", legend = unique(sf), col=1:length(sf), pch=1)
+})
+abline( v = 10, col = "blue")
+abline( h =  10, col = 'blue')
+```
+
+We have been using an F-value of about 10 as the deciding factor for
+diffusion. Since the diffusion is estimated via 10 points, and both an
+intercept and slope are estimated, so the statistical significance of a
+fit is an F distribution with 1 and 8 degrees of freedom. It may be
+evaluated as `100 * pf( Fvald, 1, 8, lower.tail = FALSE)` (which
+evaluates to `r100 * pf( 10, 1, 8, lower.tail = TRUE)`% significance).
+1% and 5% significance levels are between F-Values of
+`r c( qf( 0.05, 1, 8, lower.tail=FALSE), qf( 0.01, 1, 8, lower.tail=FALSE))`.
+
+Finally, we want to look at the spectral width of the new sample rates
+(@fig-spec).
+
+```{r}
+#| label: fig-spec
+#| fig-cap: The two-sided spectral width of 99.5% of the energy of by step kinetic energy.
+with( MD2DF.S[TE.mean.rs < 0.2], {
+   ser=as.integer( as.factor( series))
+   plot( 100*specwidth ~ TE.mean.rs, log="x", pch = ser, xlab = "Total Energy",
+         ylab = "Spectral Occupancy %", col = ser)
+   grid()
+   lpch = 1:nlevels( as.factor( series)) # legend pch
+   legend( x = "bottomleft", pch = lpch,
+           legend =  levels( as.factor( series)), col = lpch)
+})
+```
+
+The two-sided full spectral width $F_s$ is the sample rate (reciprocal
+of the time step), and as the kinetic energy is a purely real value,
+we'd be correct to say that the spectrum only goes to $F_s/2$. For
+series 2 & 3, $F_s = 100/\tau$ ($\Delta t = 0.01 \tau$), and the
+spectral occupancy was between 2.5 and 3%, or about $P$. For series 4
+and 5, $F_s = 56.263/ \tau$ ($\Delta t = 0.0177737 \tau$). @fig-spec2
+below shows this adjustment.
+
+```{r}
+#| label: fig-spec2
+#| fig-cap: The two-sided spectral width of 99.5% of the energy of by step kinetic energy.
+
+MD2DF.S[ , swoot := 100 * specwidth]
+MD2DF.S[ series %in% c("S4", "S5", "S5b"), swoot := specwidth / 0.0177737]
+with( MD2DF.S[TE.mean.rs < 0.2], {
+   ser=as.integer( as.factor( series))
+   plot( swoot ~ TE.mean.rs, log="x", pch = ser, xlab = expression( epsilon),
+         ylab = expression( 1 / tau), col = ser, 
+         main = "99.5% Spectral Occupancy")
+   grid()
+   lpch = 1:nlevels( as.factor( series)) # legend pch
+   legend( x = "bottomleft", pch = lpch,
+           legend =  levels( as.factor( series)), col = lpch)
+})
+```
+
+It is unknown why series 2 (and 2b) had somewhat lower occupancy, but as
+that code has aged out of relevancy, we will not look into it further.
+
+# Detecting a Transition
+
+The current literature [@Gruber2025 fig. 1; @Deutschlander2013 fig. 1]
+discusses the rate of decay of the bond orientation order parameter
+given by $G_6(r) = |\langle \psi^*(\vec{r}) \psi(\vec{0}) \rangle|$. Our
+thought had been, without ever deriving it [@Halperin1978], that in a
+small $16 \times 16$ particle system such as ours the Nelson-Halperin
+order parameter $\langle \psi_6 \rangle$ would simply not decay at the
+start of melting. That is, when long-range orientational order remained,
+it would be measurable in $\psi_6$. As a reminder, `psiabs` is
+$\langle |\psi_6| \rangle$ (the average of the magnitudes) and `psiavg`
+is $|\langle \psi_6 \rangle|$ (the magnitude of the complex average).
+
+We need to detect the first order phase change, and compare that to the
+loss of long range order.
+
+## Specific Heat via First Difference
+
+As we move forward, we are going to ignore the series 2 data, as it had
+the potential energy step at `rskn`, and the series 4 data, as it had
+non-constant total energy. The specific heat at constant volume is
+defined by
+
+$$
+C_v = \frac{1}{\nu}\frac{\delta E}{\delta T}
+$$
+
+where $\nu$ is the quantity of the substance (moles in real substances,
+number of particles for us). Since `TE.mean.rs` and `ke.mean.rs` are
+both per particle averages, we may use them directly. In computing
+specific heat via the first difference, we want to combine series 3 and
+3b together, and series 5 and 5b together. We need to retain the `5b`
+designation though, in case we want to examine runs in detail, so we
+will create a `newSeries` column that will allow the `series` column to
+remain the same.
+
+```{r}
+#| label: S2
+MD2DF.S2 <- MD2DF.S[ !grepl( "S2", series) & series != "S4", ] # Drop S2,S2b,S4
+#MD2DF.S2[ series == "S3b", series := "S3"]
+
+MD2DF.S2[ , rv := ke.sd.rs / ke.mean.rs] # Create relative variance column
+MD2DF.S2[ is.na(hseries), `:=`(hseries = "Init", itype = "Init")] # Init S3,5,5b
+MD2DF.S2[ , newSeries := fifelse( hseries == "Init", series,
+                             paste( series, substr( hseries, 3, 4), sep = ""))]
+MD2DF.S2[ newSeries == "S3b", newSeries := "S3"]
+MD2DF.S2[ newSeries == "S5b", newSeries := "S5"]
+setorder( MD2DF.S2, TE.mean.rs)
+saveRDS( MD2DF.S2, file = "../MD2DF.S2.RDS") # save for future use.
+```
+
+We need to recreate and apply the $dy/dx$ function.
+
+```{r}
+#| label: dydx
+
+dydx <- function( y, x, lag = 1) {
+   # find derivative over lag + 1 points
+   lx <- length( x)
+   stopifnot( length( y) == lx)
+   data <- data.table( x = x, y = y, keyby = x)
+   xm <- (data$x[ 1:(lx - lag)] + data$x[ (lag + 1):lx]) / 2
+   ym <- (data$y[ 1:(lx - lag)] + data$y[ (lag + 1):lx]) / 2
+   # midpoint of eval sets
+   dydxfit <- function( i) { # get dy/dx from points i:(i + lag)
+      c <- coef( lm( y ~ poly( x, lag, raw = TRUE), # get poly coef
+                     data = data[ i:(i + lag)]))
+      dpc <- (1:lag) * tail( c, -1) # derivative of poly coeff
+      polyval( rev(dpc), xm[ i]) 
+      # evaluate polynomial at midpoint of data & return
+   }
+   dd <- vapply( 1:(lx - lag), dydxfit, 1.0)
+   list( dd=dd, xm = xm, ym = ym)
+}
+
+# test
+tx <- c(1, 4, 3, 3.5, 2, 5)
+ty <- tx^2
+(dd <- dydx(ty, tx, 2))
+dd$dd - 2 * dd$xm
+rm( tx, ty, dd) # remove these variables
+```
+
+Now we need to apply the function by the new series variable.
+@fig-Cvbyhs below shows the result of that computation.
+
+```{r}
+#| label: fig-Cvbyhs
+#| warning: false # log will produce some NaNs
+#| fig-cap: First difference computation of the specific heat for each of the initialiation groups.
+#| fig-height: 6.5
+#| fig-width: 6.5
+Cvbyhs <- by( MD2DF.S2[ , .(ke.mean.rs, TE.mean.rs, series = newSeries)], 
+              MD2DF.S2[ , newSeries], 
+              with, c( series = unique( substr( series, 1, 2)), 
+                       dydx( TE.mean.rs, ke.mean.rs)))
+# above returns a list with 11 items: one for each series
+# Note that the function 'by' calls is simply 'with'.
+# The `dydx()` call is passed as an extra parameter to `with`
+# Each series call results in a `with( df, c( series, dd, xm))`
+# The following will create a table of Log(Cv) values.
+CvTable <- rbindlist( lapply( seq_along( Cvbyhs), 
+                              function( i) {
+   hs <- names( Cvbyhs[i]) # The series is now the name of each sublist.
+   x <- Cvbyhs[[i]]
+   Cvlen <- length( x$dd)
+   data.table( run = rep( NA, Cvlen),
+               Series = rep( hs, Cvlen),
+               valid = rep( TRUE, Cvlen), # tag them all as valid
+               Temp = x$xm, variable = rep( "Log(Cv)", Cvlen),
+               value = log( x$dd))
+   }))
+xyplot( value ~ Temp | Series, data = CvTable[ Temp < 0.021],
+        scales=list( y = list( relation = "free")))#, group = itype)
+```
+
+## Plot of all Data vs. Temperature
+
+To plot all of the data, we need to make a long-form table. We need to
+`melt()` the data table, but first we will create a new series variable
+which will merge the `b` version of series 3, and create series from the
+eight heating and cooling series. Series `5b`, on which we can do
+further computations (such as $G_6(r)$), will remain distinct.
+
+```{r}
+#| label: SDFd2m
+
+
+SDFd2ss <- MD2DF.S2[ , .( run, Series = newSeries, 
+                       #itype, 
+                       Temp = ke.mean.rs, # hseries, 
+                       valid = fifelse( valid == 1, TRUE, FALSE), 
+                       # Values below are those plotted, hopefully in this order
+                       TE = TE.mean.rs,
+                       Pressure = Pressure.mean.rs,
+                       rv = ke.sd.rs / ke.mean.rs,
+                       D = Estimated / 4.0, 
+                       LogFpD = ifelse( Estimated < 0.0, NA, 
+                                   # set lower limit, drop -D
+                                   log10( pmax( 1e-15, Fpvalued))), 
+                       psiavg, psiabs = psiabs.mean.rs, 
+                       Cv = 1 / (1 - 256 * rv^2))]
+# First select just the columns we're interested in
+
+id.var = c( "run", "Series", "Temp", "valid") 
+SDFd2m2 <- melt( SDFd2ss, id.var = id.var, #direction = 'long', 
+                 variable.name = 'variable', variable.factor = TRUE,
+                 value.name = 'value') 
+# now each variable is its own table.
+
+SDFd2m2 <- rbind( SDFd2m2, CvTable) # bind the Cv data table.
+
+SDFd2m2[, `:=`(variable = factor( variable, levels = unique( variable)))]
+
+# giving the variable factor levels will cause xyplot to NOT sort it.
+setkeyv( SDFd2m2, c( "variable", "Temp"))
+head( SDFd2m2)
+```
+
+The values plotted in @fig-Transition2 are as follows. `TE` is the total
+energy, Pressure is calculated as
+
+$$ 
+\langle P \rangle = \rho \left( \langle T \rangle +\frac{n \langle u \rangle}{2} \right)
+$$
+
+(where $\rho, n, N, T, \text{and} u$ are the density {$1/\pi$},
+potential exponent {5}, and number of particles {256}, temperature, and
+average potential energy per particle, respectively), `rv` is the
+relative temperature variance `rv = ke.sd.rs / ke.mean.rs`, `D` is the
+measured diffusion, `LogFpD` is the common logarithm of the diffusion F
+statistic probability value (the probability that the regression occurs
+randomly; note that many values are smaller than $10^{-15}$), `psiabs`
+is $\langle |\psi_6| \rangle$ (the average of the magnitudes) and
+`psiavg` is $|\langle \psi_6 \rangle|$ (the magnitude of the complex
+average), `Cv` is the specific heat computed as
+$C_v = 1 / \left( 1 - \frac{N  \left< \delta T^2 \right>}{T^2} \right)$,
+and `Log(Cv)` is the natural logarithm of the specific heat computed as
+the first difference by series )note this is not the logarithm of the
+data in the `Cv` panel).
+
+```{r}
+#| label: fig-Transition2
+#| fig-cap: Statistics around transition plotted against temperature. See text for description of statistics.
+#| fig-height: 9
+#| fig-width: 6.5
+
+xlim <- c(0.0069, 0.016)
+pltdata <- copy( SDFd2m2[ Temp %within% xlim,])
+gps <- length( unique( pltdata$Series))
+pchs <- rep_len( 0:6, length.out = gps)
+cols <- rep(  c("darkred", "darkgreen", "darkblue"), each = 7, 
+                  length.out = gps)
+xyplot(
+  value ~ Temp | variable, 
+  data = pltdata,
+  groups = Series,      # <-- tell lattice to use Series as groups
+  subscripts = TRUE,
+  as.table = TRUE,
+  scales = list( y = list( relation = "free")),
+  xlab = "Temperature",
+  main = "Key Statistics Around Transition vs. T",
+  par.settings = list( superpose.symbol = list( pch = pchs, col = cols)),
+  auto.key = list( columns = 3),   # <-- legend appears
+ 
+  panel = function(x, y, subscripts, groups, ...) 
+     {
+    panel.grid(h = -1, v = -1)
+    panel.superpose( x, y, subscripts = subscripts, groups = groups,
+                     panel.groups = function(x, y, ...) {
+                        panel.xyplot(x, y, ...)}, ...)
+      } # end panel = function...
+)
+```
+
+## Plot of all Data vs. Total Energy
+
+We must redo the melt to get the table based on `TE`. This includes
+recomputing `CvTable` and `SDFd2m2`.
+
+```{r}
+#| label: SDFd2m3
+CvTable2 <- rbindlist( lapply( seq_along( Cvbyhs), 
+                              function( i) {
+   hs <- names( Cvbyhs[i]) # The series is now in the name of this sublist.
+   x <- Cvbyhs[[i]]
+   Cvlen <- length( x$dd)
+   data.table( run = rep( NA, Cvlen), #itype = rep( x$itype, Cvlen),
+               Series = rep( hs, Cvlen),
+               valid = rep( TRUE, Cvlen), # we'll declare all valid
+               TE = x$ym, variable = rep( "Log(Cv)", Cvlen),
+               value = log( x$dd))
+   }))
+
+# First select just the columns we're interested in
+
+id.var = c( "run", "Series", "TE", "valid")
+SDFd2m3 <- melt( SDFd2ss, id.var = id.var, direction = 'long', 
+                 variable.name = 'variable', variable.factor = TRUE,
+                 value.name = 'value') 
+# now each variable is its own table.
+
+SDFd2m3 <- rbind( SDFd2m3, CvTable2) # bind the Cv data table.
+
+SDFd2m3[, `:=`(variable = factor( variable, levels = unique( variable)))]#,
+# giving the variable factor levels will cause xyplot to NOT sort it.
+setkeyv( SDFd2m3, c( "variable", "TE"))
+head( SDFd2m3)
+```
+
+@fig-Transition3 below shows the plot. The only panel that looks
+different is the `Pressure` panel, which barely shows the transition
+bump.
+
+```{r}
+#| label: fig-Transition3
+#| echo: false
+#| fig-cap: "Statistics around transition plotted against total energy. See text for description of statistics." 
+#| fig-height: 9
+#| fig-width: 6.5
+
+xlim <- c(0.13, 0.152)
+pltdata2 <- copy( SDFd2m3[ TE %within% xlim,])
+gps <- length( unique( pltdata2$Series))
+pchs <- rep_len( 0:6, length.out = gps)
+cols <- rep(  c("darkred", "darkgreen", "darkblue"), each = 7, 
+                  length.out = gps)
+xyplot(
+  value ~ TE | variable, 
+  data = pltdata2,
+  groups = Series,      # <-- tell lattice to use Series as groups
+  subscripts = TRUE,
+  as.table = TRUE,
+  scales = list( y = list( relation = "free")),
+  xlab = "Total Energy",
+  main = "Key Statistics Around Transition vs. E",
+  par.settings = list( superpose.symbol = list( pch = pchs, col = cols)),
+  auto.key = list( columns = 3),   # <-- legend appears
+ 
+  panel = function(x, y, subscripts, groups, ...) 
+     {
+    panel.grid(h = -1, v = -1)
+    panel.superpose( x, y, subscripts = subscripts, groups = groups,
+                     panel.groups = function(x, y, ...) {
+                        panel.xyplot(x, y, ...)}, ...)
+      } # end panel = function...
+)
+```
+
+Note that there are a few points which have `LogFpD` value below -1,
+perhaps indicating that they are diffusing. @tbl-Fptbl1 shows that only
+`S3.0043h09` has a diffusion value that is not very small or negative.
+Negative values occur because the diffusion becomes a curve, almost like
+the particles are rebounding. Indeed, it makes sense that particles at
+higher temperatures might find themselves moving away from their lattice
+positions and then returning. `D = .001` is about as small as real
+diffusion gets (although, `S3.0044h06`, at $D =  0.00051$, is certainly
+hot enough to be real).
+
+```{r}
+#| label: tbl-Fptbl1
+#| tbl-cap: All runs with total energy less between 0.130 and 0.1425 with diffusion regression F statistic p-value below 1%. 
+knitr::kable( MD2DF.S2[ log10(Fpvalued) < -1 & 
+                           TE.mean.rs %within% c(0.13, 0.1425), 
+                        .(lFp = log10( Fpvalued), D = Estimated/4, run, 
+                          TE = TE.mean.rs, T = ke.mean.rs)])
+```
+
+There are only 16 to 18 points in each heating/cooling series:
+
+```{r}
+#| label: tbl-newSeries
+#| tbl-cap: Lists of Series plotted above and the number of runs in each.
+knitr::kable( MD2DF.S2[ , .N, by = newSeries])
+```
+
+@fig-Transition4 shows just these series.
+
+```{r}
+#| label: fig-Transition4
+#| echo: false
+#| fig-cap: "Heating/cooling series statistics around transition plotted against total energy. See text for description of statistics." 
+#| fig-height: 9
+#| fig-width: 6.5
+
+xlim <- c(0.13, 0.152)
+pltdata3 <- copy( SDFd2m3[ TE %within% xlim & nchar(Series) == 4,])
+gps <- length( unique( pltdata3$Series))
+pchs <- rep_len( 0:6, length.out = gps)
+cols <- rep(  c("darkred", "darkgreen", "darkblue"), each = 7, 
+                  length.out = gps)
+xyplot(
+  value ~ TE | variable, 
+  data = pltdata3,
+  groups = Series,      # <-- tell lattice to use Series as groups
+  subscripts = TRUE,
+  as.table = TRUE,
+  scales = list( y = list( relation = "free")),
+  xlab = "Total Energy",
+  main = "Key Statistics Around Transition for Heat/Cool Runs",
+  par.settings = list( superpose.symbol = list( pch = pchs, col = cols)),
+  auto.key = list( columns = 3),   # <-- legend appears
+ 
+  panel = function(x, y, subscripts, groups, ...) 
+     {
+    panel.grid(h = -1, v = -1)
+    panel.superpose( x, y, subscripts = subscripts, groups = groups,
+                     panel.groups = function(x, y, ...) {
+                        panel.xyplot(x, y, ...)}, ...)
+      } # end panel = function...
+)
+```
+
+## Defining Transitions
+
+Back in [FinalDiffusion.pdf](FinalDiffusion.pdf) we defined a series of
+functions to detect phase transitions. These are now in the file
+`detect.r` and are simply document, but the definitions are not echoed
+due to their length. The main function is
+`detect( data, nsig = 3, nstart = 10, level = 0.99)`, where data is an
+MD2DF `data.table` melted into a form here exemplified by `SDFd2m2`
+(that is, with `Temp` as the independent variable), `nsig` is the number
+of standard deviations for the `stepdet()` function to detect start of
+diffusion, `nstart` is the number of points to include in the start of
+running means or regression lines, `level` is the significance threshold
+to exceed to call a line departure a detection. `detect()` returns a
+vector of temperatures at which detections occurred, and a string vector
+describing each detection.
+
+```{r}
+#| label: detectR
+#| 
+source("./detect.r")
+```
+
+This function performs eight detections.
+
+-   `diff`: Finds the coldest item which deviates three standard
+    deviations starting with the first `nstart` items.
+-   `maxCv`: Item with the maximum Cv as computed by relative variance.
+-   `maxLCv`: Item with the maximum Cv as computed by the base-ten
+    logarithm of first difference of total energy vs. temperature.
+-   `Maxrv`: Item with the maximum relative variance.
+-   `LogFpD`: Coldest item whose diffusion regression F statistic
+    p-value is below 1% (i.e., all calculated in logarithms).
+-   `Icld1`: These three use `linedet()` to find a deviation above 1%
+    confidence of a line fit to pressures vs. temperature. The first
+    looks for the Solid 1 to Solid 2 transition.
+-   `Icld2`: Looks starting from `Icld1` for a 0.001% deviation.
+-   `Icld3`: Looks in reverse for the hottest 1% deviation (find
+    transition in reverse.)
+
+@tbl-onedet shows the result of one detection.
+
+```{r}
+#| label: tbl-onedet
+#| echo: false
+#| tbl-cap: Series 3 transition temperature detections.
+knitr::kable( detect( SDFd2m2[ Series == "S3"], luc = "Temp", nstart = 5))
+```
+
+This is almost identical to the prior results:
+
+```         
+diff     maxCv    maxLCv   Maxrv    LogFp    Icld1   Icld2     Icld3
+0.012832 0.013006 0.013000 0.013006 0.012832 0.007971 0.012832 0.013104
+```
+
+As can be seen, `MaxLCv` is now detected slightly lower. Unsure why this
+is different. This detection is simply the maximum of the `Log(Cv)`
+variable, calculated as the first difference in `Cvbyhs` above. It is
+possible that the prior results did not include the `S3b` results,
+although I thought they did. It is difficult to go back and verify this,
+although not impossible. The function computing `maxLCv` is simply the R
+function `which.max()`, applied to the the data in @fig-Cvbyhs above, so
+there is little risk.
+
+Using the `detect()` function on each series and stuffing the results in
+a long-form `data.table` is accomplished by the following:
+
+```{r}
+#| label: detecths
+dhs <- rbindlist( 
+          lapply( levels( factor( SDFd2m2$Series)), 
+                  function( x) { 
+                     dt <- detect( SDFd2m2[ Series == x,], nstart = 5, 
+                               luc = "Temp")
+                     dt[, Series := x]}))
+dhs[, Series := as.factor( Series)]
+dhs[, variable := as.factor( variable)]
+setkey( dhs, Series)
+#knitr::kable( dhs)
+```
+
+We can see these results in @tbl-dhs.
+
+```{r}
+#| label: tbl-dhs
+#| echo: false
+#| tbl-cap: Detected transitions in series 3 and 5. All values are temperature in scaled units.  The cooling series (`S343` through `S346`) did not have enough energy steps above the transition to be detected from above, so the `Icld3` items are `NA`.
+options(knitr.kable.NA = '')
+knitr::kable( dcast( dhs, Series ~ variable, value.var = "value"))
+```
+
+That is an unsatisfying result. First, `Icld1` which was supposed to
+detect the first solid-to-solid transition, is at different
+temperatures. We knew that this might be the case for the
+heating/cooling series, as the steps there were large, but series 3 and
+5 should agree, and it is not clear that they do. Second, the series 5
+data detects `Icld2` a transition at $T=0.011$ (both detections look for
+statistically significant deviations from a regression line; 1%
+significance for `Icld1`, and 0.001% for `Icld2`, the second search
+started after the first).
+
+@tbl-dhse shows the percent error of each value. The heating and cooling
+series did not have terribly many runs, and so the temperature
+uncertainties were typically larger.
+
+```{r}
+#| label: tbl-dhse
+#| echo: false
+#| tbl-cap: Error in detected transitions as a percentage of their value in series 3 and 5. The error is simply the temperature distance between adjacent runs sorted by temperature, so the `S3` and `S5` series, which have very many runs, generally have lower uncertainties.
+options(knitr.kable.NA = '')
+knitr::kable( dcast( dhs[, "%err" := 100*delx/value], 
+                     Series ~ variable, value.var = "%err"))
+```
+
+We can see the detected transitions for each series plotted in @fig-dets
+below.
+
+```{r}
+#| label: fig-dets
+#| fig-cap: Detection plotted for each series, values are temperatures.  The series are numbered 1 - 10 in the order of the legend (`S3` - `S5`).
+
+# Code from Chat GPT
+## example: dhs already exists with Series as factor
+## dhs = data.table(Series = factor(...), variable=..., value=..., delx=...)
+
+pfun <- function(x, y, subscripts, groups, ...) {
+  ## d is the half-height of the error bar for each row in this panel
+  d_full <- dhs$delx[subscripts] / 2
+
+  panel.superpose( x, y, subscripts = subscripts, groups = groups, 
+                   panel.groups = 
+      function(x, y, subscripts, col, pch, ...) {
+      ## convert factor positions -> numeric plotting positions
+      x_num <- as.numeric(x)   # e.g. factor levels -> 1,2,3,...
+
+      ## Use dhs values for delx (indexed by the subscripts from outer panel)
+      d <- d_full  # already aligned to subscripts
+      panel.points(x_num, y, col = col, pch = pch, ...)
+    }, # end panel.groups()
+    ... # any other arguments to panel.groups()
+  ) # close paren on panel.superpose()
+} # pfun()
+
+## Create the plot: value on y, Series (factor) on x, panel per variable
+xyplot( value ~ Series | variable, data = dhs, groups = Series,
+        panel = pfun,
+        auto.key = TRUE,
+        xlab = "Series", ylab = "Temperature",
+        scales = list( x = list( at = seq_along( levels( dhs$Series)), 
+                              labels = seq_along( levels( dhs$Series)))))
+```
+
+There is some consistency there, although Series `S5` stands out in the
+`LogFpD` and `Icld3` detections, and perhaps in `maxCv`. This may be
+because there were two full runs in series 5, resulting in 210 total
+runs. Thus, `LogFpD`, with a 1% threshold, could just be bad luck (i.e.,
+a detection due to noise). It might be interesting to combine all of the
+series 3 data too (ignoring the heating/cooling).
+
+The same procedure can be followed to get the total energy of the
+transitions (note that `SDFd2m3`, vs. `m2`, is the table operated on).
+
+```{r}
+#| label: detecthsTE
+dhsTE <- rbindlist( 
+          lapply( levels( factor( SDFd2m3$Series)), 
+                  function( x) { 
+                     dt <- detect( SDFd2m3[ Series == x,], nstart = 5, 
+                               luc = "TE")
+                     dt[, Series := x]}))
+dhsTE[, Series := as.factor( Series)]
+dhsTE[, variable := as.factor( variable)]
+setkey( dhs, Series)
+#knitr::kable( dhs)
+```
+
+We can see these results in @tbl-dhsTE.
+
+```{r}
+#| label: tbl-dhsTE
+#| echo: false
+#| tbl-cap: Detected transitions in series 3 and 5. All values are total energy in scaled units.  The cooling series (`S343` through `S346`) did not have enough energy steps above the transition to be detected from above, so the `Icld3` items are `NA`.
+options(knitr.kable.NA = '')
+knitr::kable( dcast( dhsTE, Series ~ variable, value.var = "value"))
+```
+
+@fig-detsTE plots the data.
+
+```{r}
+#| label: fig-detsTE
+#| fig-cap: Detection plotted for each series, values are energies  The series are numbered 1 - 10 in the order of the legend (`S3` - `S5`).
+xyplot( value ~ Series | variable, data = dhsTE, groups = Series,
+        panel = pfun,
+        auto.key = TRUE,
+        xlab = "Series", ylab = "Energy",
+        scales = list( x = list( at = seq_along( levels( dhs$Series)), 
+                              labels = seq_along( levels( dhs$Series)))))
+```
+
+# Changing MD2RP to Return 2/3 Tail
+
+The non-valid data with long runs have relatively small slopes.
+@fig-S2TRvFval shows the not-valid runs total ranges as a
+
+```{r}
+#| label: fig-S2TRvFval
+#| fig-cap: The total temperature range predicted by the temperature linear regression (`100 * Estimate * nr / ke.mean.rs`) plotted against the F statistic value (values greater than one are considerd not-valid; greater than 10 are increasingly unlikely to be a linear correlation by random chance). 
+with( MD2DF.S2[ valid != 1], {
+   ser=as.integer( as.factor( series))
+   plot( 100 * Estimate * nr / ke.mean.rs ~ Fval, log="x", pch = ser, ylab = "T Total Range")
+   grid()
+   legend( x = "bottomleft", pch = 1:nlevels( as.factor( series)), 
+           legend =  levels( as.factor( series)))
+})
+```
+
+Having modified `findlmlen()` to skip a fraction `skpfrac = 1/3` of the
+record after `skplen` if the run is not declared valid (vs. returning
+the whole record after `skplen`), we need to re-run `MD2DFfile()` on
+series 5b. We will simplify the database name in memory too, dropping
+the "DF", and changing the name on disk to have the `MD2DT` prefix (as
+it is a `data.table` not a `dtd.frame`), and we will restart the
+numbering with `A`. Out of view of this document, the `MD2RP` package
+was checked and built, and installed with
+`devtools::install("/home/phil/MD/MD2RP")`, and the whole document was
+restarted.
+
+```{r}
+#| label: MD2A
+system.time( MD2.A <- MD2DFfile( "../MD2DT.A.RDS", td, "S5b.*.scalars.csv",
+                                 skpfrac = 1/3))
+```
+
+Original run time (pretty fast, as `*.rfdt.RDS` files already exist).
+
+```         
+4179  files found.
+   user  system elapsed 
+  0.263   0.074  41.645 
+```
+
+We can compare the new result with the prior (@fig-S2aA).
+
+```{r}
+#| label: fig-S2aA
+#| fig-cap: Plot old and new relative temperature drift in percent for non-valid runs.  Note that the order of the points themselves are quite different, as the new regressions have about 1/3 less points.
+with( MD2DF.S2[ series == "S5b" & valid != 1], {
+   ser=as.integer( as.factor( series))
+   plot( 100 * Estimate * nr / ke.mean.rs ~ Fval, log="x", pch = 4,
+         main = "Temperature Drift", ylab = "% Relative Drift in T")
+   grid()
+   legend( x = "bottomleft", pch = 4, legend =  c( "Original", "New"), 
+           col = c("black", "red"))
+})
+with( MD2.A[ valid != 1], {
+   ser=as.integer( as.factor( series))
+   points( 100 * Estimate * nr / ke.mean.rs ~ Fval, pch = 4, 
+           col = "red")
+})
+```
+
+A direct comparison can be made by joining the two tables. @fig-re shows
+the relative slope change as a percentage of the original slope.
+
+```{r}
+#| label: fig-re
+#| fig-cap: Relative percentage change in temperature slope estimate of not-valid runs in series S5b when shortening the runs to trailing 2/3 steps. Plotted against original temperature.
+dt3 <- merge( MD2DF.S2, MD2.A, by = "run", all.x = FALSE)
+plot( re ~ Temp, ylab = "Percentage slope change",
+      data = dt3[valid.x != 1 & ke.mean.rs.x < 0.02, 
+                 .(re = 100 * (Estimate.x - Estimate.y) / Estimate.x,
+                   Temp = ke.mean.rs.x, Estimate.x)])
+grid()
+```
+
+The average temperature will also have changed, but not by much.
+
+```{r}
+#| label: fig-dT
+#| fig-cap: Percentage average temperature change resulting from different averaging lengths for not-valid runs in series S5b, on logarithmic scale. The maximum value is about 0.6%.
+plot( abs(100*(ke - Temp)/Temp) ~ Temp, ylab = "% Change", log="y",
+      main = "% Avereage Temp. Change",
+      data = dt3[valid.x != 1 & ke.mean.rs.x < 0.02, 
+                 .(Temp = ke.mean.rs.x, ke = ke.mean.rs.y)], ylim=c(1e-5,1))
+grid()
+```
+
+To complete this process, we need to merge the two tables, this time
+keeping the older series too. The code below will accomplish this, and
+it will only be run by hand.
+
+```{r}
+#| label: MD2DT.B
+#| eval: false
+
+# we won't eval this at each document process pass.
+MD2.B <- copy( MD2DF.S2)
+setkey( MD2.B, run)
+setkey( MD2.A, run)
+MD2.B[ MD2.A, (names( MD2.A)) := mget( paste0( "i.", names( MD2.A)))]
+saveRDS( MD2.B, "../MD2DT.B.RDS")
+```
+
+As a reminder, the series 2 and 4 data have been removed from this data
+table, as neither is considered reliable (series two had the potential
+energy step, and series 4 total energy was not constant).
+
+# Series Database
+
+Until now, we have focused on runs, with data collected for each run.
+The detected transitions though are a temperature which applies to whole
+series. The `detect()` function should not be run over the whole data
+frame, but only series by series. The `hdf5r` package on
+(CRAN)\[https://cran.r-project.org/\]
+
+```{r}
+require( hdf5r)
+f <- list.files( td, "S5b.00126.0003.jld2", full.names = TRUE)
+f1 <- H5File$new( f, mode = "r") # open read-only
+names( f1)
+f1sr <- f1[["SystemRecord"]]
+f1srd <- f1sr[] # why this works is a mystery
+f1srd
+f1[["MD2version"]][] # Version info
+f1$close_all()
+```
+
+The data is brought in as a data frame, so it should be easy to import
+all files in a series. Note that nothing in the `SystemRecord` data
+indicates anything about initialization or heating and cooling. The file
+records the state of the system, which is inherent in the positions and
+velocities of the particles.
+
+-   `N`: the number of particles. You need this to read in the particle
+    positions and velocities.
+-   `n`: the potential energy exponent. The potential field is
+    $E = 1/r^n - 1/r_s^n$, where $r$ is the distance between two
+    particles and $r_s$ is the "skin" distance (see `rskn` below).
+-   `totalsteps`: the total number of time steps the system had been
+    propagated since initialization or the last heating/cooling cycle.
+-   `tau`: the time step. This is the primary difference between the
+    previous series and series 5.
+-   `shell`: the range in which particles are tracked for possible
+    interaction.
+-   `ishell`: this is used in the calculation `ishell` =
+    `shell`$/\sqrt{2}$.
+-   `rskn`: the potential energy range $r_s$.
+-   `iskn`: used in calculation like `ishell`; `iskn` = $r_s/\sqrt{2}$
+-   `skip`: number of time steps between re-correlating the interacting
+    particles.
+-   `bx` & `by`: The box size. `bx` $\ge$ `by`
+
+The objects `p` & `v` are the positions and velocities of the particles,
+but wee won't try to unpack these here. What is missing is the
+precision, which will be either `Float64` or `Float32` (even `Float16`
+is available in *Julia*). I used `h5dump`, but I cannot find where this
+is encoded in the file, other than in all of the real types. `JLD2`
+encodes these as `H5T_IEEE_F64LE` or `H5T_IEEE_F32LE`, but R's `hdf5R`
+package simply brings them in as doubles. I think this will have to be
+recorded by hand, as will the propagation scheme used (Verlet, or
+Velocity Verlet).
+
+We can determine these things by simply reading in a record in *julia*:
+
+```{julia}
+#| label: readMD
+#| eval: false
+julia> MD2.readMDRecord(joinpath( datadir, "S5b.00126.0003.jld2"))
+-----ReadMDRecord(), Current MD2 Version 1.6.11
+Restoring system on 2026-01-14T08:02:05.150
+System State restored from /media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980/S5b.00126.0003.jld2, timestamp: 2025-11-11T15:00:40.979, Restored from MD2 Version: 1.6.3
+Current total steps: 11000
+Total Kinetic Energy: 4.0058613, T = 0.015647896
+Type of MDRecord: Main.MD2.MDRecordVV{Float32}
+Linear Momentum: Float32[-1.915876f-6, 7.981202f-6]
+Angular Momentum: -51.23612
+Main.MD2.MDRecordVV{Float32} with parameters:
+ N: 256
+ n: 5
+ total steps: 11000
+ tau: 0.0177737
+ shell: 5.0
+ rskn: 3.5
+ skip: 50
+ bx: 15.237005
+ by: 13.195634
+ Calculated Density: 0.31830987
+ Hexagonal grid spacing: 1.9046257
+ NHOPr: 2.601767
+```
+
+A few other calculated parameters are also given. The record type is
+`Main.MD2.MDRecordVV{Float32}`, so it was run with Velocity Verlet
+propagation and is a `Float32` implementation. Unfortunately, this only
+works for fairly recent versions, as the `S1` and `S2` series `.jld2`
+files will not open with the new version. `h5dump` can still be used
+though to see the parameters. Older version all used the Verlet
+propagation. Note that we lost the series 3 and 4 files, so these will
+have to be reconstructed from the notes. Series 1 data is not stored as
+a single data table, but as a data table in an environment, so rather
+than pollute the notebook's environment, the total steps where
+calculated outside the notebook and and simply inserted below.
+
+```{r}
+#| label: SeriesDF
+SeriesDF1 <- data.frame( c(series = "S5", prop = "VV", prec = "Float32", 
+                      f1srd[c("N", "n","totalsteps", "tau", "shell", "rskn", 
+                              "skip", "bx", "by")]))
+SeriesDF1[ 1, "totalsteps"] <- MD2DF.S2[grepl( "S5", series), sum(total.steps)]
+s1 <- SeriesDF1[ 1,]
+s1$series <- "S1"
+s1$prop <- "V"
+s1$prec <- "Float64"
+s1$tau = 0.01
+s1$totalsteps <- 3300000 # load( "~/MD/MD2/MD2DF.S1.Rdata") then
+                         # sum( MD2DF$total.steps)
+SeriesDF1 <- rbind( SeriesDF1, s1)
+s2 <- SeriesDF1[ 2, ] # copy second row as it's closer.
+s2$series <- "S2"
+s2$totalsteps <- MD2DF.Q6[grepl( "S2", series), sum(total.steps)]
+s3 <- s2
+s3$series <- "S3"
+s3$totalsteps <- MD2DF.S2[grepl( "S3", series), sum(total.steps)]
+s4 <- SeriesDF1[ 1,] # S4 is closer to S5
+s4$series <- "S4"
+s4$prop <- "V"
+s4$totalsteps <- MD2DF.S[grepl( "S4", series), sum(total.steps)]
+SeriesDF1 <- rbind( SeriesDF1, s2, s3, s4)
+```
+
+The result is below in @tbl-SDF1.
+
+```{r}
+#| label: tbl-SDF1
+#| tbl-cap: Series data frame.
+#| echo: false
+knitr::kable( SeriesDF1, format.args = list(big.mark = ","))
+```
+
+Note: on 14 January 2026, updated to *Julia* version 1.12.4.
+
+{{< pagebreak >}}
+
+# References
+
+::: {#refs}
+:::
+
+{{< pagebreak >}}
+
+# R Session Info
+
+<button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOne">
+
+</button>
+
+:::: {#collapseOne .accordion-collapse .collapse}
+<div>
+
+```{r}
+sessionInfo()
+```
+
+</div>
+::::

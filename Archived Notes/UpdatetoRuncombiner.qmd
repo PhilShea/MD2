@@ -11,7 +11,7 @@ number-sections: true
 library( parallel)
 # Calculate the number of cores
 num_cores <- detectCores() - 1
- source("~/DSP/MD/R/runcombine.r")
+ source("~/MD/MD2RP/R/runcombine.r")
 ```
 
 # Purpose
@@ -330,3 +330,30 @@ List of 22 runs to add steps to.
 rerun$energy
 ```
 
+# Update to the Update
+
+Shortly after the above was written, the final form of `finlmlen()` was written, and it changed from tracking the `Fpvalue` (the parameter `minp` in the code above) to `Fval` (the argument to the F-distribution). While essentially equivalent, they differ in two ways: 1) they ignore the degrees of freedom, which narrows the distribution as one grows.
+
+```{r}
+len <- 50
+(len3 <- floor(len/3))
+trials <- 10000
+q <- t( # need to transpose the result of replicate
+   replicate( trials, findlmlen( data.frame( step = 1:len, ke = rnorm( len)))))
+head( q, 10)
+```
+
+```{r}
+fails <- q[,'nr'] == len & !q[,'valid']
+flp <-  q[,'nr'] == len & q[,'valid'] # full length pass
+sp <- q[,'nr'] < len # short pass
+sfails <- sum( fails)
+cat( "Fails: ", sfails, " ", 100*sfails/trials, "%", '\n')
+sflp <- sum( flp)
+cat( "Full Length Passes: ", sflp, 100*sflp/trials, "%", '\n')
+cat( "Shortened passes: ", sum( sp), '\n')
+cat( "Exactly Two-Thirds: ", sum( q[,"nr"] == (len - len3)), '\n')
+shorts <- q[,'Fpvalue'] >= 0.5 & q[,'nr'] < len
+cat( "Averge shorter length: ", mean(q[ shorts,"nr"]), "\n" )
+cat( "Max short pass: ", max( q[ sp, 'nr']))
+```

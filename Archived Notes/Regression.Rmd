@@ -6,12 +6,15 @@ output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
+require( parallel)
+num_cores <- detectCores() - 1
 knitr::opts_chunk$set(echo = TRUE)
 options(tinytex.verbose = TRUE)
 ```
 
 ```{r message=TRUE, warning=TRUE, include=FALSE}
-load("H:\\Data\\DSP\\MD\\Data\\1980\\MD2DF.S2.Rdata")
+td <- "/media/phil/Original/Users/phils/Documents/DSP/MD/Data/1980"
+load( paste( td, "MD2DF.S2.Rdata", sep = "/"))
 ```
 
 
@@ -266,12 +269,16 @@ dev.off()
 
 # Replicating `lm`
 
+Here is R's `lm()`:
+
 ```{r}
 carslm <- lm(dist ~ speed, data=cars )
 (scarslm <- summary(carslm))
 plot(dist ~ speed, data=cars)
 abline(coef( carslm))
 ```
+
+And here are the same calculations by hand:
 
 ```{r}
 x <- cars$speed
@@ -318,7 +325,7 @@ all.equal( scarslm$coefficients['speed','Std. Error'],
            Sb, check.attributes = FALSE)
 nu2 <- nr - 2
 Fy <-  nu2 * (vary - varEi) / varEi
-fs <-  scarslm$fstatistic
+(fs <-  scarslm$fstatistic)
 all.equal( fs[ 'value'], Fy, check.attributes = FALSE)
 pv <- pf( fs['value'], fs['numdf'], fs['dendf'], lower.tail=FALSE)
 c( nr=nr, sumx=sumx, sumx2=sumx2, sumy=sumy, sumy2=sumy2, sumxy=sumxy, 
@@ -344,4 +351,41 @@ Sb <- sqrt( sum( ei^2) / ((nr - 2) * (nr - 1) * varx))
 all.equal( scarslm$coefficients['speed','Std. Error'], Sb)
 ```
 
+Using max F value of one (that is, the Estimate needs to be less than the standard error of the estimate), that has a probability of failure given by R's `pf( 1, 1, nr, lower.tail = FALSE)`, which for 50 samples is `r pf( 1, 1, 48, lower.tail = FALSE)`.
 
+```{r}
+len <- 50
+(len3 <- floor(len/3))
+trials <- 10000
+cl <- parallel::makeCluster( num_cores)
+clusterSetRNGStream( cl)
+lmfunc <- function( i, df, maxf = 1.0) {
+   nr  <- nrow( df)
+   # kemean <- mean( df$ke)
+   # kesd   <- stats::sd( df$ke)
+   mod <- summary( stats::lm( ke ~ step, df))
+   coeff <- unname(mod$coefficients["step", c('Estimate', 'Std. Error')])
+   t <- mod$fstatistic
+   Fpvalue <-  stats::pf( t['value'], t['numdf'], t['dendf'], lower.tail=FALSE)
+   c( i=i, nr = nr, Estimate = coeff[1], Std.Error = coeff[2],
+      r.squared = mod$r.squared, Fval =  unname( t['value']),
+      Fpvalue = unname( Fpvalue), df = t['dendf'],
+      valid =  unname( t['value'] <= maxf))
+}
+parallel::clusterExport( cl, c("lmfunc"))
+q <- t( # need to transpose the result of replicate
+   parSapply( cl,  1:trials, 
+              function( i, len) {lmfunc( i, data.frame( step = 1:len, ke = rnorm( len)))},
+              len))
+stopCluster( cl)
+head( q, 10)
+```
+
+
+```{r}
+fails <- q[,'nr'] == len & !q[,'valid']
+sfails <- sum( fails)
+sflp <- trials - sfails
+cat( "Fails: ", sfails, " ", 100*sfails/trials, "%", '\n')
+cat( "Full Length Passes: ", sflp, 100*sflp/trials, "%", '\n')
+```

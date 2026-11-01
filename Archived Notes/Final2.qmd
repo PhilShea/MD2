@@ -196,7 +196,7 @@ Point 78 in @fig-fres is `S2.0099` at total energy of $0.231 \epsilon$. This wou
 plot(swlm2, which = 1, panel.first = grid())
 ```
 
-Experience with weighted values indicates that care should be used when doing weighted fits. We used weighted fits because the variance definately climbs as the temperature climbs.
+Experience with weighted values indicates that care should be used when doing weighted fits. We used weighted fits because the variance definitely climbs as the temperature climbs.
 
 ```{r}
 #| label: fig-kesd
